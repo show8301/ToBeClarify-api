@@ -1,0 +1,22 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "build",
+                "${workspaceFolder}/ToBeClarify.Api.csproj"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "DOTNET_CLI_HOME": "${workspaceFolder}/.dotnet-home",
+                    "NUGET_PACKAGES": "${workspaceFolder}/.dotnet-home/.nuget/packages"
+                }
+            },
+            "problemMatcher": "$msCompile"
+        }
+    ]
+}
