@@ -6,15 +6,33 @@ dotnet-install.sh
 # Build output
 bin/
 obj/
-src/bin/
-src/obj/
+publish/
+
+# Temporary tools and probe projects created during local development
+.codex-tmp/
 
 # Runtime logs
 Logs/
 **/Logs/
+*.log
+
+# Test and coverage output
+TestResults/
+coverage/
+*.trx
+
+# IDE files
+.vs/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
 
 # Local secrets (never commit)
 appsettings.Local.json
+*.publishsettings
+*.pfx
 
 # OS files
 .DS_Store

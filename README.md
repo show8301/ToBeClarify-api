@@ -12,7 +12,9 @@
 
 ## Database
 
-The initial MariaDB 11.2 schema is in `Database/INITIAL_SCHEMA_MARIADB_11_2.SQL`. Select the target database before running it. The script creates 19 business tables plus `API_LOGS`; it does not create a migration-history table.
+The initial MariaDB 11.2 schema is in `Database/INITIAL_SCHEMA_MARIADB_11_2.SQL`. Select the target database before running it. The script creates the business tables, `ADMIN_USERS`, and `API_LOGS`; it does not create a migration-history table.
+
+For an existing database, run `Database/ALTER_20260717_ADMIN_AUTH.SQL` before using the admin login. Backend passwords are stored as PBKDF2-HMAC-SHA256 verifiers with a per-password salt; AES is reversible encryption and is not suitable as a password hash.
 
 For an existing database created before the web mock-data integration, run `Database/ALTER_20260715_WEB_MOCK_SUPPORT.SQL` first. `Database/SEED_MOCK_DATA_MARIADB_11_2.SQL` contains the current Web mock data. Its stable IDs and upserts make it safe to rerun without creating duplicate rows.
 

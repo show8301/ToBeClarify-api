@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
+using ToBeClarify.Api.Models.Entities;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 
@@ -15,13 +16,16 @@ public sealed class JwtTokenService
         _options = options.Value;
     }
 
-    public string CreateAdminToken(string userId, string displayName, TimeSpan? lifetime = null)
+    public string CreateAdminToken(AdminUserRow user, TimeSpan? lifetime = null)
     {
         var claims = new List<Claim>
         {
-            new(JwtRegisteredClaimNames.Sub, userId),
-            new(ClaimTypes.Name, displayName),
-            new("role", "admin")
+            new(JwtRegisteredClaimNames.Sub, user.Id),
+            new(ClaimTypes.NameIdentifier, user.Id),
+            new(ClaimTypes.Name, user.DisplayName),
+            new(AdminAuthConstants.RoleClaimType, user.RoleLevel),
+            new("token_version", user.TokenVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString("N"))
         };
 
         var signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_options.SigningKey));

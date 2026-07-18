@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Security.Claims;
 using System.Text;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -10,6 +11,7 @@ using ToBeClarify.Api.Auth;
 using ToBeClarify.Api.Infrastructure;
 using ToBeClarify.Api.Middlewares;
 using ToBeClarify.Api.Models.Common;
+using ToBeClarify.Api.Repositories.Admin.Auth;
 using ToBeClarify.Api.Repositories.Client.Events;
 using ToBeClarify.Api.Repositories.Client.Gallery;
 using ToBeClarify.Api.Repositories.Client.Guestbook;
@@ -28,6 +30,7 @@ using ToBeClarify.Api.Services.Client.Rankings;
 using ToBeClarify.Api.Services.Client.Reservations;
 using ToBeClarify.Api.Services.Client.Site;
 using ToBeClarify.Api.Services.Client.Staff;
+using ToBeClarify.Api.Services.Admin.Auth;
 using ToBeClarify.Api.Services.Logging;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -42,10 +45,14 @@ var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get
     ?? Array.Empty<string>();
 
 builder.Services.Configure<JwtAuthOptions>(builder.Configuration.GetSection(JwtAuthOptions.SectionName));
+builder.Services.Configure<AdminAuthOptions>(builder.Configuration.GetSection(AdminAuthOptions.SectionName));
 builder.Services.Configure<ApiLoggingOptions>(builder.Configuration.GetSection(ApiLoggingOptions.SectionName));
 builder.Services.AddSingleton<AppDbContext>();
 builder.Services.AddSingleton<IAppClock, TaiwanAppClock>();
+builder.Services.AddSingleton<PasswordHashService>();
 builder.Services.AddScoped<IApiLogService, ApiLogService>();
+builder.Services.AddScoped<IAdminAuthRepository, AdminAuthRepository>();
+builder.Services.AddScoped<IAdminAuthService, AdminAuthService>();
 builder.Services.AddScoped<IHomeRepository, HomeRepository>();
 builder.Services.AddScoped<ISiteRepository, SiteRepository>();
 builder.Services.AddScoped<IMenuRepository, MenuRepository>();
@@ -84,6 +91,15 @@ builder.Services.AddRateLimiter(options =>
             QueueLimit = 0,
             AutoReplenishment = true
         }));
+    options.AddPolicy("admin-login", httpContext => RateLimitPartition.GetFixedWindowLimiter(
+        httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 10,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+            AutoReplenishment = true
+        }));
 });
 
 builder.Services.AddControllers();
@@ -95,7 +111,8 @@ builder.Services.AddCors(options =>
         {
             policy.WithOrigins(allowedOrigins)
                 .AllowAnyHeader()
-                .AllowAnyMethod();
+                .AllowAnyMethod()
+                .AllowCredentials();
         }
     });
 });
@@ -156,6 +173,7 @@ var signingKey = Encoding.UTF8.GetBytes(jwtOptions.SigningKey);
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
+        options.MapInboundClaims = false;
         options.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuer = true,
@@ -165,14 +183,29 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidIssuer = jwtOptions.Issuer,
             ValidAudience = jwtOptions.Audience,
             IssuerSigningKey = new SymmetricSecurityKey(signingKey),
-            ClockSkew = TimeSpan.FromMinutes(1)
+            ClockSkew = TimeSpan.FromMinutes(1),
+            RoleClaimType = AdminAuthConstants.RoleClaimType,
+            NameClaimType = ClaimTypes.Name
+        };
+        options.Events = new JwtBearerEvents
+        {
+            OnMessageReceived = context =>
+            {
+                if (string.IsNullOrWhiteSpace(context.Token) &&
+                    context.Request.Cookies.TryGetValue(AdminAuthConstants.CookieName, out var cookieToken))
+                {
+                    context.Token = cookieToken;
+                }
+
+                return Task.CompletedTask;
+            }
         };
     });
 
 builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("AdminOnly", policy =>
-        policy.RequireAuthenticatedUser().RequireClaim("role", "admin"));
+        policy.RequireAuthenticatedUser().RequireRole(AdminRole.All));
 });
 
 var app = builder.Build();
