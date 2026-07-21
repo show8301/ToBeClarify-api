@@ -14,7 +14,8 @@ public sealed class GalleryRepository : DapperRepositoryBase, IGalleryRepository
     {
         const string sql = """
             SELECT `ID` AS Id, `ALBUM_TITLE` AS AlbumTitle, `ALBUM_DESCRIPTION` AS AlbumDescription,
-                   `COVER_IMAGE_URL` AS CoverImageUrl, `PERIOD_TEXT` AS PeriodText,
+                   `COVER_MEDIA_ID` AS CoverMediaId, `COVER_IMAGE_URL` AS LegacyCoverImageUrl,
+                   `PERIOD_TEXT` AS PeriodText,
                    `ENDS_AT` AS EndsAt, `DETAIL_CONTENT` AS DetailContent
             FROM `GALLERY_ALBUMS` WHERE `IS_PUBLISHED` = TRUE ORDER BY `SORT_ORDER`, `ALBUM_TITLE`;
             """;
@@ -25,7 +26,8 @@ public sealed class GalleryRepository : DapperRepositoryBase, IGalleryRepository
     {
         const string sql = """
             SELECT `ID` AS Id, `ALBUM_TITLE` AS AlbumTitle, `ALBUM_DESCRIPTION` AS AlbumDescription,
-                   `COVER_IMAGE_URL` AS CoverImageUrl, `PERIOD_TEXT` AS PeriodText,
+                   `COVER_MEDIA_ID` AS CoverMediaId, `COVER_IMAGE_URL` AS LegacyCoverImageUrl,
+                   `PERIOD_TEXT` AS PeriodText,
                    `ENDS_AT` AS EndsAt, `DETAIL_CONTENT` AS DetailContent
             FROM `GALLERY_ALBUMS` WHERE `ID` = @Id AND `IS_PUBLISHED` = TRUE LIMIT 1;
             """;
@@ -35,7 +37,8 @@ public sealed class GalleryRepository : DapperRepositoryBase, IGalleryRepository
     public async Task<IReadOnlyList<GalleryItemRow>> GetGalleryItemsAsync(string albumId, CancellationToken cancellationToken)
     {
         const string sql = """
-            SELECT `ID` AS Id, `ALBUM_ID` AS AlbumId, `IMAGE_URL` AS ImageUrl, `THUMBNAIL_URL` AS ThumbnailUrl,
+            SELECT `ID` AS Id, `ALBUM_ID` AS AlbumId, `MEDIA_ID` AS MediaId,
+                   `IMAGE_URL` AS LegacyImageUrl, `THUMBNAIL_URL` AS LegacyThumbnailUrl,
                    `TITLE` AS Title, `CAPTION` AS Caption, `SHOT_AT` AS ShotAt
             FROM `GALLERY_ITEMS`
             WHERE `ALBUM_ID` = @AlbumId AND `IS_PUBLISHED` = TRUE

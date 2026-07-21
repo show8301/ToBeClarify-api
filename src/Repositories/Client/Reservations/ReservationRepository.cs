@@ -14,7 +14,8 @@ public sealed class ReservationRepository : DapperRepositoryBase, IReservationRe
     {
         const string sql = """
             SELECT `ID` AS Id, `STAFF_ID` AS StaffId, `STAFF_NAME_SNAPSHOT` AS StaffNameSnapshot,
-                   `STAFF_AVATAR_SNAPSHOT` AS StaffAvatarSnapshot, `RESERVATION_STATUS` AS ReservationStatus,
+                   `STAFF_AVATAR_MEDIA_ID` AS StaffAvatarMediaId,
+                   `STAFF_AVATAR_SNAPSHOT` AS LegacyStaffAvatarSnapshot, `RESERVATION_STATUS` AS ReservationStatus,
                    `STARTS_AT` AS StartsAt, `ENDS_AT` AS EndsAt, `SERVICE_LABEL` AS ServiceLabel
             FROM `STAFF_RESERVATIONS`
             WHERE `ENDS_AT` > @From AND `STARTS_AT` < @To

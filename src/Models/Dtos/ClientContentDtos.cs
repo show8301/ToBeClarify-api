@@ -20,6 +20,7 @@ public sealed record HomeEventCarouselDto(
     string Summary,
     string? EventTime,
     string? CtaLabel,
+    string? ImageUrl,
     bool EventExists);
 
 public sealed record ShopRuleDto(string Id, string RuleText, string? RuleNote);

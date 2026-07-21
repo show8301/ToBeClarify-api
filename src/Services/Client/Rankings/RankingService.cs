@@ -2,16 +2,19 @@ using ToBeClarify.Api.Exceptions;
 using ToBeClarify.Api.Models.Dtos;
 using ToBeClarify.Api.Repositories.Client.Rankings;
 using ToBeClarify.Api.Services.Client.Shared;
+using ToBeClarify.Api.Services.Media;
 
 namespace ToBeClarify.Api.Services.Client.Rankings;
 
 public sealed class RankingService : IRankingService
 {
     private readonly IRankingRepository _repository;
+    private readonly MediaUrlService _mediaUrls;
 
-    public RankingService(IRankingRepository repository)
+    public RankingService(IRankingRepository repository, MediaUrlService mediaUrls)
     {
         _repository = repository;
+        _mediaUrls = mediaUrls;
     }
 
     public async Task<IReadOnlyList<RankingDto>> GetRankingsAsync(string rankingType, string? periodLabel, CancellationToken cancellationToken)
@@ -22,6 +25,7 @@ public sealed class RankingService : IRankingService
         var rows = await _repository.GetRankingsAsync(rankingType,
             string.IsNullOrWhiteSpace(periodLabel) ? null : periodLabel.Trim(), cancellationToken);
         return rows.Select(row => new RankingDto(row.Id, row.RankingType, row.TargetId, row.DisplayNameSnapshot,
-            row.AvatarSnapshot, row.TitleBadge, row.RankPosition, row.ScoreValue, row.ScoreLabel, row.PeriodLabel)).ToArray();
+            _mediaUrls.BuildUrl(row.AvatarMediaId, row.LegacyAvatarSnapshot, "thumbnail"),
+            row.TitleBadge, row.RankPosition, row.ScoreValue, row.ScoreLabel, row.PeriodLabel)).ToArray();
     }
 }

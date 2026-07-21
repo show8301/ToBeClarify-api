@@ -13,7 +13,8 @@ public sealed class EventRepository : DapperRepositoryBase, IEventRepository
     public async Task<IReadOnlyList<EventRow>> GetEventsAsync(string? status, DateTime? from, DateTime? to, int? limit, CancellationToken cancellationToken)
     {
         const string sql = """
-            SELECT `ID` AS Id, `TITLE` AS Title, `SUMMARY` AS Summary, `COVER_IMAGE_URL` AS CoverImageUrl,
+            SELECT `ID` AS Id, `TITLE` AS Title, `SUMMARY` AS Summary,
+                   `COVER_MEDIA_ID` AS CoverMediaId, `COVER_IMAGE_URL` AS LegacyCoverImageUrl,
                    `STARTS_AT` AS StartsAt, `ENDS_AT` AS EndsAt, `STATUS` AS Status,
                    `LOCATION_TEXT` AS LocationText, `DETAIL_CONTENT` AS DetailContent, `NOTICE_CONTENT` AS NoticeContent
             FROM `EVENTS`
@@ -30,7 +31,8 @@ public sealed class EventRepository : DapperRepositoryBase, IEventRepository
     public async Task<EventRow?> GetEventAsync(string id, CancellationToken cancellationToken)
     {
         const string sql = """
-            SELECT `ID` AS Id, `TITLE` AS Title, `SUMMARY` AS Summary, `COVER_IMAGE_URL` AS CoverImageUrl,
+            SELECT `ID` AS Id, `TITLE` AS Title, `SUMMARY` AS Summary,
+                   `COVER_MEDIA_ID` AS CoverMediaId, `COVER_IMAGE_URL` AS LegacyCoverImageUrl,
                    `STARTS_AT` AS StartsAt, `ENDS_AT` AS EndsAt, `STATUS` AS Status,
                    `LOCATION_TEXT` AS LocationText, `DETAIL_CONTENT` AS DetailContent, `NOTICE_CONTENT` AS NoticeContent
             FROM `EVENTS` WHERE `ID` = @Id AND `IS_PUBLISHED` = TRUE LIMIT 1;

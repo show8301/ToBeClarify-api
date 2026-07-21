@@ -22,8 +22,10 @@ public sealed class HomeEventCarouselRow
 {
     public string Id { get; set; } = string.Empty;
     public string? EventId { get; set; }
-    public string TitleSnapshot { get; set; } = string.Empty;
-    public string SummarySnapshot { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
+    public string Summary { get; set; } = string.Empty;
+    public string? MediaId { get; set; }
+    public string? LegacyImageUrl { get; set; }
     public string? EventTimeSnapshot { get; set; }
     public string? CtaLabel { get; set; }
     public bool EventExists { get; set; }
@@ -49,7 +51,8 @@ public sealed class StaffRow
     public string Id { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
     public string? Nickname { get; set; }
-    public string? AvatarUrl { get; set; }
+    public string? AvatarMediaId { get; set; }
+    public string? LegacyAvatarUrl { get; set; }
     public string? RoleTitle { get; set; }
     public string? ShortBio { get; set; }
     public string? ProfileBio { get; set; }
@@ -73,7 +76,8 @@ public sealed class StaffGalleryItemRow
 {
     public string Id { get; set; } = string.Empty;
     public string StaffId { get; set; } = string.Empty;
-    public string ImageUrl { get; set; } = string.Empty;
+    public string? MediaId { get; set; }
+    public string? LegacyImageUrl { get; set; }
     public int SortOrder { get; set; }
 }
 
@@ -82,7 +86,8 @@ public sealed class EventRow
     public string Id { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
     public string Summary { get; set; } = string.Empty;
-    public string? CoverImageUrl { get; set; }
+    public string? CoverMediaId { get; set; }
+    public string? LegacyCoverImageUrl { get; set; }
     public DateTime StartsAt { get; set; }
     public DateTime EndsAt { get; set; }
     public string Status { get; set; } = string.Empty;
@@ -96,7 +101,8 @@ public sealed class GalleryAlbumRow
     public string Id { get; set; } = string.Empty;
     public string AlbumTitle { get; set; } = string.Empty;
     public string? AlbumDescription { get; set; }
-    public string? CoverImageUrl { get; set; }
+    public string? CoverMediaId { get; set; }
+    public string? LegacyCoverImageUrl { get; set; }
     public string? PeriodText { get; set; }
     public DateTime? EndsAt { get; set; }
     public string? DetailContent { get; set; }
@@ -106,8 +112,9 @@ public sealed class GalleryItemRow
 {
     public string Id { get; set; } = string.Empty;
     public string AlbumId { get; set; } = string.Empty;
-    public string ImageUrl { get; set; } = string.Empty;
-    public string? ThumbnailUrl { get; set; }
+    public string? MediaId { get; set; }
+    public string? LegacyImageUrl { get; set; }
+    public string? LegacyThumbnailUrl { get; set; }
     public string? Title { get; set; }
     public string? Caption { get; set; }
     public DateTime? ShotAt { get; set; }
@@ -145,7 +152,8 @@ public sealed class MenuItemRow
     public string ItemName { get; set; } = string.Empty;
     public string? ItemDescription { get; set; }
     public int Price { get; set; }
-    public string? ImageUrl { get; set; }
+    public string? MediaId { get; set; }
+    public string? LegacyImageUrl { get; set; }
     public string? Tags { get; set; }
 }
 
@@ -155,7 +163,8 @@ public sealed class MenuSetRow
     public string SetName { get; set; } = string.Empty;
     public string? SetDescription { get; set; }
     public int SetPrice { get; set; }
-    public string? ImageUrl { get; set; }
+    public string? MediaId { get; set; }
+    public string? LegacyImageUrl { get; set; }
 }
 
 public sealed class MenuSetItemRow
@@ -173,7 +182,8 @@ public sealed class StaffReservationRow
     public string Id { get; set; } = string.Empty;
     public string StaffId { get; set; } = string.Empty;
     public string StaffNameSnapshot { get; set; } = string.Empty;
-    public string? StaffAvatarSnapshot { get; set; }
+    public string? StaffAvatarMediaId { get; set; }
+    public string? LegacyStaffAvatarSnapshot { get; set; }
     public string ReservationStatus { get; set; } = string.Empty;
     public DateTime StartsAt { get; set; }
     public DateTime EndsAt { get; set; }
@@ -186,7 +196,8 @@ public sealed class RankingRow
     public string RankingType { get; set; } = string.Empty;
     public string? TargetId { get; set; }
     public string DisplayNameSnapshot { get; set; } = string.Empty;
-    public string? AvatarSnapshot { get; set; }
+    public string? AvatarMediaId { get; set; }
+    public string? LegacyAvatarSnapshot { get; set; }
     public string? TitleBadge { get; set; }
     public int RankPosition { get; set; }
     public int ScoreValue { get; set; }

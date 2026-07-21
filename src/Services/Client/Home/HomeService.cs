@@ -5,6 +5,7 @@ using ToBeClarify.Api.Services.Client.Events;
 using ToBeClarify.Api.Services.Client.Shared;
 using ToBeClarify.Api.Services.Client.Site;
 using ToBeClarify.Api.Services.Client.Staff;
+using ToBeClarify.Api.Services.Media;
 
 namespace ToBeClarify.Api.Services.Client.Home;
 
@@ -15,26 +16,30 @@ public sealed class HomeService : IHomeService
     private readonly IStaffService _staffService;
     private readonly IEventService _eventService;
     private readonly IAppClock _clock;
+    private readonly MediaUrlService _mediaUrls;
 
     public HomeService(
         IHomeRepository repository,
         ISiteService siteService,
         IStaffService staffService,
         IEventService eventService,
-        IAppClock clock)
+        IAppClock clock,
+        MediaUrlService mediaUrls)
     {
         _repository = repository;
         _siteService = siteService;
         _staffService = staffService;
         _eventService = eventService;
         _clock = clock;
+        _mediaUrls = mediaUrls;
     }
 
     public async Task<IReadOnlyList<HomeEventCarouselDto>> GetCarouselsAsync(CancellationToken cancellationToken)
     {
         var rows = await _repository.GetHomeEventCarouselsAsync(cancellationToken);
-        return rows.Select(row => new HomeEventCarouselDto(row.Id, row.EventId, row.TitleSnapshot,
-            row.SummarySnapshot, row.EventTimeSnapshot, row.CtaLabel, row.EventExists)).ToArray();
+        return rows.Select(row => new HomeEventCarouselDto(row.Id, row.EventId, row.Title,
+            row.Summary, row.EventTimeSnapshot, row.CtaLabel,
+            _mediaUrls.BuildUrl(row.MediaId, row.LegacyImageUrl, "hero"), row.EventExists)).ToArray();
     }
 
     public async Task<HomeDto> GetHomeAsync(CancellationToken cancellationToken)

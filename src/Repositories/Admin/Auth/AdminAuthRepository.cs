@@ -44,6 +44,7 @@ public sealed class AdminAuthRepository : DapperRepositoryBase, IAdminAuthReposi
         const string sql = """
             UPDATE `ADMIN_USERS`
             SET `LAST_LOGIN_AT` = CURRENT_TIMESTAMP,
+                `UPDATED_BY` = @Id,
                 `UPDATED_AT` = CURRENT_TIMESTAMP
             WHERE `ID` = @Id;
             """;

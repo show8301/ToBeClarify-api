@@ -13,8 +13,12 @@ public sealed class HomeRepository : DapperRepositoryBase, IHomeRepository
     public async Task<IReadOnlyList<HomeEventCarouselRow>> GetHomeEventCarouselsAsync(CancellationToken cancellationToken)
     {
         const string sql = """
-            SELECT C.`ID` AS Id, C.`EVENT_ID` AS EventId, C.`TITLE_SNAPSHOT` AS TitleSnapshot,
-                   C.`SUMMARY_SNAPSHOT` AS SummarySnapshot, C.`EVENT_TIME_SNAPSHOT` AS EventTimeSnapshot,
+            SELECT C.`ID` AS Id, C.`EVENT_ID` AS EventId,
+                   COALESCE(C.`OVERRIDE_TITLE`, E.`TITLE`) AS Title,
+                   COALESCE(C.`OVERRIDE_SUMMARY`, E.`SUMMARY`) AS Summary,
+                   COALESCE(C.`OVERRIDE_MEDIA_ID`, E.`COVER_MEDIA_ID`) AS MediaId,
+                   COALESCE(C.`OVERRIDE_IMAGE_URL`, E.`COVER_IMAGE_URL`) AS LegacyImageUrl,
+                   C.`EVENT_TIME_SNAPSHOT` AS EventTimeSnapshot,
                    C.`CTA_LABEL` AS CtaLabel, CASE WHEN E.`ID` IS NULL THEN FALSE ELSE TRUE END AS EventExists
             FROM `HOME_EVENT_CAROUSELS` C
             LEFT JOIN `EVENTS` E ON E.`ID` = C.`EVENT_ID` AND E.`IS_PUBLISHED` = TRUE

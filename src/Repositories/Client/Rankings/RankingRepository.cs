@@ -14,7 +14,8 @@ public sealed class RankingRepository : DapperRepositoryBase, IRankingRepository
     {
         const string sql = """
             SELECT `ID` AS Id, `RANKING_TYPE` AS RankingType, `TARGET_ID` AS TargetId,
-                   `DISPLAY_NAME_SNAPSHOT` AS DisplayNameSnapshot, `AVATAR_SNAPSHOT` AS AvatarSnapshot,
+                   `DISPLAY_NAME_SNAPSHOT` AS DisplayNameSnapshot,
+                   `AVATAR_MEDIA_ID` AS AvatarMediaId, `AVATAR_SNAPSHOT` AS LegacyAvatarSnapshot,
                    `TITLE_BADGE` AS TitleBadge, `RANK_POSITION` AS RankPosition, `SCORE_VALUE` AS ScoreValue,
                    `SCORE_LABEL` AS ScoreLabel, `PERIOD_LABEL` AS PeriodLabel
             FROM `RANKINGS`

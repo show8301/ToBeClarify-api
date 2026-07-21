@@ -8,6 +8,13 @@ bin/
 obj/
 publish/
 
+# Documentation and database scripts are kept outside the API repository
+*.[mM][dD]
+*.[sS][qQ][lL]
+
+# Runtime media files are deployed separately and must not be committed
+/media/
+
 # Temporary tools and probe projects created during local development
 .codex-tmp/
 

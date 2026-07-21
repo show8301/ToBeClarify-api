@@ -13,7 +13,8 @@ public sealed class StaffRepository : DapperRepositoryBase, IStaffRepository
     public async Task<IReadOnlyList<StaffRow>> GetStaffMembersAsync(int? limit, CancellationToken cancellationToken)
     {
         const string sql = """
-            SELECT `ID` AS Id, `DISPLAY_NAME` AS DisplayName, `NICKNAME` AS Nickname, `AVATAR_URL` AS AvatarUrl,
+            SELECT `ID` AS Id, `DISPLAY_NAME` AS DisplayName, `NICKNAME` AS Nickname,
+                   `AVATAR_MEDIA_ID` AS AvatarMediaId, `AVATAR_URL` AS LegacyAvatarUrl,
                    `ROLE_TITLE` AS RoleTitle, `SHORT_BIO` AS ShortBio, `PROFILE_BIO` AS ProfileBio,
                    `CURRENT_STATUS` AS CurrentStatus, `STATUS_TEXT` AS StatusText, `TODAY_SHIFT` AS TodayShift
             FROM `STAFF_MEMBERS`
@@ -27,7 +28,8 @@ public sealed class StaffRepository : DapperRepositoryBase, IStaffRepository
     public async Task<StaffRow?> GetStaffMemberAsync(string id, CancellationToken cancellationToken)
     {
         const string sql = """
-            SELECT `ID` AS Id, `DISPLAY_NAME` AS DisplayName, `NICKNAME` AS Nickname, `AVATAR_URL` AS AvatarUrl,
+            SELECT `ID` AS Id, `DISPLAY_NAME` AS DisplayName, `NICKNAME` AS Nickname,
+                   `AVATAR_MEDIA_ID` AS AvatarMediaId, `AVATAR_URL` AS LegacyAvatarUrl,
                    `ROLE_TITLE` AS RoleTitle, `SHORT_BIO` AS ShortBio, `PROFILE_BIO` AS ProfileBio,
                    `CURRENT_STATUS` AS CurrentStatus, `STATUS_TEXT` AS StatusText, `TODAY_SHIFT` AS TodayShift
             FROM `STAFF_MEMBERS` WHERE `ID` = @Id AND `IS_ACTIVE` = TRUE LIMIT 1;
@@ -66,7 +68,8 @@ public sealed class StaffRepository : DapperRepositoryBase, IStaffRepository
     {
         if (staffIds.Count == 0) return Array.Empty<StaffGalleryItemRow>();
         const string sql = """
-            SELECT `ID` AS Id, `STAFF_ID` AS StaffId, `IMAGE_URL` AS ImageUrl, `SORT_ORDER` AS SortOrder
+            SELECT `ID` AS Id, `STAFF_ID` AS StaffId, `MEDIA_ID` AS MediaId,
+                   `IMAGE_URL` AS LegacyImageUrl, `SORT_ORDER` AS SortOrder
             FROM `STAFF_GALLERY_ITEMS`
             WHERE `STAFF_ID` IN @StaffIds AND `IS_PUBLISHED` = TRUE
             ORDER BY `STAFF_ID`, `SORT_ORDER`, `CREATED_AT`;

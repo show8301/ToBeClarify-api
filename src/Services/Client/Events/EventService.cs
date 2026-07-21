@@ -2,16 +2,19 @@ using ToBeClarify.Api.Exceptions;
 using ToBeClarify.Api.Models.Dtos;
 using ToBeClarify.Api.Repositories.Client.Events;
 using ToBeClarify.Api.Services.Client.Shared;
+using ToBeClarify.Api.Services.Media;
 
 namespace ToBeClarify.Api.Services.Client.Events;
 
 public sealed class EventService : IEventService
 {
     private readonly IEventRepository _repository;
+    private readonly MediaUrlService _mediaUrls;
 
-    public EventService(IEventRepository repository)
+    public EventService(IEventRepository repository, MediaUrlService mediaUrls)
     {
         _repository = repository;
+        _mediaUrls = mediaUrls;
     }
 
     public async Task<IReadOnlyList<EventDto>> GetEventsAsync(string? status, DateTimeOffset? from, DateTimeOffset? to, int? limit, CancellationToken cancellationToken)
@@ -24,13 +27,13 @@ public sealed class EventService : IEventService
 
         var rows = await _repository.GetEventsAsync(status?.ToLowerInvariant(), ClientContentMappings.ToTaiwanDateTime(from),
             ClientContentMappings.ToTaiwanDateTime(to), limit, cancellationToken);
-        return rows.Select(ClientContentMappings.MapEvent).ToArray();
+        return rows.Select(row => ClientContentMappings.MapEvent(row, _mediaUrls)).ToArray();
     }
 
     public async Task<EventDto> GetEventAsync(string id, CancellationToken cancellationToken)
     {
         var row = await _repository.GetEventAsync(ClientContentMappings.RequiredId(id), cancellationToken)
             ?? throw new NotFoundException("Event not found.", "EVENT_NOT_FOUND");
-        return ClientContentMappings.MapEvent(row);
+        return ClientContentMappings.MapEvent(row, _mediaUrls);
     }
 }

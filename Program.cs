@@ -11,12 +11,14 @@ using ToBeClarify.Api.Auth;
 using ToBeClarify.Api.Infrastructure;
 using ToBeClarify.Api.Middlewares;
 using ToBeClarify.Api.Models.Common;
+using ToBeClarify.Api.Models.Media;
 using ToBeClarify.Api.Repositories.Admin.Auth;
 using ToBeClarify.Api.Repositories.Client.Events;
 using ToBeClarify.Api.Repositories.Client.Gallery;
 using ToBeClarify.Api.Repositories.Client.Guestbook;
 using ToBeClarify.Api.Repositories.Client.Home;
 using ToBeClarify.Api.Repositories.Client.Menu;
+using ToBeClarify.Api.Repositories.Client.Media;
 using ToBeClarify.Api.Repositories.Client.Rankings;
 using ToBeClarify.Api.Repositories.Client.Reservations;
 using ToBeClarify.Api.Repositories.Client.Site;
@@ -32,6 +34,7 @@ using ToBeClarify.Api.Services.Client.Site;
 using ToBeClarify.Api.Services.Client.Staff;
 using ToBeClarify.Api.Services.Admin.Auth;
 using ToBeClarify.Api.Services.Logging;
+using ToBeClarify.Api.Services.Media;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -47,6 +50,8 @@ var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get
 builder.Services.Configure<JwtAuthOptions>(builder.Configuration.GetSection(JwtAuthOptions.SectionName));
 builder.Services.Configure<AdminAuthOptions>(builder.Configuration.GetSection(AdminAuthOptions.SectionName));
 builder.Services.Configure<ApiLoggingOptions>(builder.Configuration.GetSection(ApiLoggingOptions.SectionName));
+builder.Services.Configure<MediaOptions>(builder.Configuration.GetSection(MediaOptions.SectionName));
+builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<AppDbContext>();
 builder.Services.AddSingleton<IAppClock, TaiwanAppClock>();
 builder.Services.AddSingleton<PasswordHashService>();
@@ -62,6 +67,7 @@ builder.Services.AddScoped<IGalleryRepository, GalleryRepository>();
 builder.Services.AddScoped<IGuestbookRepository, GuestbookRepository>();
 builder.Services.AddScoped<IReservationRepository, ReservationRepository>();
 builder.Services.AddScoped<IRankingRepository, RankingRepository>();
+builder.Services.AddScoped<IMediaRepository, MediaRepository>();
 builder.Services.AddScoped<IHomeService, HomeService>();
 builder.Services.AddScoped<ISiteService, SiteService>();
 builder.Services.AddScoped<IMenuService, MenuService>();
@@ -71,6 +77,8 @@ builder.Services.AddScoped<IGalleryService, GalleryService>();
 builder.Services.AddScoped<IGuestbookService, GuestbookService>();
 builder.Services.AddScoped<IReservationService, ReservationService>();
 builder.Services.AddScoped<IRankingService, RankingService>();
+builder.Services.AddSingleton<MediaUrlService>();
+builder.Services.AddScoped<MediaFileService>();
 builder.Services.AddSingleton<JwtTokenService>();
 builder.Services.AddRateLimiter(options =>
 {
@@ -110,8 +118,8 @@ builder.Services.AddCors(options =>
         if (allowedOrigins.Length > 0)
         {
             policy.WithOrigins(allowedOrigins)
-                .AllowAnyHeader()
                 .AllowAnyMethod()
+                .AllowAnyHeader()
                 .AllowCredentials();
         }
     });
