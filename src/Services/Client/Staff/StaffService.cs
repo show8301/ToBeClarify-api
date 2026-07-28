@@ -37,10 +37,10 @@ public sealed class StaffService : IStaffService
         var services = await servicesTask;
         var gallery = await galleryTask;
         return new StaffDetailDto(row.Id, row.DisplayName, row.Nickname,
-            _mediaUrls.BuildUrl(row.AvatarMediaId, row.LegacyAvatarUrl, "card"), row.RoleTitle,
-            row.ShortBio, row.ProfileBio, row.CurrentStatus, row.StatusText, row.TodayShift,
+            _mediaUrls.BuildUrl(row.AvatarMediaId, "card"), row.RoleTitle,
+            row.ShortBio, row.ProfileBio, row.IsWorkingToday, row.CurrentStatus, row.StatusText, row.TodayShift,
             gallery.Select(item => new StaffGalleryItemDto(item.Id,
-                _mediaUrls.BuildUrl(item.MediaId, item.LegacyImageUrl, "full") ?? string.Empty)).ToArray(),
+                _mediaUrls.BuildUrl(item.MediaId, "full") ?? string.Empty)).ToArray(),
             services.Where(service => service.ServiceType == "common").Select(ClientContentMappings.MapStaffService).ToArray(),
             services.Where(service => service.ServiceType == "special").Select(ClientContentMappings.MapStaffService).ToArray());
     }

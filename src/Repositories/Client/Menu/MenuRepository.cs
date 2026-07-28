@@ -28,13 +28,13 @@ public sealed class MenuRepository : DapperRepositoryBase, IMenuRepository
 
             SELECT I.`ID` AS Id, I.`CATEGORY_ID` AS CategoryId, I.`ITEM_NAME` AS ItemName,
                    I.`ITEM_DESCRIPTION` AS ItemDescription, I.`PRICE` AS Price,
-                   I.`MEDIA_ID` AS MediaId, I.`IMAGE_URL` AS LegacyImageUrl, I.`TAGS` AS Tags
+                   I.`MEDIA_ID` AS MediaId, I.`TAGS` AS Tags
             FROM `MENU_ITEMS` I
             INNER JOIN `MENU_CATEGORIES` C ON C.`ID` = I.`CATEGORY_ID` AND C.`IS_ENABLED` = TRUE
             WHERE I.`IS_AVAILABLE` = TRUE ORDER BY C.`SORT_ORDER`, I.`SORT_ORDER`, I.`ITEM_NAME`;
 
             SELECT `ID` AS Id, `SET_NAME` AS SetName, `SET_DESCRIPTION` AS SetDescription,
-                   `SET_PRICE` AS SetPrice, `MEDIA_ID` AS MediaId, `IMAGE_URL` AS LegacyImageUrl
+                   `SET_PRICE` AS SetPrice, `MEDIA_ID` AS MediaId
             FROM `MENU_SETS` WHERE `IS_AVAILABLE` = TRUE ORDER BY `SORT_ORDER`, `SET_NAME`;
 
             SELECT SI.`ID` AS Id, SI.`SET_ID` AS SetId, SI.`MENU_ITEM_ID` AS MenuItemId,

@@ -13,13 +13,21 @@ public sealed class StaffRepository : DapperRepositoryBase, IStaffRepository
     public async Task<IReadOnlyList<StaffRow>> GetStaffMembersAsync(int? limit, CancellationToken cancellationToken)
     {
         const string sql = """
-            SELECT `ID` AS Id, `DISPLAY_NAME` AS DisplayName, `NICKNAME` AS Nickname,
-                   `AVATAR_MEDIA_ID` AS AvatarMediaId, `AVATAR_URL` AS LegacyAvatarUrl,
-                   `ROLE_TITLE` AS RoleTitle, `SHORT_BIO` AS ShortBio, `PROFILE_BIO` AS ProfileBio,
-                   `CURRENT_STATUS` AS CurrentStatus, `STATUS_TEXT` AS StatusText, `TODAY_SHIFT` AS TodayShift
-            FROM `STAFF_MEMBERS`
-            WHERE `IS_ACTIVE` = TRUE
-            ORDER BY `SORT_ORDER`, `DISPLAY_NAME`
+            SELECT M.`ID` AS Id, M.`DISPLAY_NAME` AS DisplayName, M.`NICKNAME` AS Nickname,
+                   M.`AVATAR_MEDIA_ID` AS AvatarMediaId,
+                   M.`ROLE_TITLE` AS RoleTitle, M.`SHORT_BIO` AS ShortBio, M.`PROFILE_BIO` AS ProfileBio,
+                   COALESCE(S.`IS_WORKING`, TRUE) AS IsWorkingToday,
+                   CASE WHEN COALESCE(S.`IS_WORKING`, TRUE) = FALSE THEN 'off'
+                        WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= NOW() AND R.`ENDS_AT` > NOW()) THEN 'busy'
+                        ELSE 'available' END AS CurrentStatus,
+                   CASE WHEN COALESCE(S.`IS_WORKING`, TRUE) = FALSE THEN '未上班'
+                        WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= NOW() AND R.`ENDS_AT` > NOW()) THEN '指名中'
+                        ELSE '待命中' END AS StatusText,
+                   NULL AS TodayShift
+            FROM `STAFF_MEMBERS` M
+            LEFT JOIN `STAFF_SCHEDULES` S ON S.`STAFF_ID` = M.`ID` AND S.`WORK_DATE` = CURRENT_DATE()
+            WHERE M.`IS_ACTIVE` = TRUE
+            ORDER BY M.`SORT_ORDER`, M.`DISPLAY_NAME`
             LIMIT @Limit;
             """;
         return await QueryAsync<StaffRow>(sql, new { Limit = limit ?? int.MaxValue }, cancellationToken);
@@ -28,11 +36,20 @@ public sealed class StaffRepository : DapperRepositoryBase, IStaffRepository
     public async Task<StaffRow?> GetStaffMemberAsync(string id, CancellationToken cancellationToken)
     {
         const string sql = """
-            SELECT `ID` AS Id, `DISPLAY_NAME` AS DisplayName, `NICKNAME` AS Nickname,
-                   `AVATAR_MEDIA_ID` AS AvatarMediaId, `AVATAR_URL` AS LegacyAvatarUrl,
-                   `ROLE_TITLE` AS RoleTitle, `SHORT_BIO` AS ShortBio, `PROFILE_BIO` AS ProfileBio,
-                   `CURRENT_STATUS` AS CurrentStatus, `STATUS_TEXT` AS StatusText, `TODAY_SHIFT` AS TodayShift
-            FROM `STAFF_MEMBERS` WHERE `ID` = @Id AND `IS_ACTIVE` = TRUE LIMIT 1;
+            SELECT M.`ID` AS Id, M.`DISPLAY_NAME` AS DisplayName, M.`NICKNAME` AS Nickname,
+                   M.`AVATAR_MEDIA_ID` AS AvatarMediaId,
+                   M.`ROLE_TITLE` AS RoleTitle, M.`SHORT_BIO` AS ShortBio, M.`PROFILE_BIO` AS ProfileBio,
+                   COALESCE(S.`IS_WORKING`, TRUE) AS IsWorkingToday,
+                   CASE WHEN COALESCE(S.`IS_WORKING`, TRUE) = FALSE THEN 'off'
+                        WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= NOW() AND R.`ENDS_AT` > NOW()) THEN 'busy'
+                        ELSE 'available' END AS CurrentStatus,
+                   CASE WHEN COALESCE(S.`IS_WORKING`, TRUE) = FALSE THEN '未上班'
+                        WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= NOW() AND R.`ENDS_AT` > NOW()) THEN '指名中'
+                        ELSE '待命中' END AS StatusText,
+                   NULL AS TodayShift
+            FROM `STAFF_MEMBERS` M
+            LEFT JOIN `STAFF_SCHEDULES` S ON S.`STAFF_ID` = M.`ID` AND S.`WORK_DATE` = CURRENT_DATE()
+            WHERE M.`ID` = @Id AND M.`IS_ACTIVE` = TRUE LIMIT 1;
             """;
         return await QuerySingleOrDefaultAsync<StaffRow>(sql, new { Id = id }, cancellationToken);
     }
@@ -69,7 +86,7 @@ public sealed class StaffRepository : DapperRepositoryBase, IStaffRepository
         if (staffIds.Count == 0) return Array.Empty<StaffGalleryItemRow>();
         const string sql = """
             SELECT `ID` AS Id, `STAFF_ID` AS StaffId, `MEDIA_ID` AS MediaId,
-                   `IMAGE_URL` AS LegacyImageUrl, `SORT_ORDER` AS SortOrder
+                   `SORT_ORDER` AS SortOrder
             FROM `STAFF_GALLERY_ITEMS`
             WHERE `STAFF_ID` IN @StaffIds AND `IS_PUBLISHED` = TRUE
             ORDER BY `STAFF_ID`, `SORT_ORDER`, `CREATED_AT`;

@@ -15,13 +15,17 @@ public sealed record NavigationItemDto(
 
 public sealed record HomeEventCarouselDto(
     string Id,
-    string? EventId,
+    string? AlbumId,
     string Title,
     string Summary,
     string? EventTime,
     string? CtaLabel,
     string? ImageUrl,
-    bool EventExists);
+    bool AlbumExists);
+
+public sealed record HomeSlideDto(
+    string Id,
+    string? ImageUrl);
 
 public sealed record ShopRuleDto(string Id, string RuleText, string? RuleNote);
 
@@ -34,6 +38,7 @@ public sealed record StaffListItemDto(
     string? AvatarUrl,
     string? RoleTitle,
     string? ShortBio,
+    bool IsWorkingToday,
     string CurrentStatus,
     string? StatusText,
     string? TodayShift,
@@ -57,24 +62,13 @@ public sealed record StaffDetailDto(
     string? RoleTitle,
     string? ShortBio,
     string? ProfileBio,
+    bool IsWorkingToday,
     string CurrentStatus,
     string? StatusText,
     string? TodayShift,
     IReadOnlyList<StaffGalleryItemDto> Gallery,
     IReadOnlyList<StaffServiceDto> CommonServices,
     IReadOnlyList<StaffServiceDto> SpecialServices);
-
-public sealed record EventDto(
-    string Id,
-    string Title,
-    string Summary,
-    string? CoverImageUrl,
-    DateTimeOffset StartsAt,
-    DateTimeOffset EndsAt,
-    string Status,
-    string? LocationText,
-    IReadOnlyList<string> Details,
-    string? NoticeContent);
 
 public sealed record GalleryAlbumDto(
     string Id,
@@ -189,7 +183,8 @@ public sealed record StaffReservationDto(
     string Status,
     DateTimeOffset StartsAt,
     DateTimeOffset EndsAt,
-    string? ServiceLabel);
+    string? ServiceLabel,
+    string? CustomerName);
 
 public sealed record RankingDto(
     string Id,
@@ -207,6 +202,6 @@ public sealed record HomeDto(
     IReadOnlyList<SiteSettingDto> SiteSettings,
     IReadOnlyList<NavigationItemDto> Navigation,
     IReadOnlyList<HomeEventCarouselDto> Carousels,
+    IReadOnlyList<HomeSlideDto> Slides,
     IReadOnlyList<ShopRuleDto> ShopRules,
-    IReadOnlyList<StaffListItemDto> Staff,
-    IReadOnlyList<EventDto> Events);
+    IReadOnlyList<StaffListItemDto> Staff);

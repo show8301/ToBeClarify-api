@@ -1,57 +1,57 @@
 namespace ToBeClarify.Api.Models.Entities;
 
-public sealed class SiteSettingRow
+public sealed class AdminSiteSettingRow
 {
+    public string Id { get; set; } = string.Empty;
     public string SettingKey { get; set; } = string.Empty;
     public string SettingValue { get; set; } = "{}";
     public string? Description { get; set; }
+    public bool IsActive { get; set; }
 }
 
-public sealed class NavigationItemRow
+public sealed class AdminNavigationItemRow
 {
     public string Id { get; set; } = string.Empty;
     public string Label { get; set; } = string.Empty;
     public string RoutePath { get; set; } = string.Empty;
     public string Placement { get; set; } = string.Empty;
     public string? ParentItemId { get; set; }
-    public bool IsDropdown { get; set; }
     public int SortOrder { get; set; }
+    public bool IsDropdown { get; set; }
+    public bool IsEnabled { get; set; }
 }
 
-public sealed class HomeEventCarouselRow
+public sealed class AdminHomeCarouselRow
 {
     public string Id { get; set; } = string.Empty;
     public string? AlbumId { get; set; }
-    public string Title { get; set; } = string.Empty;
-    public string Summary { get; set; } = string.Empty;
-    public string? MediaId { get; set; }
+    public string OverrideTitle { get; set; } = string.Empty;
+    public string OverrideSummary { get; set; } = string.Empty;
+    public string? OverrideMediaId { get; set; }
     public string? EventTimeSnapshot { get; set; }
     public string? CtaLabel { get; set; }
-    public bool AlbumExists { get; set; }
+    public int SortOrder { get; set; }
+    public bool IsEnabled { get; set; }
 }
 
-public sealed class HomeSlideRow
+public sealed class AdminHomeSlideRow
 {
     public string Id { get; set; } = string.Empty;
     public string? MediaId { get; set; }
+    public int SortOrder { get; set; }
+    public bool IsEnabled { get; set; }
 }
 
-public sealed class ShopRuleRow
+public sealed class AdminShopRuleRow
 {
     public string Id { get; set; } = string.Empty;
     public string RuleText { get; set; } = string.Empty;
     public string? RuleNote { get; set; }
+    public int SortOrder { get; set; }
+    public bool IsEnabled { get; set; }
 }
 
-public sealed class PricingRuleRow
-{
-    public string Id { get; set; } = string.Empty;
-    public string Title { get; set; } = string.Empty;
-    public string Description { get; set; } = string.Empty;
-    public string? PriceText { get; set; }
-}
-
-public sealed class StaffRow
+public sealed class AdminStaffMemberRow
 {
     public string Id { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
@@ -64,28 +64,11 @@ public sealed class StaffRow
     public string CurrentStatus { get; set; } = string.Empty;
     public string? StatusText { get; set; }
     public string? TodayShift { get; set; }
-}
-
-public sealed class StaffServiceRow
-{
-    public string Id { get; set; } = string.Empty;
-    public string StaffId { get; set; } = string.Empty;
-    public string ServiceType { get; set; } = string.Empty;
-    public string ServiceName { get; set; } = string.Empty;
-    public string ServiceDescription { get; set; } = string.Empty;
-    public string? PriceText { get; set; }
     public int SortOrder { get; set; }
+    public bool IsActive { get; set; }
 }
 
-public sealed class StaffGalleryItemRow
-{
-    public string Id { get; set; } = string.Empty;
-    public string StaffId { get; set; } = string.Empty;
-    public string? MediaId { get; set; }
-    public int SortOrder { get; set; }
-}
-
-public sealed class GalleryAlbumRow
+public sealed class AdminGalleryAlbumRow
 {
     public string Id { get; set; } = string.Empty;
     public string AlbumTitle { get; set; } = string.Empty;
@@ -94,9 +77,11 @@ public sealed class GalleryAlbumRow
     public string? PeriodText { get; set; }
     public DateTime? EndsAt { get; set; }
     public string? DetailContent { get; set; }
+    public int SortOrder { get; set; }
+    public bool IsPublished { get; set; }
 }
 
-public sealed class GalleryItemRow
+public sealed class AdminGalleryItemRow
 {
     public string Id { get; set; } = string.Empty;
     public string AlbumId { get; set; } = string.Empty;
@@ -104,34 +89,51 @@ public sealed class GalleryItemRow
     public string? Title { get; set; }
     public string? Caption { get; set; }
     public DateTime? ShotAt { get; set; }
+    public int SortOrder { get; set; }
+    public bool IsPublished { get; set; }
 }
 
-public sealed class GuestbookCommentRow
+public sealed class AdminStaffServiceRow
 {
     public string Id { get; set; } = string.Empty;
-    public string DisplayName { get; set; } = string.Empty;
-    public string Content { get; set; } = string.Empty;
-    public bool IsPinned { get; set; }
-    public DateTime CreatedAt { get; set; }
+    public string StaffId { get; set; } = string.Empty;
+    public string ServiceType { get; set; } = string.Empty;
+    public string ServiceName { get; set; } = string.Empty;
+    public string ServiceDescription { get; set; } = string.Empty;
+    public string? PriceText { get; set; }
+    public int SortOrder { get; set; }
+    public bool IsEnabled { get; set; }
 }
 
-public sealed class GuestbookReplyRow
+public sealed class AdminStaffGalleryItemRow
 {
     public string Id { get; set; } = string.Empty;
-    public string CommentId { get; set; } = string.Empty;
-    public string DisplayName { get; set; } = string.Empty;
-    public string Content { get; set; } = string.Empty;
-    public DateTime CreatedAt { get; set; }
+    public string StaffId { get; set; } = string.Empty;
+    public string? MediaId { get; set; }
+    public int SortOrder { get; set; }
+    public bool IsPublished { get; set; }
 }
 
-public sealed class MenuCategoryRow
+public sealed class AdminPricingRuleRow
+{
+    public string Id { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public string? PriceText { get; set; }
+    public int SortOrder { get; set; }
+    public bool IsEnabled { get; set; }
+}
+
+public sealed class AdminMenuCategoryRow
 {
     public string Id { get; set; } = string.Empty;
     public string CategoryName { get; set; } = string.Empty;
     public string? CategoryDescription { get; set; }
+    public int SortOrder { get; set; }
+    public bool IsEnabled { get; set; }
 }
 
-public sealed class MenuItemRow
+public sealed class AdminMenuItemRow
 {
     public string Id { get; set; } = string.Empty;
     public string CategoryId { get; set; } = string.Empty;
@@ -140,18 +142,22 @@ public sealed class MenuItemRow
     public int Price { get; set; }
     public string? MediaId { get; set; }
     public string? Tags { get; set; }
+    public int SortOrder { get; set; }
+    public bool IsAvailable { get; set; }
 }
 
-public sealed class MenuSetRow
+public sealed class AdminMenuSetRow
 {
     public string Id { get; set; } = string.Empty;
     public string SetName { get; set; } = string.Empty;
     public string? SetDescription { get; set; }
     public int SetPrice { get; set; }
     public string? MediaId { get; set; }
+    public int SortOrder { get; set; }
+    public bool IsAvailable { get; set; }
 }
 
-public sealed class MenuSetItemRow
+public sealed class AdminMenuSetItemRow
 {
     public string Id { get; set; } = string.Empty;
     public string SetId { get; set; } = string.Empty;
@@ -159,33 +165,5 @@ public sealed class MenuSetItemRow
     public string ItemName { get; set; } = string.Empty;
     public string ItemRole { get; set; } = string.Empty;
     public int Quantity { get; set; }
-}
-
-public sealed class StaffReservationRow
-{
-    public string Id { get; set; } = string.Empty;
-    public string StaffId { get; set; } = string.Empty;
-    public string StaffNameSnapshot { get; set; } = string.Empty;
-    public string? StaffAvatarMediaId { get; set; }
-    public string? LegacyStaffAvatarSnapshot { get; set; }
-    public string ReservationStatus { get; set; } = string.Empty;
-    public DateTime StartsAt { get; set; }
-    public DateTime EndsAt { get; set; }
-    public string? ServiceLabel { get; set; }
-    public string? CustomerName { get; set; }
-}
-
-public sealed class RankingRow
-{
-    public string Id { get; set; } = string.Empty;
-    public string RankingType { get; set; } = string.Empty;
-    public string? TargetId { get; set; }
-    public string DisplayNameSnapshot { get; set; } = string.Empty;
-    public string? AvatarMediaId { get; set; }
-    public string? LegacyAvatarSnapshot { get; set; }
-    public string? TitleBadge { get; set; }
-    public int RankPosition { get; set; }
-    public int ScoreValue { get; set; }
-    public string? ScoreLabel { get; set; }
-    public string? PeriodLabel { get; set; }
+    public int SortOrder { get; set; }
 }

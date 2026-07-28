@@ -40,6 +40,27 @@ public sealed class AdminAuthController : ControllerBase
         return Ok(ApiResponse<AdminIdentityDto>.Ok(identity));
     }
 
+    [AllowAnonymous]
+    [HttpPost("register")]
+    [EnableRateLimiting("admin-register")]
+    [ProducesResponseType(typeof(ApiResponse<AdminIdentityDto>), StatusCodes.Status201Created)]
+    public async Task<ActionResult<ApiResponse<AdminIdentityDto>>> Register(
+        [FromBody] StaffRegisterRequest request,
+        CancellationToken cancellationToken)
+    {
+        var identity = await _authService.RegisterStaffAsync(request, cancellationToken);
+        return StatusCode(StatusCodes.Status201Created, ApiResponse<AdminIdentityDto>.Ok(identity));
+    }
+
+    [Authorize(Policy = "AdminManager")]
+    [HttpPost("register-key")]
+    [ProducesResponseType(typeof(ApiResponse<AdminRegisterKeyDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ApiResponse<AdminRegisterKeyDto>>> GetRegisterKey(CancellationToken cancellationToken)
+    {
+        var key = await _authService.IssueRegisterKeyAsync(User, cancellationToken);
+        return Ok(ApiResponse<AdminRegisterKeyDto>.Ok(key));
+    }
+
     [Authorize(Policy = AdminAuthConstants.AdminPolicy)]
     [HttpGet("me")]
     [ProducesResponseType(typeof(ApiResponse<AdminIdentityDto>), StatusCodes.Status200OK)]
@@ -61,8 +82,8 @@ public sealed class AdminAuthController : ControllerBase
     private CookieOptions CreateCookieOptions() => new()
     {
         HttpOnly = true,
-        Secure = _environment.IsProduction() || Request.IsHttps,
-        SameSite = SameSiteMode.Lax,
+        Secure = _environment.IsProduction() || Request.IsHttps || _options.CrossSiteCookie,
+        SameSite = _options.CrossSiteCookie ? SameSiteMode.None : SameSiteMode.Lax,
         Path = "/api",
         MaxAge = TimeSpan.FromMinutes(Math.Max(5, _options.TokenLifetimeMinutes))
     };

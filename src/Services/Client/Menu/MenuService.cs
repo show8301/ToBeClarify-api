@@ -32,7 +32,7 @@ public sealed class MenuService : IMenuService
         var categories = menu.Categories.Select(category => new MenuCategoryDto(category.Id, category.CategoryName,
             category.CategoryDescription, itemDtos.Where(item => item.CategoryId == category.Id).ToArray())).ToArray();
         var sets = menu.Sets.Select(set => new MenuSetDto(set.Id, set.SetName, set.SetDescription, set.SetPrice,
-            _mediaUrls.BuildUrl(set.MediaId, set.LegacyImageUrl, "card"),
+            _mediaUrls.BuildUrl(set.MediaId, "card"),
             menu.SetItems.Where(item => item.SetId == set.Id).Select(ClientContentMappings.MapMenuSetItem).ToArray())).ToArray();
         return new MenuDto((await pricingTask).Select(ClientContentMappings.MapPricingRule).ToArray(), categories, sets);
     }

@@ -44,6 +44,7 @@ public sealed class ExceptionHandlingMiddleware
         {
             BusinessException businessException => (HttpStatusCode.BadRequest, businessException.ErrorCode, businessException.Message),
             NotFoundException notFoundException => (HttpStatusCode.NotFound, notFoundException.ErrorCode, notFoundException.Message),
+            ForbiddenException forbiddenException => (HttpStatusCode.Forbidden, forbiddenException.ErrorCode, forbiddenException.Message),
             UnauthorizedException unauthorizedException => (HttpStatusCode.Unauthorized, unauthorizedException.ErrorCode, "Unauthorized"),
             UnauthorizedAccessException => (HttpStatusCode.Unauthorized, "UNAUTHORIZED", "Unauthorized"),
             _ => (HttpStatusCode.InternalServerError, "SERVER_ERROR", "系統發生錯誤，請稍後再試")

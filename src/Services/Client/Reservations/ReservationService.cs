@@ -27,6 +27,6 @@ public sealed class ReservationService : IReservationService
         return rows.Select(row => new StaffReservationDto(row.Id, row.StaffId, row.StaffNameSnapshot,
             _mediaUrls.BuildUrl(row.StaffAvatarMediaId, row.LegacyStaffAvatarSnapshot, "thumbnail"),
             row.ReservationStatus, ClientContentMappings.ToTaiwanOffset(row.StartsAt),
-            ClientContentMappings.ToTaiwanOffset(row.EndsAt), row.ServiceLabel)).ToArray();
+            ClientContentMappings.ToTaiwanOffset(row.EndsAt), row.ServiceLabel, row.CustomerName)).ToArray();
     }
 }

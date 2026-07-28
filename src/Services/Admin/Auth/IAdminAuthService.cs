@@ -10,6 +10,19 @@ public interface IAdminAuthService
         string password,
         CancellationToken cancellationToken);
 
+    Task<AdminIdentityDto> RegisterAsync(
+        AdminRegisterRequest request,
+        ClaimsPrincipal actor,
+        CancellationToken cancellationToken);
+
+    Task<AdminRegisterKeyDto> IssueRegisterKeyAsync(
+        ClaimsPrincipal actor,
+        CancellationToken cancellationToken);
+
+    Task<AdminIdentityDto> RegisterStaffAsync(
+        StaffRegisterRequest request,
+        CancellationToken cancellationToken);
+
     Task<AdminIdentityDto> GetCurrentIdentityAsync(
         ClaimsPrincipal principal,
         CancellationToken cancellationToken);

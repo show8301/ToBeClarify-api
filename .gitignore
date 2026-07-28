@@ -15,6 +15,10 @@ publish/
 # Runtime media files are deployed separately and must not be committed
 /media/
 
+# One-time developer-issued registration key
+registerKey.txt
+registerKey.txt.lock
+
 # Temporary tools and probe projects created during local development
 .codex-tmp/
 

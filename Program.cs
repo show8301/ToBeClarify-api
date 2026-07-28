@@ -13,7 +13,6 @@ using ToBeClarify.Api.Middlewares;
 using ToBeClarify.Api.Models.Common;
 using ToBeClarify.Api.Models.Media;
 using ToBeClarify.Api.Repositories.Admin.Auth;
-using ToBeClarify.Api.Repositories.Client.Events;
 using ToBeClarify.Api.Repositories.Client.Gallery;
 using ToBeClarify.Api.Repositories.Client.Guestbook;
 using ToBeClarify.Api.Repositories.Client.Home;
@@ -23,7 +22,6 @@ using ToBeClarify.Api.Repositories.Client.Rankings;
 using ToBeClarify.Api.Repositories.Client.Reservations;
 using ToBeClarify.Api.Repositories.Client.Site;
 using ToBeClarify.Api.Repositories.Client.Staff;
-using ToBeClarify.Api.Services.Client.Events;
 using ToBeClarify.Api.Services.Client.Gallery;
 using ToBeClarify.Api.Services.Client.Guestbook;
 using ToBeClarify.Api.Services.Client.Home;
@@ -49,6 +47,7 @@ var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get
 
 builder.Services.Configure<JwtAuthOptions>(builder.Configuration.GetSection(JwtAuthOptions.SectionName));
 builder.Services.Configure<AdminAuthOptions>(builder.Configuration.GetSection(AdminAuthOptions.SectionName));
+builder.Services.Configure<RegisterKeyOptions>(builder.Configuration.GetSection(RegisterKeyOptions.SectionName));
 builder.Services.Configure<ApiLoggingOptions>(builder.Configuration.GetSection(ApiLoggingOptions.SectionName));
 builder.Services.Configure<MediaOptions>(builder.Configuration.GetSection(MediaOptions.SectionName));
 builder.Services.AddHttpContextAccessor();
@@ -58,11 +57,16 @@ builder.Services.AddSingleton<PasswordHashService>();
 builder.Services.AddScoped<IApiLogService, ApiLogService>();
 builder.Services.AddScoped<IAdminAuthRepository, AdminAuthRepository>();
 builder.Services.AddScoped<IAdminAuthService, AdminAuthService>();
+builder.Services.AddSingleton<IRegisterKeyService, RegisterKeyService>();
+builder.Services.AddScoped<ToBeClarify.Api.Repositories.Admin.Content.IAdminContentRepository,
+    ToBeClarify.Api.Repositories.Admin.Content.AdminContentRepository>();
+builder.Services.AddScoped<ToBeClarify.Api.Services.Admin.Content.IAdminContentService,
+    ToBeClarify.Api.Services.Admin.Content.AdminContentService>();
+builder.Services.AddScoped<ToBeClarify.Api.Services.Media.AdminMediaUploadService>();
 builder.Services.AddScoped<IHomeRepository, HomeRepository>();
 builder.Services.AddScoped<ISiteRepository, SiteRepository>();
 builder.Services.AddScoped<IMenuRepository, MenuRepository>();
 builder.Services.AddScoped<IStaffRepository, StaffRepository>();
-builder.Services.AddScoped<IEventRepository, EventRepository>();
 builder.Services.AddScoped<IGalleryRepository, GalleryRepository>();
 builder.Services.AddScoped<IGuestbookRepository, GuestbookRepository>();
 builder.Services.AddScoped<IReservationRepository, ReservationRepository>();
@@ -72,7 +76,6 @@ builder.Services.AddScoped<IHomeService, HomeService>();
 builder.Services.AddScoped<ISiteService, SiteService>();
 builder.Services.AddScoped<IMenuService, MenuService>();
 builder.Services.AddScoped<IStaffService, StaffService>();
-builder.Services.AddScoped<IEventService, EventService>();
 builder.Services.AddScoped<IGalleryService, GalleryService>();
 builder.Services.AddScoped<IGuestbookService, GuestbookService>();
 builder.Services.AddScoped<IReservationService, ReservationService>();
@@ -104,6 +107,15 @@ builder.Services.AddRateLimiter(options =>
         _ => new FixedWindowRateLimiterOptions
         {
             PermitLimit = 10,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+            AutoReplenishment = true
+        }));
+    options.AddPolicy("admin-register", httpContext => RateLimitPartition.GetFixedWindowLimiter(
+        httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 5,
             Window = TimeSpan.FromMinutes(1),
             QueueLimit = 0,
             AutoReplenishment = true
@@ -214,6 +226,10 @@ builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("AdminOnly", policy =>
         policy.RequireAuthenticatedUser().RequireRole(AdminRole.All));
+    options.AddPolicy("AdminManager", policy =>
+        policy.RequireAuthenticatedUser().RequireRole(AdminRole.Developer, AdminRole.Manager));
+    options.AddPolicy(AdminAuthConstants.DeveloperPolicy, policy =>
+        policy.RequireAuthenticatedUser().RequireRole(AdminRole.Developer));
 });
 
 var app = builder.Build();

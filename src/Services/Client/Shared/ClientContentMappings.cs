@@ -13,7 +13,6 @@ internal static class ClientContentMappings
     internal static readonly TimeSpan TaiwanOffset = TimeSpan.FromHours(8);
     internal static readonly HashSet<string> NavigationPlacements = new(StringComparer.OrdinalIgnoreCase) { "navbar", "footer" };
     internal static readonly HashSet<string> RankingTypes = new(StringComparer.Ordinal) { "staffRanking", "monetaryRanking" };
-    internal static readonly HashSet<string> EventStatuses = new(StringComparer.OrdinalIgnoreCase) { "scheduled", "active", "ended" };
 
     internal static SiteSettingDto MapSetting(SiteSettingRow row)
         => new(row.SettingKey, ParseJson(row.SettingValue) ?? ParseJson("{}")!.Value, row.Description);
@@ -40,8 +39,8 @@ internal static class ClientContentMappings
     {
         var serviceRows = services.ToArray();
         return new StaffListItemDto(row.Id, row.DisplayName, row.Nickname,
-            mediaUrls.BuildUrl(row.AvatarMediaId, row.LegacyAvatarUrl, "card"), row.RoleTitle,
-            row.ShortBio, row.CurrentStatus, row.StatusText, row.TodayShift,
+            mediaUrls.BuildUrl(row.AvatarMediaId, "card"), row.RoleTitle,
+            row.ShortBio, row.IsWorkingToday, row.CurrentStatus, row.StatusText, row.TodayShift,
             serviceRows.Where(service => service.ServiceType == "common").Select(MapStaffService).ToArray(),
             serviceRows.Where(service => service.ServiceType == "special").Select(MapStaffService).ToArray());
     }
@@ -49,26 +48,21 @@ internal static class ClientContentMappings
     internal static StaffServiceDto MapStaffService(StaffServiceRow row)
         => new(row.Id, row.ServiceType, row.ServiceName, row.ServiceDescription, row.PriceText);
 
-    internal static EventDto MapEvent(EventRow row, MediaUrlService mediaUrls)
-        => new(row.Id, row.Title, row.Summary,
-            mediaUrls.BuildUrl(row.CoverMediaId, row.LegacyCoverImageUrl, "card"), ToTaiwanOffset(row.StartsAt), ToTaiwanOffset(row.EndsAt),
-            row.Status, row.LocationText, ParseStringArray(row.DetailContent), row.NoticeContent);
-
     internal static GalleryAlbumDto MapGalleryAlbum(GalleryAlbumRow row, MediaUrlService mediaUrls)
         => new(row.Id, row.AlbumTitle, row.AlbumDescription,
-            mediaUrls.BuildUrl(row.CoverMediaId, row.LegacyCoverImageUrl, "card"), row.PeriodText,
+            mediaUrls.BuildUrl(row.CoverMediaId, "card"), row.PeriodText,
             row.EndsAt.HasValue ? ToTaiwanOffset(row.EndsAt.Value) : null);
 
     internal static GalleryItemDto MapGalleryItem(GalleryItemRow row, MediaUrlService mediaUrls)
         => new(row.Id,
-            mediaUrls.BuildUrl(row.MediaId, row.LegacyImageUrl, "full") ?? string.Empty,
-            mediaUrls.BuildUrl(row.MediaId, row.LegacyThumbnailUrl ?? row.LegacyImageUrl, "thumbnail"),
+            mediaUrls.BuildUrl(row.MediaId, "full") ?? string.Empty,
+            mediaUrls.BuildUrl(row.MediaId, "thumbnail"),
             row.Title, row.Caption,
             row.ShotAt.HasValue ? ToTaiwanOffset(row.ShotAt.Value) : null);
 
     internal static MenuItemDto MapMenuItem(MenuItemRow row, MediaUrlService mediaUrls)
         => new(row.Id, row.CategoryId, row.ItemName, row.ItemDescription, row.Price,
-            mediaUrls.BuildUrl(row.MediaId, row.LegacyImageUrl, "card"), ParseJson(row.Tags));
+            mediaUrls.BuildUrl(row.MediaId, "card"), ParseJson(row.Tags));
 
     internal static MenuSetItemDto MapMenuSetItem(MenuSetItemRow row)
         => new(row.Id, row.MenuItemId, row.ItemName, row.ItemRole, row.Quantity);

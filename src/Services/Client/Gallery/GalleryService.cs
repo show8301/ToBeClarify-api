@@ -30,7 +30,7 @@ public sealed class GalleryService : IGalleryService
             ?? throw new NotFoundException("Gallery album not found.", "GALLERY_ALBUM_NOT_FOUND");
         var items = await _repository.GetGalleryItemsAsync(albumId, cancellationToken);
         return new GalleryAlbumDetailDto(album.Id, album.AlbumTitle, album.AlbumDescription,
-            _mediaUrls.BuildUrl(album.CoverMediaId, album.LegacyCoverImageUrl, "card"), album.PeriodText,
+            _mediaUrls.BuildUrl(album.CoverMediaId, "card"), album.PeriodText,
             album.EndsAt.HasValue ? ClientContentMappings.ToTaiwanOffset(album.EndsAt.Value) : null,
             ClientContentMappings.ParseStringArray(album.DetailContent),
             items.Select(item => ClientContentMappings.MapGalleryItem(item, _mediaUrls)).ToArray());

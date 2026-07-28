@@ -24,9 +24,19 @@ public sealed class JwtTokenService
             new(ClaimTypes.NameIdentifier, user.Id),
             new(ClaimTypes.Name, user.DisplayName),
             new(AdminAuthConstants.RoleClaimType, user.RoleLevel),
-            new("token_version", user.TokenVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            new(AdminAuthConstants.UserIdClaimType, user.Id),
+            new(AdminAuthConstants.LoginNameClaimType, user.LoginName),
+            new(AdminAuthConstants.DisplayNameClaimType, user.DisplayName),
+            new(AdminAuthConstants.RoleLevelClaimType, user.RoleLevel),
+            new(AdminAuthConstants.RoleLabelClaimType, AdminRole.GetLabel(user.RoleLevel)),
+            new(AdminAuthConstants.TokenVersionClaimType, user.TokenVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)),
             new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString("N"))
         };
+
+        if (!string.IsNullOrWhiteSpace(user.StaffMemberId))
+        {
+            claims.Add(new Claim(AdminAuthConstants.StaffMemberIdClaimType, user.StaffMemberId));
+        }
 
         var signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_options.SigningKey));
         var credentials = new SigningCredentials(signingKey, SecurityAlgorithms.HmacSha256);
