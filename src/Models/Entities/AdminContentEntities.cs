@@ -40,6 +40,7 @@ public sealed class AdminHomeSlideRow
     public string? MediaId { get; set; }
     public int SortOrder { get; set; }
     public bool IsEnabled { get; set; }
+    public int DisplaySeconds { get; set; }
 }
 
 public sealed class AdminShopRuleRow
@@ -64,6 +65,17 @@ public sealed class AdminStaffMemberRow
     public string CurrentStatus { get; set; } = string.Empty;
     public string? StatusText { get; set; }
     public string? TodayShift { get; set; }
+    public int SortOrder { get; set; }
+    public bool IsActive { get; set; }
+}
+
+public sealed class AdminStaffMemberListRow
+{
+    public string Id { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string? AvatarMediaId { get; set; }
+    public string? RoleTitle { get; set; }
+    public bool IsWorkingToday { get; set; }
     public int SortOrder { get; set; }
     public bool IsActive { get; set; }
 }

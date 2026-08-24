@@ -118,8 +118,8 @@ public sealed class AdminContentController : ControllerBase
     }
 
     [HttpGet("staff-members")]
-    public async Task<ActionResult<ApiResponse<IReadOnlyList<AdminStaffMemberDto>>>> GetStaffMembers(CancellationToken cancellationToken)
-        => Ok(ApiResponse<IReadOnlyList<AdminStaffMemberDto>>.Ok(await _service.GetStaffMembersAsync(User, cancellationToken)));
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<AdminStaffMemberListItemDto>>>> GetStaffMembers(CancellationToken cancellationToken)
+        => Ok(ApiResponse<IReadOnlyList<AdminStaffMemberListItemDto>>.Ok(await _service.GetStaffMembersAsync(User, cancellationToken)));
 
     [HttpGet("staff-members/{id}")]
     public async Task<ActionResult<ApiResponse<AdminStaffMemberDto>>> GetStaffMember(string id, CancellationToken cancellationToken)
@@ -128,6 +128,10 @@ public sealed class AdminContentController : ControllerBase
     [HttpPut("staff-members/{id}")]
     public async Task<ActionResult<ApiResponse<AdminStaffMemberDto>>> UpdateStaffMember(string id, SaveStaffMemberRequest request, CancellationToken cancellationToken)
         => Ok(ApiResponse<AdminStaffMemberDto>.Ok(await _service.SaveStaffMemberAsync(id, request, User, cancellationToken)));
+
+    [HttpPut("staff-members/{id}/status")]
+    public async Task<ActionResult<ApiResponse<AdminStaffMemberDto>>> UpdateStaffMemberStatus(string id, UpdateStaffMemberStatusRequest request, CancellationToken cancellationToken)
+        => Ok(ApiResponse<AdminStaffMemberDto>.Ok(await _service.UpdateStaffMemberStatusAsync(id, request, User, cancellationToken)));
 
     [HttpPut("staff-members/order")]
     [Authorize(Policy = "AdminManager")]

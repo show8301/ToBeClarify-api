@@ -97,7 +97,8 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
     public Task<IReadOnlyList<AdminHomeSlideRow>> GetHomeSlidesAsync(CancellationToken cancellationToken)
         => QueryAsync<AdminHomeSlideRow>("""
             SELECT `ID` AS Id, `MEDIA_ID` AS MediaId,
-                   `SORT_ORDER` AS SortOrder, `IS_ENABLED` AS IsEnabled
+                   `SORT_ORDER` AS SortOrder, `IS_ENABLED` AS IsEnabled,
+                   COALESCE(`DISPLAY_SECONDS`, 10) AS DisplaySeconds
             FROM `HOME_SLIDES`
             ORDER BY `SORT_ORDER`, `CREATED_AT`;
             """, null, cancellationToken);
@@ -105,19 +106,21 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
     public Task<AdminHomeSlideRow?> GetHomeSlideAsync(string id, CancellationToken cancellationToken)
         => QuerySingleOrDefaultAsync<AdminHomeSlideRow>("""
             SELECT `ID` AS Id, `MEDIA_ID` AS MediaId,
-                   `SORT_ORDER` AS SortOrder, `IS_ENABLED` AS IsEnabled
+                   `SORT_ORDER` AS SortOrder, `IS_ENABLED` AS IsEnabled,
+                   COALESCE(`DISPLAY_SECONDS`, 10) AS DisplaySeconds
             FROM `HOME_SLIDES` WHERE `ID` = @Id LIMIT 1;
             """, new { Id = id }, cancellationToken);
 
     public Task UpsertHomeSlideAsync(string id, SaveHomeSlideRequest request, string actorId, DateTime now, CancellationToken cancellationToken)
         => ExecuteAsync("""
             INSERT INTO `HOME_SLIDES`
-                (`ID`, `MEDIA_ID`, `SORT_ORDER`, `IS_ENABLED`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
-            VALUES (@Id, @MediaId, @SortOrder, @IsEnabled, @Now, @ActorId, @Now, @ActorId)
+                (`ID`, `MEDIA_ID`, `SORT_ORDER`, `IS_ENABLED`, `DISPLAY_SECONDS`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
+            VALUES (@Id, @MediaId, @SortOrder, @IsEnabled, @DisplaySeconds, @Now, @ActorId, @Now, @ActorId)
             ON DUPLICATE KEY UPDATE `MEDIA_ID` = VALUES(`MEDIA_ID`),
                 `SORT_ORDER` = VALUES(`SORT_ORDER`), `IS_ENABLED` = VALUES(`IS_ENABLED`),
+                `DISPLAY_SECONDS` = VALUES(`DISPLAY_SECONDS`),
                 `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId;
-            """, new { Id = id, request.MediaId, request.SortOrder, request.IsEnabled, Now = now, ActorId = actorId }, cancellationToken);
+            """, new { Id = id, request.MediaId, request.SortOrder, request.IsEnabled, request.DisplaySeconds, Now = now, ActorId = actorId }, cancellationToken);
 
     public Task DeleteHomeSlideAsync(string id, string actorId, DateTime now, CancellationToken cancellationToken)
         => ExecuteAsync("DELETE FROM `HOME_SLIDES` WHERE `ID` = @Id;", new { Id = id, ActorId = actorId, Now = now }, cancellationToken);
@@ -142,19 +145,12 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
     public Task DeleteShopRuleAsync(string id, string actorId, DateTime now, CancellationToken cancellationToken)
         => ExecuteAsync("DELETE FROM `SHOP_RULES` WHERE `ID` = @Id;", new { Id = id, ActorId = actorId, Now = now }, cancellationToken);
 
-    public Task<IReadOnlyList<AdminStaffMemberRow>> GetStaffMembersAsync(CancellationToken cancellationToken)
-        => QueryAsync<AdminStaffMemberRow>("""
-            SELECT M.`ID` AS Id, M.`DISPLAY_NAME` AS DisplayName, M.`NICKNAME` AS Nickname,
+    public Task<IReadOnlyList<AdminStaffMemberListRow>> GetStaffMembersAsync(CancellationToken cancellationToken)
+        => QueryAsync<AdminStaffMemberListRow>("""
+            SELECT M.`ID` AS Id, M.`DISPLAY_NAME` AS DisplayName,
                    M.`AVATAR_MEDIA_ID` AS AvatarMediaId, M.`ROLE_TITLE` AS RoleTitle,
-                   M.`SHORT_BIO` AS ShortBio, M.`PROFILE_BIO` AS ProfileBio,
                    COALESCE(S.`IS_WORKING`, TRUE) AS IsWorkingToday,
-                   CASE WHEN COALESCE(S.`IS_WORKING`, TRUE) = FALSE THEN 'off'
-                        WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= NOW() AND R.`ENDS_AT` > NOW()) THEN 'busy'
-                        ELSE 'available' END AS CurrentStatus,
-                   CASE WHEN COALESCE(S.`IS_WORKING`, TRUE) = FALSE THEN '未上班'
-                        WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= NOW() AND R.`ENDS_AT` > NOW()) THEN '指名中'
-                        ELSE '待命中' END AS StatusText,
-                   NULL AS TodayShift, M.`SORT_ORDER` AS SortOrder, M.`IS_ACTIVE` AS IsActive
+                   M.`SORT_ORDER` AS SortOrder, M.`IS_ACTIVE` AS IsActive
             FROM `STAFF_MEMBERS` M
             LEFT JOIN `STAFF_SCHEDULES` S ON S.`STAFF_ID` = M.`ID` AND S.`WORK_DATE` = CURRENT_DATE()
             ORDER BY `SORT_ORDER`, `DISPLAY_NAME`;
@@ -164,7 +160,7 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
         => QuerySingleOrDefaultAsync<AdminStaffMemberRow>("""
             SELECT M.`ID` AS Id, M.`DISPLAY_NAME` AS DisplayName, M.`NICKNAME` AS Nickname,
                    M.`AVATAR_MEDIA_ID` AS AvatarMediaId, M.`ROLE_TITLE` AS RoleTitle,
-                   M.`SHORT_BIO` AS ShortBio,
+                   M.`SHORT_BIO` AS ShortBio, M.`PROFILE_BIO` AS ProfileBio,
                    COALESCE(S.`IS_WORKING`, TRUE) AS IsWorkingToday,
                    CASE WHEN COALESCE(S.`IS_WORKING`, TRUE) = FALSE THEN 'off'
                         WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= NOW() AND R.`ENDS_AT` > NOW()) THEN 'busy'
@@ -219,7 +215,7 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
             """, new { ScheduleId = NewId(), StaffId = id, request.IsWorkingToday, Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
 
         await connection.ExecuteAsync(new CommandDefinition("DELETE FROM `STAFF_SERVICES` WHERE `STAFF_ID` = @StaffId;", new { StaffId = id }, transaction, cancellationToken: cancellationToken));
-        foreach (var service in request.Services)
+        foreach (var service in request.Services ?? [])
         {
             await connection.ExecuteAsync(new CommandDefinition("""
                 INSERT INTO `STAFF_SERVICES`
@@ -231,7 +227,7 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
         }
 
         await connection.ExecuteAsync(new CommandDefinition("DELETE FROM `STAFF_GALLERY_ITEMS` WHERE `STAFF_ID` = @StaffId;", new { StaffId = id }, transaction, cancellationToken: cancellationToken));
-        foreach (var gallery in request.Gallery)
+        foreach (var gallery in request.Gallery ?? [])
         {
             await connection.ExecuteAsync(new CommandDefinition("""
                 INSERT INTO `STAFF_GALLERY_ITEMS`
@@ -239,6 +235,33 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
                 VALUES (@Id, @StaffId, @MediaId, @SortOrder, @IsPublished, @Now, @ActorId, @Now, @ActorId);
                 """, new { Id = string.IsNullOrWhiteSpace(gallery.Id) ? NewId() : gallery.Id, StaffId = id,
                     gallery.MediaId, gallery.SortOrder, gallery.IsPublished, Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task UpdateStaffMemberStatusAsync(string id, bool? isWorkingToday, bool? isActive, string actorId, DateTime now, CancellationToken cancellationToken)
+    {
+        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        if (isActive.HasValue)
+        {
+            await connection.ExecuteAsync(new CommandDefinition("""
+                UPDATE `STAFF_MEMBERS`
+                SET `IS_ACTIVE` = @IsActive, `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId
+                WHERE `ID` = @Id;
+                """, new { Id = id, IsActive = isActive.Value, Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
+        }
+
+        if (isWorkingToday.HasValue)
+        {
+            await connection.ExecuteAsync(new CommandDefinition("""
+                INSERT INTO `STAFF_SCHEDULES`
+                    (`ID`, `STAFF_ID`, `WORK_DATE`, `IS_WORKING`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
+                VALUES (@ScheduleId, @StaffId, DATE(@Now), @IsWorkingToday, @Now, @ActorId, @Now, @ActorId)
+                ON DUPLICATE KEY UPDATE `IS_WORKING` = VALUES(`IS_WORKING`), `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId;
+                """, new { ScheduleId = NewId(), StaffId = id, IsWorkingToday = isWorkingToday.Value, Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
         }
 
         await transaction.CommitAsync(cancellationToken);

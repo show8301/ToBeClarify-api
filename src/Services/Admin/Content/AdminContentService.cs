@@ -127,17 +127,17 @@ public sealed class AdminContentService : IAdminContentService
         await _repository.DeleteShopRuleAsync(Required(id, "SHOP_RULE_ID_REQUIRED"), ActorId(actor), _clock.LocalDateTime, cancellationToken);
     }
 
-    public async Task<IReadOnlyList<AdminStaffMemberDto>> GetStaffMembersAsync(ClaimsPrincipal actor, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<AdminStaffMemberListItemDto>> GetStaffMembersAsync(ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
         var rows = await _repository.GetStaffMembersAsync(cancellationToken);
-        if (CanManageAll(actor)) return await MapStaffListAsync(rows, cancellationToken);
-        var ownId = OwnStaffId(actor);
-        return await MapStaffListAsync(rows.Where(row => row.Id == ownId).ToArray(), cancellationToken);
+        return rows.Select(row => new AdminStaffMemberListItemDto(
+            row.Id, row.DisplayName, row.AvatarMediaId, _mediaUrls.BuildUrl(row.AvatarMediaId, "card"),
+            row.RoleTitle, row.IsWorkingToday, row.SortOrder, row.IsActive)).ToArray();
     }
 
     public async Task<AdminStaffMemberDto> GetStaffMemberAsync(string id, ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
-        var staffId = ResolveStaffId(id, actor);
+        var staffId = Required(id, "STAFF_ID_REQUIRED");
         var row = await _repository.GetStaffMemberAsync(staffId, cancellationToken)
             ?? throw new NotFoundException("Staff member not found.", "STAFF_NOT_FOUND");
         return await MapStaffAsync(row, cancellationToken);
@@ -152,6 +152,19 @@ public sealed class AdminContentService : IAdminContentService
         if (!CanManageAll(actor)) request.SortOrder = existing.SortOrder;
         await _repository.SaveStaffMemberAsync(staffId, request, ActorId(actor), _clock.LocalDateTime, cancellationToken);
         return await GetStaffMemberAsync(staffId, actor, cancellationToken);
+    }
+
+    public async Task<AdminStaffMemberDto> UpdateStaffMemberStatusAsync(string id, UpdateStaffMemberStatusRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken)
+    {
+        if (!request.IsWorkingToday.HasValue && !request.IsActive.HasValue)
+            throw new BusinessException("At least one staff status is required.", "STAFF_STATUS_REQUIRED");
+
+        var staffId = ResolveStaffId(id, actor);
+        var existing = await _repository.GetStaffMemberAsync(staffId, cancellationToken)
+            ?? throw new NotFoundException("Staff member not found.", "STAFF_NOT_FOUND");
+        await _repository.UpdateStaffMemberStatusAsync(staffId, request.IsWorkingToday, request.IsActive,
+            ActorId(actor), _clock.LocalDateTime, cancellationToken);
+        return await GetStaffMemberAsync(existing.Id, actor, cancellationToken);
     }
 
     public async Task ReorderStaffMembersAsync(ReorderStaffMembersRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken)
@@ -285,13 +298,6 @@ public sealed class AdminContentService : IAdminContentService
         await _repository.DeleteMenuSetAsync(Required(id, "MENU_SET_ID_REQUIRED"), ActorId(actor), _clock.LocalDateTime, cancellationToken);
     }
 
-    private async Task<IReadOnlyList<AdminStaffMemberDto>> MapStaffListAsync(IReadOnlyList<AdminStaffMemberRow> rows, CancellationToken cancellationToken)
-    {
-        var result = new List<AdminStaffMemberDto>(rows.Count);
-        foreach (var row in rows) result.Add(await MapStaffAsync(row, cancellationToken));
-        return result;
-    }
-
     private async Task<AdminStaffMemberDto> MapStaffAsync(AdminStaffMemberRow row, CancellationToken cancellationToken)
     {
         var servicesTask = _repository.GetStaffServicesAsync(row.Id, cancellationToken);
@@ -307,9 +313,13 @@ public sealed class AdminContentService : IAdminContentService
 
     private static void ValidateStaffRequest(SaveStaffMemberRequest request)
     {
-        if (request.Services.Any(service => service.ServiceType is not ("common" or "special")))
+        if (string.IsNullOrWhiteSpace(request.DisplayName))
+            throw new BusinessException("Display name is required.", "STAFF_DISPLAY_NAME_REQUIRED");
+        if (string.IsNullOrWhiteSpace(request.ShortBio))
+            throw new BusinessException("Card bio is required.", "STAFF_SHORT_BIO_REQUIRED");
+        if ((request.Services ?? []).Any(service => service.ServiceType is not ("common" or "special")))
             throw new BusinessException("Service type must be common or special.", "INVALID_SERVICE_TYPE");
-        if (request.Gallery.Any(item => string.IsNullOrWhiteSpace(item.MediaId)))
+        if ((request.Gallery ?? []).Any(item => string.IsNullOrWhiteSpace(item.MediaId)))
             throw new BusinessException("Every staff gallery item must reference a media asset.", "STAFF_GALLERY_MEDIA_REQUIRED");
     }
 
@@ -381,7 +391,7 @@ public sealed class AdminContentService : IAdminContentService
             row.EventTimeSnapshot, row.CtaLabel, row.SortOrder, row.IsEnabled);
 
     private AdminHomeSlideDto Map(AdminHomeSlideRow row)
-        => new(row.Id, row.MediaId, _mediaUrls.BuildUrl(row.MediaId, "hero"), row.SortOrder, row.IsEnabled);
+        => new(row.Id, row.MediaId, _mediaUrls.BuildUrl(row.MediaId, "hero"), row.SortOrder, row.IsEnabled, row.DisplaySeconds);
 
     private static AdminShopRuleDto Map(AdminShopRuleRow row)
         => new(row.Id, row.RuleText, row.RuleNote, row.SortOrder, row.IsEnabled);

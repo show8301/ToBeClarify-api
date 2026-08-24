@@ -25,7 +25,8 @@ public sealed record HomeEventCarouselDto(
 
 public sealed record HomeSlideDto(
     string Id,
-    string? ImageUrl);
+    string? ImageUrl,
+    int DisplaySeconds);
 
 public sealed record ShopRuleDto(string Id, string RuleText, string? RuleNote);
 
@@ -203,5 +204,4 @@ public sealed record HomeDto(
     IReadOnlyList<NavigationItemDto> Navigation,
     IReadOnlyList<HomeEventCarouselDto> Carousels,
     IReadOnlyList<HomeSlideDto> Slides,
-    IReadOnlyList<ShopRuleDto> ShopRules,
-    IReadOnlyList<StaffListItemDto> Staff);
+    IReadOnlyList<ShopRuleDto> ShopRules);

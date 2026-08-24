@@ -3,7 +3,6 @@ using ToBeClarify.Api.Models.Dtos;
 using ToBeClarify.Api.Repositories.Client.Home;
 using ToBeClarify.Api.Services.Client.Shared;
 using ToBeClarify.Api.Services.Client.Site;
-using ToBeClarify.Api.Services.Client.Staff;
 using ToBeClarify.Api.Services.Media;
 
 namespace ToBeClarify.Api.Services.Client.Home;
@@ -12,18 +11,15 @@ public sealed class HomeService : IHomeService
 {
     private readonly IHomeRepository _repository;
     private readonly ISiteService _siteService;
-    private readonly IStaffService _staffService;
     private readonly MediaUrlService _mediaUrls;
 
     public HomeService(
         IHomeRepository repository,
         ISiteService siteService,
-        IStaffService staffService,
         MediaUrlService mediaUrls)
     {
         _repository = repository;
         _siteService = siteService;
-        _staffService = staffService;
         _mediaUrls = mediaUrls;
     }
 
@@ -39,7 +35,7 @@ public sealed class HomeService : IHomeService
     {
         var rows = await _repository.GetHomeSlidesAsync(cancellationToken);
         return rows.Select(row => new HomeSlideDto(row.Id,
-            _mediaUrls.BuildUrl(row.MediaId, "hero"))).ToArray();
+            _mediaUrls.BuildUrl(row.MediaId, "hero"), row.DisplaySeconds)).ToArray();
     }
 
     public async Task<HomeDto> GetHomeAsync(CancellationToken cancellationToken)
@@ -49,9 +45,8 @@ public sealed class HomeService : IHomeService
         var carouselsTask = GetCarouselsAsync(cancellationToken);
         var slidesTask = GetSlidesAsync(cancellationToken);
         var rulesTask = _siteService.GetShopRulesAsync(cancellationToken);
-        var staffTask = _staffService.GetStaffAsync(8, cancellationToken);
-        await Task.WhenAll(settingsTask, navigationTask, carouselsTask, slidesTask, rulesTask, staffTask);
+        await Task.WhenAll(settingsTask, navigationTask, carouselsTask, slidesTask, rulesTask);
         return new HomeDto(await settingsTask, await navigationTask, await carouselsTask, await slidesTask,
-            await rulesTask, await staffTask);
+            await rulesTask);
     }
 }

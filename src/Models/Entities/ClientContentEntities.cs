@@ -34,6 +34,7 @@ public sealed class HomeSlideRow
 {
     public string Id { get; set; } = string.Empty;
     public string? MediaId { get; set; }
+    public int DisplaySeconds { get; set; }
 }
 
 public sealed class ShopRuleRow

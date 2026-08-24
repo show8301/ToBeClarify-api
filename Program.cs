@@ -63,6 +63,7 @@ builder.Services.AddScoped<ToBeClarify.Api.Repositories.Admin.Content.IAdminCont
 builder.Services.AddScoped<ToBeClarify.Api.Services.Admin.Content.IAdminContentService,
     ToBeClarify.Api.Services.Admin.Content.AdminContentService>();
 builder.Services.AddScoped<ToBeClarify.Api.Services.Media.AdminMediaUploadService>();
+builder.Services.AddHostedService<MediaMaintenanceHostedService>();
 builder.Services.AddScoped<IHomeRepository, HomeRepository>();
 builder.Services.AddScoped<ISiteRepository, SiteRepository>();
 builder.Services.AddScoped<IMenuRepository, MenuRepository>();

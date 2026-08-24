@@ -24,9 +24,10 @@ public interface IAdminContentService
     Task<AdminShopRuleDto> SaveShopRuleAsync(string? id, SaveShopRuleRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task DeleteShopRuleAsync(string id, ClaimsPrincipal actor, CancellationToken cancellationToken);
 
-    Task<IReadOnlyList<AdminStaffMemberDto>> GetStaffMembersAsync(ClaimsPrincipal actor, CancellationToken cancellationToken);
+    Task<IReadOnlyList<AdminStaffMemberListItemDto>> GetStaffMembersAsync(ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<AdminStaffMemberDto> GetStaffMemberAsync(string id, ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<AdminStaffMemberDto> SaveStaffMemberAsync(string id, SaveStaffMemberRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);
+    Task<AdminStaffMemberDto> UpdateStaffMemberStatusAsync(string id, UpdateStaffMemberStatusRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task ReorderStaffMembersAsync(ReorderStaffMembersRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task DeleteStaffMemberAsync(string id, ClaimsPrincipal actor, CancellationToken cancellationToken);
 

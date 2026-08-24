@@ -26,11 +26,12 @@ public interface IAdminContentRepository
     Task UpsertShopRuleAsync(string id, SaveShopRuleRequest request, string actorId, DateTime now, CancellationToken cancellationToken);
     Task DeleteShopRuleAsync(string id, string actorId, DateTime now, CancellationToken cancellationToken);
 
-    Task<IReadOnlyList<AdminStaffMemberRow>> GetStaffMembersAsync(CancellationToken cancellationToken);
+    Task<IReadOnlyList<AdminStaffMemberListRow>> GetStaffMembersAsync(CancellationToken cancellationToken);
     Task<AdminStaffMemberRow?> GetStaffMemberAsync(string id, CancellationToken cancellationToken);
     Task<IReadOnlyList<AdminStaffServiceRow>> GetStaffServicesAsync(string staffId, CancellationToken cancellationToken);
     Task<IReadOnlyList<AdminStaffGalleryItemRow>> GetStaffGalleryAsync(string staffId, CancellationToken cancellationToken);
     Task SaveStaffMemberAsync(string id, SaveStaffMemberRequest request, string actorId, DateTime now, CancellationToken cancellationToken);
+    Task UpdateStaffMemberStatusAsync(string id, bool? isWorkingToday, bool? isActive, string actorId, DateTime now, CancellationToken cancellationToken);
     Task ReorderStaffMembersAsync(IReadOnlyList<ReorderStaffMemberItem> items, string actorId, DateTime now, CancellationToken cancellationToken);
     Task DeleteStaffMemberAsync(string id, string actorId, DateTime now, CancellationToken cancellationToken);
 

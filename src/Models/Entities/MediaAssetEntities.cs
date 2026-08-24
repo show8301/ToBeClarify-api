@@ -11,4 +11,6 @@ public sealed class MediaAssetRow
     public int? Width { get; set; }
     public int? Height { get; set; }
     public int Version { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public string? CreatedBy { get; set; }
 }

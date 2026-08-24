@@ -23,4 +23,8 @@ public sealed class AdminMediaController : ControllerBase
         [FromForm] string? category,
         CancellationToken cancellationToken)
         => Ok(ApiResponse<AdminMediaUploadDto>.Ok(await _service.UploadAsync(file, category, User, cancellationToken)));
+
+    [HttpPost("cleanup")]
+    public async Task<ActionResult<ApiResponse<int>>> Cleanup(CleanupMediaRequest request, CancellationToken cancellationToken)
+        => Ok(ApiResponse<int>.Ok(await _service.CleanupUnreferencedAsync(request.MediaIds, User, cancellationToken)));
 }

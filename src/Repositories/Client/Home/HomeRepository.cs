@@ -29,7 +29,8 @@ public sealed class HomeRepository : DapperRepositoryBase, IHomeRepository
 
     public Task<IReadOnlyList<HomeSlideRow>> GetHomeSlidesAsync(CancellationToken cancellationToken)
         => QueryAsync<HomeSlideRow>("""
-            SELECT `ID` AS Id, `MEDIA_ID` AS MediaId
+            SELECT `ID` AS Id, `MEDIA_ID` AS MediaId,
+                   COALESCE(`DISPLAY_SECONDS`, 10) AS DisplaySeconds
             FROM `HOME_SLIDES`
             WHERE `IS_ENABLED` = TRUE
             ORDER BY `SORT_ORDER`, `CREATED_AT`;

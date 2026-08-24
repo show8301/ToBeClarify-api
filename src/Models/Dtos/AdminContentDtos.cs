@@ -97,7 +97,8 @@ public sealed record AdminHomeSlideDto(
     string? MediaId,
     string? ImageUrl,
     int SortOrder,
-    bool IsEnabled);
+    bool IsEnabled,
+    int DisplaySeconds);
 
 public sealed class SaveHomeSlideRequest
 {
@@ -111,6 +112,15 @@ public sealed class SaveHomeSlideRequest
     public int SortOrder { get; init; }
 
     public bool IsEnabled { get; init; } = true;
+
+    [Range(1, 60)]
+    public int DisplaySeconds { get; init; } = 10;
+}
+
+public sealed class UpdateStaffMemberStatusRequest
+{
+    public bool? IsWorkingToday { get; init; }
+    public bool? IsActive { get; init; }
 }
 
 public sealed record AdminShopRuleDto(
@@ -170,6 +180,16 @@ public sealed record AdminStaffMemberDto(
     IReadOnlyList<AdminStaffServiceDto> Services,
     IReadOnlyList<AdminStaffGalleryItemDto> Gallery);
 
+public sealed record AdminStaffMemberListItemDto(
+    string Id,
+    string DisplayName,
+    string? AvatarMediaId,
+    string? AvatarUrl,
+    string? RoleTitle,
+    bool IsWorkingToday,
+    int SortOrder,
+    bool IsActive);
+
 public sealed class SaveStaffMemberRequest
 {
     [Required, StringLength(60, MinimumLength = 1)]
@@ -187,7 +207,7 @@ public sealed class SaveStaffMemberRequest
     [StringLength(80)]
     public string? RoleTitle { get; init; }
 
-    [StringLength(255)]
+    [Required, StringLength(255, MinimumLength = 1)]
     public string? ShortBio { get; init; }
 
     public string? ProfileBio { get; init; }
@@ -245,7 +265,7 @@ public sealed class SaveStaffGalleryItemRequest
     [StringLength(40)]
     public string? Id { get; init; }
 
-    [StringLength(40)]
+    [Required, StringLength(40)]
     public string? MediaId { get; init; }
 
     [StringLength(500)]
@@ -497,3 +517,8 @@ public sealed record AdminMediaUploadDto(
     string FileName,
     string ContentType,
     string Url);
+
+public sealed class CleanupMediaRequest
+{
+    public List<string> MediaIds { get; init; } = [];
+}
