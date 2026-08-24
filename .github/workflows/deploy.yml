@@ -1,0 +1,47 @@
+name: API CI/CD
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: api-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore ToBeClarify.Api.csproj
+
+      - name: Build
+        run: dotnet build ToBeClarify.Api.csproj --configuration Release --no-restore
+
+      - name: Publish
+        run: dotnet publish ToBeClarify.Api.csproj --configuration Release --no-build --output publish
+
+      - name: Upload publish artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: tobeclarify-api-publish
+          path: publish
+          if-no-files-found: error
+          retention-days: 7
