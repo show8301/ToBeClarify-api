@@ -45,3 +45,28 @@ jobs:
           path: publish
           if-no-files-found: error
           retention-days: 7
+
+  deploy:
+    name: Deploy to IIS
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout deployment script
+        uses: actions/checkout@v5
+
+      - name: Download publish artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: tobeclarify-api-publish
+          path: ${{ runner.temp }}\tobeclarify-api-publish
+
+      - name: Deploy API files
+        shell: powershell
+        env:
+          ARTIFACT_PATH: ${{ runner.temp }}\tobeclarify-api-publish
+          DEPLOY_PATH: ${{ vars.API_DEPLOY_PATH }}
+          HEALTH_CHECK_URL: ${{ vars.API_HEALTHCHECK_URL }}
+        run: .\scripts\deploy-iis.ps1 -ArtifactPath $env:ARTIFACT_PATH -DeployPath $env:DEPLOY_PATH -HealthCheckUrl $env:HEALTH_CHECK_URL
