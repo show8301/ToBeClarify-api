@@ -150,6 +150,7 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
             SELECT M.`ID` AS Id, M.`DISPLAY_NAME` AS DisplayName,
                    M.`AVATAR_MEDIA_ID` AS AvatarMediaId, M.`ROLE_TITLE` AS RoleTitle,
                    COALESCE(S.`IS_WORKING`, TRUE) AS IsWorkingToday,
+                   M.`BUFFER_MINUTES` AS BufferMinutes, M.`IS_NOMINATABLE` AS IsNominatable,
                    M.`SORT_ORDER` AS SortOrder, M.`IS_ACTIVE` AS IsActive
             FROM `STAFF_MEMBERS` M
             LEFT JOIN `STAFF_SCHEDULES` S ON S.`STAFF_ID` = M.`ID` AND S.`WORK_DATE` = CURRENT_DATE()
@@ -168,7 +169,9 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
                    CASE WHEN COALESCE(S.`IS_WORKING`, TRUE) = FALSE THEN '未上班'
                         WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= NOW() AND R.`ENDS_AT` > NOW()) THEN '指名中'
                         ELSE '待命中' END AS StatusText,
-                   NULL AS TodayShift, M.`SORT_ORDER` AS SortOrder, M.`IS_ACTIVE` AS IsActive
+                   NULL AS TodayShift, M.`BUFFER_MINUTES` AS BufferMinutes,
+                   M.`IS_NOMINATABLE` AS IsNominatable,
+                   M.`SORT_ORDER` AS SortOrder, M.`IS_ACTIVE` AS IsActive
             FROM `STAFF_MEMBERS` M
             LEFT JOIN `STAFF_SCHEDULES` S ON S.`STAFF_ID` = M.`ID` AND S.`WORK_DATE` = CURRENT_DATE()
             WHERE M.`ID` = @Id LIMIT 1;
@@ -178,7 +181,10 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
         => QueryAsync<AdminStaffServiceRow>("""
             SELECT `ID` AS Id, `STAFF_ID` AS StaffId, `SERVICE_TYPE` AS ServiceType,
                    `SERVICE_NAME` AS ServiceName, `SERVICE_DESCRIPTION` AS ServiceDescription,
-                   `PRICE_TEXT` AS PriceText, `SORT_ORDER` AS SortOrder, `IS_ENABLED` AS IsEnabled
+                   `PRICE_TEXT` AS PriceText, `PRICE` AS Price, `DURATION_MINUTES` AS DurationMinutes,
+                   `IS_NOMINATABLE` AS IsNominatable,
+                   `ADDITIONAL_PERSON_PRICE` AS AdditionalPersonPrice,
+                   `SORT_ORDER` AS SortOrder, `IS_ENABLED` AS IsEnabled
             FROM `STAFF_SERVICES` WHERE `STAFF_ID` = @StaffId
             ORDER BY `SORT_ORDER`, `SERVICE_NAME`;
             """, new { StaffId = staffId }, cancellationToken);
@@ -200,11 +206,12 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
             SET `DISPLAY_NAME` = @DisplayName, `NICKNAME` = @Nickname,
                 `AVATAR_MEDIA_ID` = @AvatarMediaId,
                 `ROLE_TITLE` = @RoleTitle, `SHORT_BIO` = @ShortBio, `PROFILE_BIO` = @ProfileBio,
+                `BUFFER_MINUTES` = @BufferMinutes, `IS_NOMINATABLE` = @IsNominatable,
                 `SORT_ORDER` = @SortOrder,
                 `IS_ACTIVE` = @IsActive, `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId
             WHERE `ID` = @Id;
             """, new { Id = id, request.DisplayName, request.Nickname, request.AvatarMediaId,
-                request.RoleTitle, request.ShortBio, request.ProfileBio,
+                request.RoleTitle, request.ShortBio, request.ProfileBio, request.BufferMinutes, request.IsNominatable,
                 request.SortOrder, request.IsActive, Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
 
         await connection.ExecuteAsync(new CommandDefinition("""
@@ -219,10 +226,11 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
         {
             await connection.ExecuteAsync(new CommandDefinition("""
                 INSERT INTO `STAFF_SERVICES`
-                    (`ID`, `STAFF_ID`, `SERVICE_TYPE`, `SERVICE_NAME`, `SERVICE_DESCRIPTION`, `PRICE_TEXT`, `SORT_ORDER`, `IS_ENABLED`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
-                VALUES (@Id, @StaffId, @ServiceType, @ServiceName, @ServiceDescription, @PriceText, @SortOrder, @IsEnabled, @Now, @ActorId, @Now, @ActorId);
+                    (`ID`, `STAFF_ID`, `SERVICE_TYPE`, `SERVICE_NAME`, `SERVICE_DESCRIPTION`, `PRICE_TEXT`, `PRICE`, `DURATION_MINUTES`, `IS_NOMINATABLE`, `ADDITIONAL_PERSON_PRICE`, `SORT_ORDER`, `IS_ENABLED`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
+                VALUES (@Id, @StaffId, @ServiceType, @ServiceName, @ServiceDescription, @PriceText, @Price, @DurationMinutes, @IsNominatable, @AdditionalPersonPrice, @SortOrder, @IsEnabled, @Now, @ActorId, @Now, @ActorId);
                 """, new { Id = string.IsNullOrWhiteSpace(service.Id) ? NewId() : service.Id, StaffId = id,
                     service.ServiceType, service.ServiceName, service.ServiceDescription, service.PriceText,
+                    service.Price, service.DurationMinutes, service.IsNominatable, service.AdditionalPersonPrice,
                     service.SortOrder, service.IsEnabled, Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
         }
 

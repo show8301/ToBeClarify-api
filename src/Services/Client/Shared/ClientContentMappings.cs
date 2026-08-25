@@ -41,12 +41,14 @@ internal static class ClientContentMappings
         return new StaffListItemDto(row.Id, row.DisplayName, row.Nickname,
             mediaUrls.BuildUrl(row.AvatarMediaId, "card"), row.RoleTitle,
             row.ShortBio, row.IsWorkingToday, row.CurrentStatus, row.StatusText, row.TodayShift,
+            row.IsNominatable,
             serviceRows.Where(service => service.ServiceType == "common").Select(MapStaffService).ToArray(),
             serviceRows.Where(service => service.ServiceType == "special").Select(MapStaffService).ToArray());
     }
 
     internal static StaffServiceDto MapStaffService(StaffServiceRow row)
-        => new(row.Id, row.ServiceType, row.ServiceName, row.ServiceDescription, row.PriceText);
+        => new(row.Id, row.ServiceType, row.ServiceName, row.ServiceDescription, row.PriceText,
+            row.Price, row.DurationMinutes, row.IsNominatable, row.AdditionalPersonPrice);
 
     internal static GalleryAlbumDto MapGalleryAlbum(GalleryAlbumRow row, MediaUrlService mediaUrls)
         => new(row.Id, row.AlbumTitle, row.AlbumDescription,

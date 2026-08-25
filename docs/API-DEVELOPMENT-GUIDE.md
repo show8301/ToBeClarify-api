@@ -18,7 +18,7 @@
 3. 本文件。
 4. `skill/雞排店(暫定)-DB設計.xlsx` 舊版資料庫設計稿。
 
-Excel 設計稿仍可用來理解原始領域規劃，但目前已和程式碼出現多處差異，不能直接視為正式資料庫規格。專案目前也沒有 migration 或完整建表 SQL，因此資料庫結構仍需另外建立正式的版本控制機制。
+Excel 設計稿仍可用來理解原始領域規劃，但目前已和程式碼出現多處差異，不能直接視為正式資料庫規格。`db/migrations` 已從店員點餐排程欄位開始作為增量 schema source of truth；既有資料表尚未回補為完整 baseline，仍需逐步補齊。
 
 ## 2. 系統概覽
 
@@ -87,6 +87,7 @@ ToBeClarify-api/
 ├─ .github/workflows/deploy.yml       CI/CD
 ├─ scripts/deploy-iis.ps1             IIS 部署、健康檢查與回復
 ├─ docs/                              協作文件
+├─ db/migrations/                     需由 DBA / 部署流程依序套用的增量 SQL
 ├─ skill/                             舊版 DB 設計與 mock data
 └─ src/
    ├─ Auth/                           JWT、角色、Cookie、密碼雜湊
@@ -114,11 +115,11 @@ ToBeClarify-api/
 - .NET 10 SDK。
 - 可連線的 MySQL 資料庫。
 - API 執行帳號對媒體目錄與 `Logs` 目錄有寫入權限。
-- 必須先準備相容資料表；目前專案不會自動 migration。
+- 必須先準備相容資料表；目前專案不會自動執行 migration，部署 API 前需先依序套用 `db/migrations`。
 
 ### 4.2 本機機密設定
 
-`Program.cs` 會在一般 `appsettings.json` 之後載入 `appsettings.Local.json`。該檔案已被 Git 忽略，適合放本機連線字串與 JWT signing key。
+`Program.cs` 會在一般 `appsettings.json` 之後載入 `appsettings.Local.json`。該檔案已被 Git 忽略，適合放本機連線字串與 JWT signing key；環境變數會在最後重新套用，因此 CI/CD 或一次性本機覆寫仍具有最高優先序。
 
 範例：
 
@@ -378,16 +379,25 @@ Cookie 特性：
 
 目前沒有 `POST /api/admin/staff-members`。新店員是透過註冊流程建立，或需由資料庫 / 未來新增管理端點建立。
 
-店員服務目前正式 contract 只有：
+店員主資料新增以下排程欄位：
+
+- `bufferMinutes`：選填，0–1440 分鐘；只在後台 API 回傳，不公開。
+- `isNominatable`：必填布林，既有與新建立店員預設 `false`；公開 Client API 會回傳供店員卡片顯示「可以指名」。
+
+店員服務正式 contract 包含：
 
 - `serviceType`：`common` 或 `special`
 - `serviceName`
 - `serviceDescription`
 - `priceText`
+- `price`：選填、非負整數，單位 Gil
+- `durationMinutes`：選填，0–1440 分鐘
+- `isNominatable`：布林，預設 `true`
+- `additionalPersonPrice`：選填、非負整數，單位 Gil／每位額外人數
 - `sortOrder`
 - `isEnabled`
 
-新版前端已預留的數值 `price`、`durationMinutes` 與布林 `isNominatable` 尚未存在於 API DTO、entity、SQL 與資料庫設計中，送入目前 API 不會被保存。
+`priceText` 暫時保留供舊版顯示字串相容；新版應優先使用結構化數值欄位。
 
 ### 8.4 媒體管理
 
@@ -433,7 +443,7 @@ resize 使用 `ResizeMode.Max`，會維持比例，不會強制裁成指定長�
 | 消費規則 | 有 | 有 | 完整 CRUD |
 | 菜單 | 有 | 有 | 分類、單品、套餐 CRUD |
 | 店員 | 有 | 部分 | 可讀、更新、狀態、排序、刪除；沒有獨立新增端點 |
-| 店員服務 | 有 | 透過 staff PUT | 尚無數值價格、分鐘與可指名欄位 |
+| 店員服務 | 有 | 透過 staff PUT | 有數值價格、分鐘、服務可指名與每位額外人數價格 |
 | 店員 gallery | 有 | 透過 staff PUT | 使用 mediaId |
 | 相簿 | 有 | 有 | album 與 items 一次儲存 |
 | 留言板 | 讀取、匿名新增 | 無 | 無 moderation 管理 API |
@@ -454,9 +464,9 @@ resize 使用 `ResizeMode.Max`，會維持比例，不會強制裁成指定長�
 | 首頁 | `HOME_EVENT_CAROUSELS` | 參照 `GALLERY_ALBUMS`，可覆寫標題、摘要、媒體 |
 | 首頁 | `HOME_SLIDES` | 參照 `MEDIA_ASSETS` |
 | 規則 | `SHOP_RULES`、`PRICING_RULES` | 排序、啟用 |
-| 店員 | `STAFF_MEMBERS` | 店員公開與後台主資料 |
+| 店員 | `STAFF_MEMBERS` | 店員公開與後台主資料；`BUFFER_MINUTES` 僅後台，`IS_NOMINATABLE` 供公開卡片 |
 | 店員 | `STAFF_SCHEDULES` | 每日上班狀態 |
-| 店員 | `STAFF_SERVICES` | common / special 服務 |
+| 店員 | `STAFF_SERVICES` | common / special 服務；結構化價格、分鐘、可指名與額外人數價格 |
 | 店員 | `STAFF_GALLERY_ITEMS` | 店員圖片與發布狀態 |
 | 店員 | `STAFF_RESERVATIONS` | 預約時段、狀態與顯示快照 |
 | 相簿 | `GALLERY_ALBUMS`、`GALLERY_ITEMS` | 相簿一對多 items |
@@ -477,7 +487,7 @@ resize 使用 `ResizeMode.Max`，會維持比例，不會強制裁成指定長�
 - Excel 的 `STAFF_SERVICES` 沒有 `SERVICE_TYPE`；目前程式要求 `common` 或 `special`。
 - Excel 的預約設計註記不包含客人姓名；目前 repository 會讀取並由公開 DTO 回傳 `CUSTOMER_NAME`。此欄位依產品定義是可重複且不對應真人身分的公開遊戲 ID。
 - Excel 有完整 `EVENTS` 規劃，但目前沒有 event controller、service 或 repository。
-- 新版前端所需 `price`、`durationMinutes`、`isNominatable` 尚未進入 Excel 或 API contract。
+- 新版前端所需 `price`、`durationMinutes`、`isNominatable`、`additionalPersonPrice` 已進入 API contract 與 migration，但尚未回寫舊版 Excel。
 
 ## 11. Logging 與可觀測性
 
@@ -520,7 +530,7 @@ resize 使用 `ResizeMode.Max`，會維持比例，不會強制裁成指定長�
 6. 最多嘗試 10 次 health check。
 7. 部署失敗時還原舊程式檔案。
 
-目前 CI 只有 restore/build/publish，repository 內沒有自動化測試專案，也沒有資料庫 migration 驗證。
+目前 CI 只有 restore/build/publish，repository 內沒有自動化測試專案，也沒有資料庫 migration 自動套用或驗證。
 
 ## 13. 已知風險與待補項目
 
@@ -530,12 +540,12 @@ resize 使用 `ResizeMode.Max`，會維持比例，不會強制裁成指定長�
 
 ### 已排入未來補強
 
-1. **建立 migration / schema source of truth。** 程式、Excel 與實際 DB 已有差異，多人開發容易因欄位不同而失敗；未來應新增 `db/migrations` 或採用正式 migration 工具。
+1. **補齊完整 schema baseline 與 migration runner。** `db/migrations` 已建立增量 migration，但舊表尚無完整 baseline，部署流程也不會自動記錄或套用版本。
 2. **建立自動化測試。** 未來至少應補 auth policy、公開資料過濾、staff scope、媒體 path safety、CRUD transaction 與 API contract 測試。
 
 ### P1：近期功能整合
 
-1. 將店員服務的 `price`、`durationMinutes`、`isNominatable` 加入 DB、row model、request/response DTO、repository SQL、Swagger 與相容 mapping。
+1. 將 `BUFFER_MINUTES` 實際納入新增／調整預約時段的衝突檢查；目前僅完成設定保存，尚無後台預約寫入端點可執行自動排程。
 2. 決定 reservation 的正式功能邊界，補上後台 CRUD、狀態流轉與公開資料遮罩。
 3. 若活動頁要恢復，需決定首頁輪播最終關聯 `EVENTS` 還是 `GALLERY_ALBUMS`，避免同時存在兩套主資料。
 4. 補留言 moderation、排行榜管理與 staff 建立端點。
@@ -582,9 +592,9 @@ resize 使用 `ResizeMode.Max`，會維持比例，不會強制裁成指定長�
 - [ ] 已新增 service / repository / endpoint 測試。
 - [ ] Release build、publish 與部署 health check 通過。
 
-### 14.3 新增店員服務欄位的建議 contract
+### 14.3 店員服務欄位 contract
 
-下一階段若要支援新版前端，建議先以以下語意討論，不要直接沿用顯示字串：
+新版前端與 API 使用以下結構化欄位；`priceText` 只保留舊資料相容：
 
 ```json
 {
@@ -595,17 +605,19 @@ resize 使用 `ResizeMode.Max`，會維持比例，不會強制裁成指定長�
   "price": 1000,
   "durationMinutes": 60,
   "isNominatable": true,
+  "additionalPersonPrice": 200,
   "priceText": "選填的舊版顯示相容欄位",
   "sortOrder": 0,
   "isEnabled": true
 }
 ```
 
-建議 DB 型別：
+DB 型別：
 
-- `PRICE INT NULL`：單位需先確認是台幣、遊戲幣或點數。
+- `PRICE INT NULL`：單位 Gil。
 - `DURATION_MINUTES INT NULL`：正整數分鐘。
 - `IS_NOMINATABLE BOOLEAN NOT NULL DEFAULT TRUE`。
+- `ADDITIONAL_PERSON_PRICE INT NULL`：每位額外人數的 Gil 價格。
 - 暫時保留 `PRICE_TEXT` 供舊資料與特殊價格文案使用，待前端全面轉換後再決定是否淘汰。
 
 ## 15. 維護本文件

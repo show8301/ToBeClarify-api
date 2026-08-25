@@ -65,6 +65,7 @@ public sealed class StaffRow
     public string CurrentStatus { get; set; } = string.Empty;
     public string? StatusText { get; set; }
     public string? TodayShift { get; set; }
+    public bool IsNominatable { get; set; }
 }
 
 public sealed class StaffServiceRow
@@ -75,6 +76,10 @@ public sealed class StaffServiceRow
     public string ServiceName { get; set; } = string.Empty;
     public string ServiceDescription { get; set; } = string.Empty;
     public string? PriceText { get; set; }
+    public int? Price { get; set; }
+    public int? DurationMinutes { get; set; }
+    public bool IsNominatable { get; set; }
+    public int? AdditionalPersonPrice { get; set; }
     public int SortOrder { get; set; }
 }
 

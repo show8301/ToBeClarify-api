@@ -17,6 +17,11 @@ publish/
 !docs/
 !docs/**/*.md
 
+# Keep versioned database migrations as the schema source of truth.
+!db/
+!db/migrations/
+!db/migrations/**/*.sql
+
 # Runtime media files are deployed separately and must not be committed
 /media/
 

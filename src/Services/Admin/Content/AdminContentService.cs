@@ -132,7 +132,8 @@ public sealed class AdminContentService : IAdminContentService
         var rows = await _repository.GetStaffMembersAsync(cancellationToken);
         return rows.Select(row => new AdminStaffMemberListItemDto(
             row.Id, row.DisplayName, row.AvatarMediaId, _mediaUrls.BuildUrl(row.AvatarMediaId, "card"),
-            row.RoleTitle, row.IsWorkingToday, row.SortOrder, row.IsActive)).ToArray();
+            row.RoleTitle, row.IsWorkingToday, row.BufferMinutes, row.IsNominatable,
+            row.SortOrder, row.IsActive)).ToArray();
     }
 
     public async Task<AdminStaffMemberDto> GetStaffMemberAsync(string id, ClaimsPrincipal actor, CancellationToken cancellationToken)
@@ -305,7 +306,8 @@ public sealed class AdminContentService : IAdminContentService
         await Task.WhenAll(servicesTask, galleryTask);
         return new AdminStaffMemberDto(row.Id, row.DisplayName, row.Nickname, row.AvatarMediaId,
             _mediaUrls.BuildUrl(row.AvatarMediaId, "card"), row.RoleTitle, row.ShortBio,
-            row.ProfileBio, row.IsWorkingToday, row.CurrentStatus, row.StatusText, row.TodayShift, row.SortOrder, row.IsActive,
+            row.ProfileBio, row.IsWorkingToday, row.CurrentStatus, row.StatusText, row.TodayShift,
+            row.BufferMinutes, row.IsNominatable, row.SortOrder, row.IsActive,
             (await servicesTask).Select(Map).ToArray(), (await galleryTask).Select(item => new AdminStaffGalleryItemDto(
                 item.Id, item.StaffId, item.MediaId, _mediaUrls.BuildUrl(item.MediaId, "full"),
                 item.SortOrder, item.IsPublished)).ToArray());
@@ -317,8 +319,14 @@ public sealed class AdminContentService : IAdminContentService
             throw new BusinessException("Display name is required.", "STAFF_DISPLAY_NAME_REQUIRED");
         if (string.IsNullOrWhiteSpace(request.ShortBio))
             throw new BusinessException("Card bio is required.", "STAFF_SHORT_BIO_REQUIRED");
+        if (request.BufferMinutes is < 0 or > 1440)
+            throw new BusinessException("Buffer minutes must be between 0 and 1440.", "STAFF_BUFFER_MINUTES_INVALID");
         if ((request.Services ?? []).Any(service => service.ServiceType is not ("common" or "special")))
             throw new BusinessException("Service type must be common or special.", "INVALID_SERVICE_TYPE");
+        if ((request.Services ?? []).Any(service => service.Price is < 0
+                || service.DurationMinutes is < 0 or > 1440
+                || service.AdditionalPersonPrice is < 0))
+            throw new BusinessException("Service price, duration and additional-person price must be non-negative, and duration cannot exceed 1440 minutes.", "STAFF_SERVICE_NUMERIC_VALUE_INVALID");
         if ((request.Gallery ?? []).Any(item => string.IsNullOrWhiteSpace(item.MediaId)))
             throw new BusinessException("Every staff gallery item must reference a media asset.", "STAFF_GALLERY_MEDIA_REQUIRED");
     }
@@ -419,7 +427,9 @@ public sealed class AdminContentService : IAdminContentService
         => new(row.Id, row.MenuItemId, row.ItemName, row.ItemRole, row.Quantity, row.SortOrder);
 
     private static AdminStaffServiceDto Map(AdminStaffServiceRow row)
-        => new(row.Id, row.StaffId, row.ServiceType, row.ServiceName, row.ServiceDescription, row.PriceText, row.SortOrder, row.IsEnabled);
+        => new(row.Id, row.StaffId, row.ServiceType, row.ServiceName, row.ServiceDescription, row.PriceText,
+            row.Price, row.DurationMinutes, row.IsNominatable, row.AdditionalPersonPrice,
+            row.SortOrder, row.IsEnabled);
 
     private static JsonElement ParseJson(string value)
     {

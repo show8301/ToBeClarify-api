@@ -151,6 +151,10 @@ public sealed record AdminStaffServiceDto(
     string ServiceName,
     string ServiceDescription,
     string? PriceText,
+    int? Price,
+    int? DurationMinutes,
+    bool IsNominatable,
+    int? AdditionalPersonPrice,
     int SortOrder,
     bool IsEnabled);
 
@@ -175,6 +179,8 @@ public sealed record AdminStaffMemberDto(
     string CurrentStatus,
     string? StatusText,
     string? TodayShift,
+    int? BufferMinutes,
+    bool IsNominatable,
     int SortOrder,
     bool IsActive,
     IReadOnlyList<AdminStaffServiceDto> Services,
@@ -187,6 +193,8 @@ public sealed record AdminStaffMemberListItemDto(
     string? AvatarUrl,
     string? RoleTitle,
     bool IsWorkingToday,
+    int? BufferMinutes,
+    bool IsNominatable,
     int SortOrder,
     bool IsActive);
 
@@ -213,6 +221,11 @@ public sealed class SaveStaffMemberRequest
     public string? ProfileBio { get; init; }
 
     public bool IsWorkingToday { get; init; } = true;
+
+    [Range(0, 1440)]
+    public int? BufferMinutes { get; init; }
+
+    public bool IsNominatable { get; init; }
 
     [Range(0, int.MaxValue)]
     public int SortOrder { get; set; }
@@ -253,6 +266,17 @@ public sealed class SaveStaffServiceRequest
 
     [StringLength(80)]
     public string? PriceText { get; init; }
+
+    [Range(0, int.MaxValue)]
+    public int? Price { get; init; }
+
+    [Range(0, 1440)]
+    public int? DurationMinutes { get; init; }
+
+    public bool IsNominatable { get; init; } = true;
+
+    [Range(0, int.MaxValue)]
+    public int? AdditionalPersonPrice { get; init; }
 
     [Range(0, int.MaxValue)]
     public int SortOrder { get; init; }

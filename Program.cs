@@ -38,6 +38,9 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Optional developer-only secrets. This file is ignored by Git and can be edited manually.
 builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true);
+// Re-apply environment variables so CI/CD and one-off local overrides take
+// precedence over the optional local settings file.
+builder.Configuration.AddEnvironmentVariables();
 
 const string apiPrefix = "api";
 const string webCorsPolicy = "WebClient";

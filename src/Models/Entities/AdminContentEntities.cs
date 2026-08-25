@@ -65,6 +65,8 @@ public sealed class AdminStaffMemberRow
     public string CurrentStatus { get; set; } = string.Empty;
     public string? StatusText { get; set; }
     public string? TodayShift { get; set; }
+    public int? BufferMinutes { get; set; }
+    public bool IsNominatable { get; set; }
     public int SortOrder { get; set; }
     public bool IsActive { get; set; }
 }
@@ -76,6 +78,8 @@ public sealed class AdminStaffMemberListRow
     public string? AvatarMediaId { get; set; }
     public string? RoleTitle { get; set; }
     public bool IsWorkingToday { get; set; }
+    public int? BufferMinutes { get; set; }
+    public bool IsNominatable { get; set; }
     public int SortOrder { get; set; }
     public bool IsActive { get; set; }
 }
@@ -113,6 +117,10 @@ public sealed class AdminStaffServiceRow
     public string ServiceName { get; set; } = string.Empty;
     public string ServiceDescription { get; set; } = string.Empty;
     public string? PriceText { get; set; }
+    public int? Price { get; set; }
+    public int? DurationMinutes { get; set; }
+    public bool IsNominatable { get; set; }
+    public int? AdditionalPersonPrice { get; set; }
     public int SortOrder { get; set; }
     public bool IsEnabled { get; set; }
 }

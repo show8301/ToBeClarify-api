@@ -39,6 +39,7 @@ public sealed class StaffService : IStaffService
         return new StaffDetailDto(row.Id, row.DisplayName, row.Nickname,
             _mediaUrls.BuildUrl(row.AvatarMediaId, "card"), row.RoleTitle,
             row.ShortBio, row.ProfileBio, row.IsWorkingToday, row.CurrentStatus, row.StatusText, row.TodayShift,
+            row.IsNominatable,
             gallery.Select(item => new StaffGalleryItemDto(item.Id,
                 _mediaUrls.BuildUrl(item.MediaId, "full") ?? string.Empty)).ToArray(),
             services.Where(service => service.ServiceType == "common").Select(ClientContentMappings.MapStaffService).ToArray(),

@@ -16,6 +16,7 @@ public sealed class StaffRepository : DapperRepositoryBase, IStaffRepository
             SELECT M.`ID` AS Id, M.`DISPLAY_NAME` AS DisplayName, M.`NICKNAME` AS Nickname,
                    M.`AVATAR_MEDIA_ID` AS AvatarMediaId,
                    M.`ROLE_TITLE` AS RoleTitle, M.`SHORT_BIO` AS ShortBio, M.`PROFILE_BIO` AS ProfileBio,
+                   M.`IS_NOMINATABLE` AS IsNominatable,
                    COALESCE(S.`IS_WORKING`, TRUE) AS IsWorkingToday,
                    CASE WHEN COALESCE(S.`IS_WORKING`, TRUE) = FALSE THEN 'off'
                         WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= NOW() AND R.`ENDS_AT` > NOW()) THEN 'busy'
@@ -39,6 +40,7 @@ public sealed class StaffRepository : DapperRepositoryBase, IStaffRepository
             SELECT M.`ID` AS Id, M.`DISPLAY_NAME` AS DisplayName, M.`NICKNAME` AS Nickname,
                    M.`AVATAR_MEDIA_ID` AS AvatarMediaId,
                    M.`ROLE_TITLE` AS RoleTitle, M.`SHORT_BIO` AS ShortBio, M.`PROFILE_BIO` AS ProfileBio,
+                   M.`IS_NOMINATABLE` AS IsNominatable,
                    COALESCE(S.`IS_WORKING`, TRUE) AS IsWorkingToday,
                    CASE WHEN COALESCE(S.`IS_WORKING`, TRUE) = FALSE THEN 'off'
                         WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= NOW() AND R.`ENDS_AT` > NOW()) THEN 'busy'
@@ -59,7 +61,9 @@ public sealed class StaffRepository : DapperRepositoryBase, IStaffRepository
         const string sql = """
             SELECT `ID` AS Id, `STAFF_ID` AS StaffId, `SERVICE_TYPE` AS ServiceType,
                    `SERVICE_NAME` AS ServiceName, `SERVICE_DESCRIPTION` AS ServiceDescription,
-                   `PRICE_TEXT` AS PriceText, `SORT_ORDER` AS SortOrder
+                   `PRICE_TEXT` AS PriceText, `PRICE` AS Price, `DURATION_MINUTES` AS DurationMinutes,
+                   `IS_NOMINATABLE` AS IsNominatable,
+                   `ADDITIONAL_PERSON_PRICE` AS AdditionalPersonPrice, `SORT_ORDER` AS SortOrder
             FROM `STAFF_SERVICES`
             WHERE `STAFF_ID` = @StaffId AND `IS_ENABLED` = TRUE
             ORDER BY `SORT_ORDER`, `SERVICE_NAME`;
@@ -73,7 +77,9 @@ public sealed class StaffRepository : DapperRepositoryBase, IStaffRepository
         const string sql = """
             SELECT `ID` AS Id, `STAFF_ID` AS StaffId, `SERVICE_TYPE` AS ServiceType,
                    `SERVICE_NAME` AS ServiceName, `SERVICE_DESCRIPTION` AS ServiceDescription,
-                   `PRICE_TEXT` AS PriceText, `SORT_ORDER` AS SortOrder
+                   `PRICE_TEXT` AS PriceText, `PRICE` AS Price, `DURATION_MINUTES` AS DurationMinutes,
+                   `IS_NOMINATABLE` AS IsNominatable,
+                   `ADDITIONAL_PERSON_PRICE` AS AdditionalPersonPrice, `SORT_ORDER` AS SortOrder
             FROM `STAFF_SERVICES`
             WHERE `STAFF_ID` IN @StaffIds AND `IS_ENABLED` = TRUE
             ORDER BY `STAFF_ID`, `SERVICE_TYPE`, `SORT_ORDER`, `SERVICE_NAME`;

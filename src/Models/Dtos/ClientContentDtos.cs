@@ -43,6 +43,7 @@ public sealed record StaffListItemDto(
     string CurrentStatus,
     string? StatusText,
     string? TodayShift,
+    bool IsNominatable,
     IReadOnlyList<StaffServiceDto> CommonServices,
     IReadOnlyList<StaffServiceDto> SpecialServices);
 
@@ -51,7 +52,11 @@ public sealed record StaffServiceDto(
     string ServiceType,
     string ServiceName,
     string ServiceDescription,
-    string? PriceText);
+    string? PriceText,
+    int? Price,
+    int? DurationMinutes,
+    bool IsNominatable,
+    int? AdditionalPersonPrice);
 
 public sealed record StaffGalleryItemDto(string Id, string ImageUrl);
 
@@ -67,6 +72,7 @@ public sealed record StaffDetailDto(
     string CurrentStatus,
     string? StatusText,
     string? TodayShift,
+    bool IsNominatable,
     IReadOnlyList<StaffGalleryItemDto> Gallery,
     IReadOnlyList<StaffServiceDto> CommonServices,
     IReadOnlyList<StaffServiceDto> SpecialServices);
