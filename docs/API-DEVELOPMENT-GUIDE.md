@@ -389,15 +389,15 @@ Cookie 特性：
 - `serviceType`：`common` 或 `special`
 - `serviceName`
 - `serviceDescription`
-- `priceText`
+- `priceText`：選填促銷／特殊價格文案；有值時公開前端優先顯示此文字，否則顯示 `price`
 - `price`：選填、非負整數，單位 Gil
 - `durationMinutes`：選填，0–1440 分鐘
-- `isNominatable`：布林，預設 `true`
+- `isNominatable`：舊版相容欄位；目前指名資格統一由店員主資料的 `isNominatable` 控制，管理畫面不再提供服務層級開關
 - `additionalPersonPrice`：選填、非負整數，單位 Gil／每位額外人數
 - `sortOrder`
 - `isEnabled`
 
-`priceText` 暫時保留供舊版顯示字串相容；新版應優先使用結構化數值欄位。
+`price` 仍是計算用的結構化數值；`priceText` 是非必填的顯示覆蓋值，適合「期間限定優惠」等無法只用數字表達的促銷文案。
 
 ### 8.4 媒體管理
 
@@ -594,7 +594,7 @@ resize 使用 `ResizeMode.Max`，會維持比例，不會強制裁成指定長�
 
 ### 14.3 店員服務欄位 contract
 
-新版前端與 API 使用以下結構化欄位；`priceText` 只保留舊資料相容：
+新版前端與 API 使用以下結構化欄位；`priceText` 可選擇性覆蓋公開頁面的數值價格顯示：
 
 ```json
 {
@@ -606,7 +606,7 @@ resize 使用 `ResizeMode.Max`，會維持比例，不會強制裁成指定長�
   "durationMinutes": 60,
   "isNominatable": true,
   "additionalPersonPrice": 200,
-  "priceText": "選填的舊版顯示相容欄位",
+  "priceText": "期間限定優惠",
   "sortOrder": 0,
   "isEnabled": true
 }
@@ -616,9 +616,9 @@ DB 型別：
 
 - `PRICE INT NULL`：單位 Gil。
 - `DURATION_MINUTES INT NULL`：正整數分鐘。
-- `IS_NOMINATABLE BOOLEAN NOT NULL DEFAULT TRUE`。
+- `IS_NOMINATABLE BOOLEAN NOT NULL DEFAULT TRUE`：暫留作舊版 contract 相容；目前不參與公開指名資格或排程判斷。
 - `ADDITIONAL_PERSON_PRICE INT NULL`：每位額外人數的 Gil 價格。
-- 暫時保留 `PRICE_TEXT` 供舊資料與特殊價格文案使用，待前端全面轉換後再決定是否淘汰。
+- `PRICE_TEXT VARCHAR(80) NULL`：促銷／特殊價格顯示文案；有值時顯示優先於 `PRICE`。
 
 ## 15. 維護本文件
 
