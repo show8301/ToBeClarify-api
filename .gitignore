@@ -12,6 +12,11 @@ publish/
 *.[mM][dD]
 *.[sS][qQ][lL]
 
+# Keep collaboration-facing API documentation in the repository.
+!README.md
+!docs/
+!docs/**/*.md
+
 # Runtime media files are deployed separately and must not be committed
 /media/
 
