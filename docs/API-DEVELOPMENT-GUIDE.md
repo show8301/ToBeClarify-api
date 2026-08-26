@@ -143,6 +143,7 @@ ToBeClarify-api/
       "http://127.0.0.1:4173",
       "http://localhost:5173",
       "https://lucid.zeabur.app",
+      "https://www-dev.marchgroup.net",
       "https://www.marchgroup.net"
     ]
   },
