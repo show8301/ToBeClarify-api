@@ -39,6 +39,11 @@ public sealed class AdminContentService : IAdminContentService
         var key = Required(settingKey, "SETTING_KEY_REQUIRED");
         if (request.SettingValue.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
             throw new BusinessException("Setting value is required.", "SETTING_VALUE_REQUIRED");
+        if (string.Equals(key, "siteVisibility", StringComparison.OrdinalIgnoreCase))
+        {
+            EnsureDeveloper(actor);
+            ValidateSiteVisibility(request.SettingValue);
+        }
         var current = await _repository.GetSiteSettingAsync(key, cancellationToken);
         await _repository.UpsertSiteSettingAsync(current?.Id ?? NewId(), key, request, ActorId(actor), _clock.LocalDateTime, cancellationToken);
         return MapSiteSetting((await _repository.GetSiteSettingAsync(key, cancellationToken))!);
@@ -339,6 +344,27 @@ public sealed class AdminContentService : IAdminContentService
 
     private static bool CanManageAll(ClaimsPrincipal actor)
         => actor.FindFirstValue(AdminAuthConstants.RoleClaimType) is AdminRole.Developer or AdminRole.Manager;
+
+    private static void EnsureDeveloper(ClaimsPrincipal actor)
+    {
+        if (actor.FindFirstValue(AdminAuthConstants.RoleClaimType) != AdminRole.Developer)
+            throw new ForbiddenException("This action requires developer permission.", "ADMIN_DEVELOPER_REQUIRED");
+    }
+
+    private static void ValidateSiteVisibility(JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.Object)
+            throw new BusinessException("Site visibility must be a JSON object.", "SITE_VISIBILITY_INVALID");
+        var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "home", "staff", "gallery", "menu", "guestbook", "liveUpdate", "staffRanking", "monetaryRanking", "menuHidden"
+        };
+        foreach (var property in value.EnumerateObject())
+        {
+            if (!keys.Contains(property.Name) || property.Value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                throw new BusinessException("Site visibility values must be boolean page flags.", "SITE_VISIBILITY_INVALID");
+        }
+    }
 
     private static void EnsureManager(ClaimsPrincipal actor)
     {

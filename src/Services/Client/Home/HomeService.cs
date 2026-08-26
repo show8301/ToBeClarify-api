@@ -4,6 +4,7 @@ using ToBeClarify.Api.Repositories.Client.Home;
 using ToBeClarify.Api.Services.Client.Shared;
 using ToBeClarify.Api.Services.Client.Site;
 using ToBeClarify.Api.Services.Media;
+using System.Text.Json;
 
 namespace ToBeClarify.Api.Services.Client.Home;
 
@@ -35,7 +36,7 @@ public sealed class HomeService : IHomeService
     {
         var rows = await _repository.GetHomeSlidesAsync(cancellationToken);
         return rows.Select(row => new HomeSlideDto(row.Id,
-            _mediaUrls.BuildUrl(row.MediaId, "hero"), row.DisplaySeconds)).ToArray();
+            _mediaUrls.BuildUrl(row.MediaId, "hero"), Math.Clamp(row.DisplaySeconds, 1, 60))).ToArray();
     }
 
     public async Task<HomeDto> GetHomeAsync(CancellationToken cancellationToken)
@@ -47,6 +48,32 @@ public sealed class HomeService : IHomeService
         var rulesTask = _siteService.GetShopRulesAsync(cancellationToken);
         await Task.WhenAll(settingsTask, navigationTask, carouselsTask, slidesTask, rulesTask);
         return new HomeDto(await settingsTask, await navigationTask, await carouselsTask, await slidesTask,
-            await rulesTask);
+            await rulesTask, ResolvePageVisibility(await settingsTask));
     }
+
+    private static HomePageVisibilityDto ResolvePageVisibility(IReadOnlyList<SiteSettingDto> settings)
+    {
+        var setting = settings.FirstOrDefault(item => string.Equals(item.SettingKey, "siteVisibility", StringComparison.OrdinalIgnoreCase));
+        if (setting is null || setting.SettingValue.ValueKind != JsonValueKind.Object)
+            return new HomePageVisibilityDto();
+
+        var value = setting.SettingValue;
+        var legacyMenuHidden = ReadBoolean(value, "menuHidden", false);
+        return new HomePageVisibilityDto(
+            ReadBoolean(value, "home", true),
+            ReadBoolean(value, "staff", true),
+            ReadBoolean(value, "gallery", true),
+            value.TryGetProperty("menu", out _) ? ReadBoolean(value, "menu", true) : !legacyMenuHidden,
+            ReadBoolean(value, "guestbook", true),
+            ReadBoolean(value, "liveUpdate", true),
+            ReadBoolean(value, "staffRanking", true),
+            ReadBoolean(value, "monetaryRanking", true));
+    }
+
+    private static bool ReadBoolean(JsonElement value, string propertyName, bool fallback)
+        => value.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.True
+            ? true
+            : value.TryGetProperty(propertyName, out property) && property.ValueKind == JsonValueKind.False
+                ? false
+                : fallback;
 }

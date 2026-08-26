@@ -140,7 +140,10 @@ ToBeClarify-api/
   "Cors": {
     "AllowedOrigins": [
       "http://localhost:4173",
-      "http://localhost:5173"
+      "http://127.0.0.1:4173",
+      "http://localhost:5173",
+      "https://lucid.zeabur.app",
+      "https://www.marchgroup.net"
     ]
   },
   "Media": {
@@ -289,7 +292,7 @@ Cookie 特性：
 
 | Method | Path | 參數 / 功能 | 回傳重點 |
 | --- | --- | --- | --- |
-| GET | `/api/client/home` | 首頁組合資料 | site settings、navbar、輪播、slides、店內規則 |
+| GET | `/api/client/home` | 首頁組合資料 | site settings、navbar、輪播、slides、店內規則、`pageVisibility` |
 | GET | `/api/client/home-event-carousels` | 首頁活動輪播 | 啟用輪播、相簿存在狀態、圖片 URL |
 | GET | `/api/client/site-settings` | 所有啟用設定 | `settingKey`、任意 JSON `settingValue` |
 | GET | `/api/client/site-settings/{settingKey}` | 單一設定 | 不存在回 404 |
@@ -345,13 +348,13 @@ Cookie 特性：
 | 資源 | 端點 | 權限 | 現況 |
 | --- | --- | --- | --- |
 | Site settings | `GET /api/admin/site-settings` | 管理者 | 取得全部含未啟用資料 |
-| Site settings | `PUT /api/admin/site-settings/{settingKey}` | 管理者 | 依 key upsert JSON 設定 |
+| Site settings | `PUT /api/admin/site-settings/{settingKey}` | 管理者；`siteVisibility` 僅 developer | 依 key upsert JSON 設定；`siteVisibility` 使用 `home`、`staff`、`gallery`、`menu`、`guestbook`、`liveUpdate`、`staffRanking`、`monetaryRanking` 布林頁面旗標 |
 | Navigation | `GET/POST /api/admin/navigation-items` | 管理者 | 列表 / 新增 |
 | Navigation | `PUT/DELETE /api/admin/navigation-items/{id}` | 管理者 | 更新 / 刪除；刪父項會一併刪子項 |
 | Home carousel | `GET/POST /api/admin/home-event-carousels` | 管理者 | 輪播必須參照存在的 gallery album |
 | Home carousel | `PUT/DELETE /api/admin/home-event-carousels/{id}` | 管理者 | 更新 / 刪除 |
-| Home slides | `GET/POST /api/admin/home-slides` | 管理者 | slide 必須有 `mediaId` |
-| Home slides | `PUT/DELETE /api/admin/home-slides/{id}` | 管理者 | 更換或刪除後嘗試清理舊媒體 |
+| Home slides | `GET/POST /api/admin/home-slides` | 管理者 | slide 必須有 `mediaId`；`displaySeconds` 為 1–60 秒，預設 10 |
+| Home slides | `PUT/DELETE /api/admin/home-slides/{id}` | 管理者 | 更換或刪除後嘗試清理舊媒體；更新 `displaySeconds` 會同步公開首頁輪播 |
 | Shop rules | `GET/POST /api/admin/shop-rules` | 管理者 | 列表 / 新增 |
 | Shop rules | `PUT/DELETE /api/admin/shop-rules/{id}` | 管理者 | 更新 / 刪除 |
 | Gallery | `GET/POST /api/admin/gallery-albums` | 管理者 | 相簿及 items 一次儲存 |

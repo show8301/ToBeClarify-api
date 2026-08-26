@@ -28,6 +28,16 @@ public sealed record HomeSlideDto(
     string? ImageUrl,
     int DisplaySeconds);
 
+public sealed record HomePageVisibilityDto(
+    bool Home = true,
+    bool Staff = true,
+    bool Gallery = true,
+    bool Menu = true,
+    bool Guestbook = true,
+    bool LiveUpdate = true,
+    bool StaffRanking = true,
+    bool MonetaryRanking = true);
+
 public sealed record ShopRuleDto(string Id, string RuleText, string? RuleNote);
 
 public sealed record PricingRuleDto(string Id, string Title, string Description, string? PriceText);
@@ -210,4 +220,5 @@ public sealed record HomeDto(
     IReadOnlyList<NavigationItemDto> Navigation,
     IReadOnlyList<HomeEventCarouselDto> Carousels,
     IReadOnlyList<HomeSlideDto> Slides,
-    IReadOnlyList<ShopRuleDto> ShopRules);
+    IReadOnlyList<ShopRuleDto> ShopRules,
+    HomePageVisibilityDto PageVisibility);

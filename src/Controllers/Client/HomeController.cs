@@ -13,6 +13,7 @@ public sealed class HomeController : ControllerBase
     public HomeController(IHomeService service) => _service = service;
 
     [HttpGet]
+    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
     [ProducesResponseType(typeof(ApiResponse<HomeDto>), StatusCodes.Status200OK)]
     public async Task<ActionResult<ApiResponse<HomeDto>>> Get(CancellationToken cancellationToken)
         => Ok(ApiResponse<HomeDto>.Ok(await _service.GetHomeAsync(cancellationToken)));
