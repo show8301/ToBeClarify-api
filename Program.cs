@@ -45,8 +45,19 @@ builder.Configuration.AddEnvironmentVariables();
 const string apiPrefix = "api";
 const string webCorsPolicy = "WebClient";
 
-var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
+var configuredOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
     ?? Array.Empty<string>();
+var allowedOrigins = configuredOrigins
+    .Concat(new[]
+    {
+        "http://localhost:4173",
+        "http://127.0.0.1:4173",
+        "http://localhost:5173",
+        "https://lucid.zeabur.app",
+        "https://www.marchgroup.net",
+    })
+    .Distinct(StringComparer.OrdinalIgnoreCase)
+    .ToArray();
 
 builder.Services.Configure<JwtAuthOptions>(builder.Configuration.GetSection(JwtAuthOptions.SectionName));
 builder.Services.Configure<AdminAuthOptions>(builder.Configuration.GetSection(AdminAuthOptions.SectionName));
