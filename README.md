@@ -21,4 +21,4 @@ dotnet restore .\ToBeClarify.Api.csproj
 dotnet run --project .\ToBeClarify.Api.csproj
 ```
 
-Development 環境可由 `/swagger` 開啟 Swagger UI。正式機密、連線字串、JWT signing key 與註冊驗證碼不得提交到 repository。
+Development 環境可由 `/swagger` 開啟 Swagger UI。正式機密、連線字串、JWT signing key 與一次性驗證碼不得提交到 repository。

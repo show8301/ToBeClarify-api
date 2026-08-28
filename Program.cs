@@ -62,7 +62,7 @@ var allowedOrigins = configuredOrigins
 
 builder.Services.Configure<JwtAuthOptions>(builder.Configuration.GetSection(JwtAuthOptions.SectionName));
 builder.Services.Configure<AdminAuthOptions>(builder.Configuration.GetSection(AdminAuthOptions.SectionName));
-builder.Services.Configure<RegisterKeyOptions>(builder.Configuration.GetSection(RegisterKeyOptions.SectionName));
+builder.Services.Configure<OneTimeTokenOptions>(builder.Configuration.GetSection(OneTimeTokenOptions.SectionName));
 builder.Services.Configure<ApiLoggingOptions>(builder.Configuration.GetSection(ApiLoggingOptions.SectionName));
 builder.Services.Configure<MediaOptions>(builder.Configuration.GetSection(MediaOptions.SectionName));
 builder.Services.AddHttpContextAccessor();
@@ -72,7 +72,7 @@ builder.Services.AddSingleton<PasswordHashService>();
 builder.Services.AddScoped<IApiLogService, ApiLogService>();
 builder.Services.AddScoped<IAdminAuthRepository, AdminAuthRepository>();
 builder.Services.AddScoped<IAdminAuthService, AdminAuthService>();
-builder.Services.AddSingleton<IRegisterKeyService, RegisterKeyService>();
+builder.Services.AddSingleton<IOneTimeTokenService, OneTimeTokenService>();
 builder.Services.AddScoped<ToBeClarify.Api.Repositories.Admin.Content.IAdminContentRepository,
     ToBeClarify.Api.Repositories.Admin.Content.AdminContentRepository>();
 builder.Services.AddScoped<ToBeClarify.Api.Services.Admin.Content.IAdminContentService,
@@ -128,6 +128,15 @@ builder.Services.AddRateLimiter(options =>
             AutoReplenishment = true
         }));
     options.AddPolicy("admin-register", httpContext => RateLimitPartition.GetFixedWindowLimiter(
+        httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 5,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+            AutoReplenishment = true
+        }));
+    options.AddPolicy("admin-password-reset", httpContext => RateLimitPartition.GetFixedWindowLimiter(
         httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions
         {
@@ -234,6 +243,34 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                 }
 
                 return Task.CompletedTask;
+            },
+            OnTokenValidated = async context =>
+            {
+                var principal = context.Principal;
+                var userId = principal?.FindFirstValue(AdminAuthConstants.UserIdClaimType)
+                    ?? principal?.FindFirstValue(ClaimTypes.NameIdentifier)
+                    ?? principal?.FindFirstValue("sub");
+                var tokenVersionValue = principal?.FindFirstValue(AdminAuthConstants.TokenVersionClaimType);
+                var role = principal?.FindFirstValue(AdminAuthConstants.RoleClaimType);
+
+                if (string.IsNullOrWhiteSpace(userId) ||
+                    !int.TryParse(tokenVersionValue, out var tokenVersion) ||
+                    !AdminRole.IsValid(role ?? string.Empty))
+                {
+                    context.Fail("JWT identity claims are invalid.");
+                    return;
+                }
+
+                var repository = context.HttpContext.RequestServices.GetRequiredService<IAdminAuthRepository>();
+                var state = await repository.GetTokenStateByIdAsync(
+                    userId,
+                    context.HttpContext.RequestAborted);
+
+                if (state is null || !state.IsActive || state.TokenVersion != tokenVersion ||
+                    !string.Equals(state.RoleLevel, role, StringComparison.Ordinal))
+                {
+                    context.Fail("JWT has been revoked or the account is unavailable.");
+                }
             }
         };
     });

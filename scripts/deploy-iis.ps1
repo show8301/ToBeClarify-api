@@ -25,7 +25,9 @@ function Test-PreservedItem {
         'media',
         'Logs',
         'registerKey.txt',
-        'registerKey.txt.lock'
+        'registerKey.txt.lock',
+        'oneTimeToken.txt',
+        'oneTimeToken.txt.lock'
     )
 }
 

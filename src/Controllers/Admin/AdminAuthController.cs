@@ -61,6 +61,29 @@ public sealed class AdminAuthController : ControllerBase
         return Ok(ApiResponse<AdminRegisterKeyDto>.Ok(key));
     }
 
+    [Authorize(Policy = "AdminManager")]
+    [HttpPost("password-reset-key")]
+    [ProducesResponseType(typeof(ApiResponse<AdminPasswordResetKeyDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ApiResponse<AdminPasswordResetKeyDto>>> GetPasswordResetKey(
+        [FromBody] AdminPasswordResetKeyRequest request,
+        CancellationToken cancellationToken)
+    {
+        var key = await _authService.IssuePasswordResetKeyAsync(request, User, cancellationToken);
+        return Ok(ApiResponse<AdminPasswordResetKeyDto>.Ok(key));
+    }
+
+    [AllowAnonymous]
+    [HttpPost("forgot-password/reset")]
+    [EnableRateLimiting("admin-password-reset")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public async Task<IActionResult> ResetPassword(
+        [FromBody] AdminPasswordResetRequest request,
+        CancellationToken cancellationToken)
+    {
+        await _authService.ResetPasswordAsync(request, cancellationToken);
+        return NoContent();
+    }
+
     [Authorize(Policy = AdminAuthConstants.AdminPolicy)]
     [HttpGet("me")]
     [ProducesResponseType(typeof(ApiResponse<AdminIdentityDto>), StatusCodes.Status200OK)]

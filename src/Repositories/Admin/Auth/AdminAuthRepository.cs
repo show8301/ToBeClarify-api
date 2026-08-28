@@ -39,6 +39,18 @@ public sealed class AdminAuthRepository : DapperRepositoryBase, IAdminAuthReposi
         return await QuerySingleOrDefaultAsync<AdminUserRow>(sql, new { Id = id }, cancellationToken);
     }
 
+    public async Task<AdminTokenStateRow?> GetTokenStateByIdAsync(string id, CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT `ID` AS Id, `ROLE_LEVEL` AS RoleLevel,
+                   `IS_ACTIVE` AS IsActive, `TOKEN_VERSION` AS TokenVersion
+            FROM `ADMIN_USERS`
+            WHERE `ID` = @Id
+            LIMIT 1;
+            """;
+        return await QuerySingleOrDefaultAsync<AdminTokenStateRow>(sql, new { Id = id }, cancellationToken);
+    }
+
     public async Task<bool> StaffMemberExistsAsync(string id, CancellationToken cancellationToken)
     {
         const string sql = "SELECT EXISTS(SELECT 1 FROM `STAFF_MEMBERS` WHERE `ID` = @Id);";
@@ -98,6 +110,31 @@ public sealed class AdminAuthRepository : DapperRepositoryBase, IAdminAuthReposi
         }, transaction, cancellationToken: cancellationToken));
 
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task<bool> ResetPasswordAsync(
+        string id,
+        string passwordHash,
+        string updatedBy,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            UPDATE `ADMIN_USERS`
+            SET `PASSWORD_HASH` = @PasswordHash,
+                `TOKEN_VERSION` = `TOKEN_VERSION` + 1,
+                `UPDATED_BY` = @UpdatedBy,
+                `UPDATED_AT` = CURRENT_TIMESTAMP
+            WHERE `ID` = @Id AND `IS_ACTIVE` = TRUE;
+            """;
+
+        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        var affectedRows = await connection.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            Id = id,
+            PasswordHash = passwordHash,
+            UpdatedBy = updatedBy
+        }, cancellationToken: cancellationToken));
+        return affectedRows == 1;
     }
 
     public async Task UpdateLastLoginAsync(string id, CancellationToken cancellationToken)

@@ -41,7 +41,27 @@ public sealed class StaffRegisterRequest
     public string VerificationCode { get; init; } = string.Empty;
 }
 
+public sealed class AdminPasswordResetKeyRequest
+{
+    [Required, StringLength(80, MinimumLength = 1)]
+    public string LoginName { get; init; } = string.Empty;
+}
+
+public sealed class AdminPasswordResetRequest
+{
+    [Required, StringLength(80, MinimumLength = 1)]
+    public string LoginName { get; init; } = string.Empty;
+
+    [Required, StringLength(200, MinimumLength = 8)]
+    public string NewPassword { get; init; } = string.Empty;
+
+    [Required, StringLength(100, MinimumLength = 1)]
+    public string VerificationCode { get; init; } = string.Empty;
+}
+
 public sealed record AdminRegisterKeyDto(string Key, DateTimeOffset ExpiresAt);
+
+public sealed record AdminPasswordResetKeyDto(string Key, DateTimeOffset ExpiresAt);
 
 public sealed record AdminIdentityDto(
     string Id,

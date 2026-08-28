@@ -23,6 +23,15 @@ public interface IAdminAuthService
         StaffRegisterRequest request,
         CancellationToken cancellationToken);
 
+    Task<AdminPasswordResetKeyDto> IssuePasswordResetKeyAsync(
+        AdminPasswordResetKeyRequest request,
+        ClaimsPrincipal actor,
+        CancellationToken cancellationToken);
+
+    Task ResetPasswordAsync(
+        AdminPasswordResetRequest request,
+        CancellationToken cancellationToken);
+
     Task<AdminIdentityDto> GetCurrentIdentityAsync(
         ClaimsPrincipal principal,
         CancellationToken cancellationToken);

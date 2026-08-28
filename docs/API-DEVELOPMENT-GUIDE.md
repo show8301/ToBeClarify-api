@@ -259,8 +259,8 @@ Cookie 特性：
 
 | 角色值 | 顯示名稱 | 目前能力 |
 | --- | --- | --- |
-| `developer` | 開發者 | 所有後台內容、店員、媒體及註冊碼功能 |
-| `manager` | 經理 | 與 developer 相同的內容管理能力，可簽發店員註冊碼 |
+| `developer` | 開發者 | 所有後台內容、店員、媒體、註冊碼及所有帳號的密碼重設碼功能 |
+| `manager` | 經理 | 與 developer 相同的內容管理能力，可簽發店員註冊碼及 clerk 密碼重設碼 |
 | `clerk` | 店員 | 可讀後台店員資料；只能修改自己綁定的店員資料與狀態；上傳類別限 `staff`、`gallery` |
 
 主要 authorization policy：
@@ -275,17 +275,27 @@ Cookie 特性：
 2. API 產生 32-byte 隨機 hex 驗證碼，預設 10 分鐘過期。
 3. 新店員呼叫 `POST /api/admin/auth/register`，提交帳號、密碼與驗證碼。
 4. 驗證碼成功消耗後，API 在同一 transaction 建立 `STAFF_MEMBERS` 與 `ADMIN_USERS`，角色固定為 `clerk`。
-5. 驗證碼只能使用一次，儲存在伺服器檔案並以 process semaphore 加檔案鎖避免重複消耗。
+5. 驗證碼只能使用一次；伺服器檔案只保存驗證碼雜湊、用途、發行者與失效時間，並以 process semaphore 加檔案鎖避免重複消耗。
 
 `AdminAuthService.RegisterAsync` 雖支援 developer 建立任意角色帳號，但目前沒有 controller route 對外暴露。
 
-### 6.4 限流
+### 6.4 密碼重設流程
+
+1. developer 或 manager 呼叫 `POST /api/admin/auth/password-reset-key` 並指定帳號；manager 只能指定 clerk。
+2. API 產生綁定目標帳號且用途為 `password-reset` 的一次性驗證碼。產生任何新驗證碼都會讓前一組失效。
+3. 使用者呼叫 `POST /api/admin/auth/forgot-password/reset`，提交帳號、新密碼與驗證碼。
+4. 成功時更新 PBKDF2 密碼雜湊、遞增 `TOKEN_VERSION` 並消耗驗證碼；原有 JWT 會在後續 request 被拒絕。
+
+註冊與密碼重設共用 `oneTimeToken.txt`，但 API 會驗證用途，密碼重設碼也必須符合綁定帳號。
+
+### 6.5 限流
 
 | Policy | 規則 |
 | --- | --- |
 | `guestbook-write` | 每個來源 IP 每分鐘 5 次 |
 | `admin-login` | 每個來源 IP 每分鐘 10 次 |
 | `admin-register` | 每個來源 IP 每分鐘 5 次 |
+| `admin-password-reset` | 每個來源 IP 每分鐘 5 次 |
 
 ## 7. 公開 Client API
 
@@ -330,7 +340,7 @@ Cookie 特性：
 
 ## 8. 後台 Admin API
 
-除 login、register、logout 外，Admin API 需要有效 JWT Cookie 或 Bearer token。
+除 login、register、forgot-password/reset、logout 外，Admin API 需要有效 JWT Cookie 或 Bearer token。
 
 ### 8.1 認證端點
 
@@ -339,6 +349,8 @@ Cookie 特性：
 | POST | `/api/admin/auth/login` | Anonymous | 登入並寫入 HttpOnly Cookie |
 | POST | `/api/admin/auth/register` | Anonymous + 一次性驗證碼 | 建立 clerk 帳號及對應 staff member |
 | POST | `/api/admin/auth/register-key` | developer / manager | 簽發一次性註冊驗證碼 |
+| POST | `/api/admin/auth/password-reset-key` | developer / manager | developer 可指定所有帳號；manager 只能替 clerk 簽發密碼重設碼 |
+| POST | `/api/admin/auth/forgot-password/reset` | Anonymous + 一次性驗證碼 | 更新指定帳號密碼、遞增 token version 並使舊 JWT 失效 |
 | GET | `/api/admin/auth/me` | 所有後台角色 | 重新由 DB 取得目前登入身分 |
 | POST | `/api/admin/auth/logout` | Anonymous | 刪除瀏覽器 Cookie |
 
@@ -529,7 +541,7 @@ resize 使用 `ResizeMode.Max`，會維持比例，不會強制裁成指定長�
 1. 只允許目標資料夾名稱為 `ToBeClarify_API`。
 2. 驗證 artifact 包含 `ToBeClarify.Api.dll`。
 3. 要求伺服器既有 `web.config` 與 `appsettings*.json`。
-4. 保留設定、媒體、Logs、註冊碼與 IIS 設定，不以 artifact 覆蓋。
+4. 保留設定、媒體、Logs、一次性驗證碼與 IIS 設定，不以 artifact 覆蓋。
 5. 用 `app_offline.htm` 暫停 API，備份舊程式後再替換。
 6. 最多嘗試 10 次 health check。
 7. 部署失敗時還原舊程式檔案。
@@ -557,10 +569,9 @@ resize 使用 `ResizeMode.Max`，會維持比例，不會強制裁成指定長�
 ### P1：認證與反向代理
 
 1. Logout 只刪除 client Cookie，沒有 server-side token blacklist；已簽發 token 在到期前仍可能有效。
-2. JWT 內含 `token_version`，但 authentication pipeline 尚未每次向 DB 驗證該版本。
-3. `AdminAuth.TokenLifetimeMinutes` 目前只控制 Cookie Max-Age；`JwtTokenService` 的 token 到期時間仍固定為 2 小時。若要支援可設定期限，兩者必須改用同一設定來源。
-4. Rate limiter 使用 `Connection.RemoteIpAddress`，但目前沒有 `UseForwardedHeaders`；在 IIS / reverse proxy 後方應確認取得的是實際 client IP，否則多位使用者可能共用同一限流 bucket。
-5. Logging 直接採信第一個 `X-Forwarded-For`，應由可信 proxy middleware 統一解析後再使用。
+2. `AdminAuth.TokenLifetimeMinutes` 目前只控制 Cookie Max-Age；`JwtTokenService` 的 token 到期時間仍固定為 2 小時。若要支援可設定期限，兩者必須改用同一設定來源。
+3. Rate limiter 使用 `Connection.RemoteIpAddress`，但目前沒有 `UseForwardedHeaders`；在 IIS / reverse proxy 後方應確認取得的是實際 client IP，否則多位使用者可能共用同一限流 bucket。
+4. Logging 直接採信第一個 `X-Forwarded-For`，應由可信 proxy middleware 統一解析後再使用。
 
 ### P2：可維護性
 

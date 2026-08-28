@@ -25,7 +25,9 @@ publish/
 # Runtime media files are deployed separately and must not be committed
 /media/
 
-# One-time developer-issued registration key
+# One-time developer-issued tokens
+oneTimeToken.txt
+oneTimeToken.txt.lock
 registerKey.txt
 registerKey.txt.lock
 
