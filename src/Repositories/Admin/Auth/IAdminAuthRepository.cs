@@ -6,6 +6,7 @@ public interface IAdminAuthRepository
 {
     Task<AdminUserRow?> GetByLoginNameAsync(string loginName, CancellationToken cancellationToken);
     Task<AdminUserRow?> GetActiveByIdAsync(string id, CancellationToken cancellationToken);
+    Task<IReadOnlyList<AdminUserListRow>> GetAllStaffListAsync(CancellationToken cancellationToken);
     Task<AdminTokenStateRow?> GetTokenStateByIdAsync(string id, CancellationToken cancellationToken);
     Task<bool> StaffMemberExistsAsync(string id, CancellationToken cancellationToken);
     Task CreateAsync(string id, string loginName, string displayName, string passwordHash, string roleLevel,

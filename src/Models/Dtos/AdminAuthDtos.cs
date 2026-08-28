@@ -63,6 +63,11 @@ public sealed record AdminRegisterKeyDto(string Key, DateTimeOffset ExpiresAt);
 
 public sealed record AdminPasswordResetKeyDto(string Key, DateTimeOffset ExpiresAt);
 
+public sealed record AdminStaffListItemDto(
+    string Id,
+    string LoginName,
+    string DisplayName);
+
 public sealed record AdminIdentityDto(
     string Id,
     string LoginName,

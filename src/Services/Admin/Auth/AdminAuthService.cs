@@ -128,6 +128,12 @@ public sealed class AdminAuthService : IAdminAuthService
             cancellationToken);
     }
 
+    public async Task<IReadOnlyList<AdminStaffListItemDto>> GetAllStaffListAsync(
+        CancellationToken cancellationToken)
+        => (await _repository.GetAllStaffListAsync(cancellationToken))
+            .Select(user => new AdminStaffListItemDto(user.Id, user.LoginName, user.DisplayName))
+            .ToArray();
+
     public async Task<AdminPasswordResetKeyDto> IssuePasswordResetKeyAsync(
         AdminPasswordResetKeyRequest request,
         ClaimsPrincipal actor,

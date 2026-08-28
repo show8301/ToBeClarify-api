@@ -354,7 +354,13 @@ Cookie 特性：
 | GET | `/api/admin/auth/me` | 所有後台角色 | 重新由 DB 取得目前登入身分 |
 | POST | `/api/admin/auth/logout` | Anonymous | 刪除瀏覽器 Cookie |
 
-### 8.2 內容管理端點
+### 8.2 Developer 使用者列表
+
+| Method | Path | 權限 | 功能 |
+| --- | --- | --- | --- |
+| GET | `/api/admin/all-staff-list` | developer | 取得所有後台帳號的顯示名稱、店員帳號與帳號 ID；不回傳密碼或驗證資訊 |
+
+### 8.3 內容管理端點
 
 下表標示「管理者」時，代表 developer 或 manager。
 

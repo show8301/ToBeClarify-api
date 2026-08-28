@@ -1,7 +1,9 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ToBeClarify.Api.Auth;
 using ToBeClarify.Api.Models.Common;
 using ToBeClarify.Api.Models.Dtos;
+using ToBeClarify.Api.Services.Admin.Auth;
 using ToBeClarify.Api.Services.Admin.Content;
 
 namespace ToBeClarify.Api.Controllers.Admin;
@@ -12,8 +14,20 @@ namespace ToBeClarify.Api.Controllers.Admin;
 public sealed class AdminContentController : ControllerBase
 {
     private readonly IAdminContentService _service;
+    private readonly IAdminAuthService _authService;
 
-    public AdminContentController(IAdminContentService service) => _service = service;
+    public AdminContentController(IAdminContentService service, IAdminAuthService authService)
+    {
+        _service = service;
+        _authService = authService;
+    }
+
+    [HttpGet("all-staff-list")]
+    [Authorize(Policy = AdminAuthConstants.DeveloperPolicy)]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<AdminStaffListItemDto>>>> GetAllStaffList(
+        CancellationToken cancellationToken)
+        => Ok(ApiResponse<IReadOnlyList<AdminStaffListItemDto>>.Ok(
+            await _authService.GetAllStaffListAsync(cancellationToken)));
 
     [HttpGet("site-settings")]
     [Authorize(Policy = "AdminManager")]

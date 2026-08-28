@@ -39,6 +39,15 @@ public sealed class AdminAuthRepository : DapperRepositoryBase, IAdminAuthReposi
         return await QuerySingleOrDefaultAsync<AdminUserRow>(sql, new { Id = id }, cancellationToken);
     }
 
+    public Task<IReadOnlyList<AdminUserListRow>> GetAllStaffListAsync(CancellationToken cancellationToken)
+        => QueryAsync<AdminUserListRow>("""
+            SELECT `ID` AS Id,
+                   `LOGIN_NAME` AS LoginName,
+                   `DISPLAY_NAME` AS DisplayName
+            FROM `ADMIN_USERS`
+            ORDER BY `DISPLAY_NAME`, `LOGIN_NAME`, `ID`;
+            """, null, cancellationToken);
+
     public async Task<AdminTokenStateRow?> GetTokenStateByIdAsync(string id, CancellationToken cancellationToken)
     {
         const string sql = """

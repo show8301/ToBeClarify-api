@@ -23,6 +23,9 @@ public interface IAdminAuthService
         StaffRegisterRequest request,
         CancellationToken cancellationToken);
 
+    Task<IReadOnlyList<AdminStaffListItemDto>> GetAllStaffListAsync(
+        CancellationToken cancellationToken);
+
     Task<AdminPasswordResetKeyDto> IssuePasswordResetKeyAsync(
         AdminPasswordResetKeyRequest request,
         ClaimsPrincipal actor,
