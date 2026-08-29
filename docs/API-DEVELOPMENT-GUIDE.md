@@ -397,7 +397,7 @@ Cookie 特性：
 | PUT | `/api/admin/staff-members/{id}` | 管理者可編輯任一店員；clerk 只能編輯自己綁定的 id |
 | PUT | `/api/admin/staff-members/{id}/status` | 同上，可更新 `isWorkingToday` 或 `isActive` |
 | PUT | `/api/admin/staff-members/order` | 只有管理者可排序 |
-| DELETE | `/api/admin/staff-members/{id}` | 只有管理者；硬刪服務、gallery、schedule 與 staff row |
+| DELETE | `/api/admin/staff-members/{id}` | 只有管理者；硬刪服務、gallery、schedule 與 staff row；若已綁定後台帳號則回傳 409 `STAFF_MEMBER_HAS_ADMIN_ACCOUNT` |
 
 目前沒有 `POST /api/admin/staff-members`。新店員是透過註冊流程建立，或需由資料庫 / 未來新增管理端點建立。
 
@@ -497,7 +497,7 @@ resize 使用 `ResizeMode.Max`，會維持比例，不會強制裁成指定長�
 | 菜單 | `MENU_SETS`、`MENU_SET_ITEMS` | 套餐一對多明細，明細參照 menu item |
 | 排行 | `RANKINGS` | staff / monetary 共表，以 period 分期 |
 | 媒體 | `MEDIA_ASSETS` | 磁碟路徑、MIME、尺寸、版本與建立者 |
-| 帳號 | `ADMIN_USERS` | 登入帳號、password hash、角色與 staff 綁定；顯示名稱統一取自 `STAFF_MEMBERS` |
+| 帳號 | `ADMIN_USERS` | 登入帳號、password hash、角色與 staff 一對一綁定；`STAFF_MEMBER_ID` 為 NOT NULL、UNIQUE、RESTRICT FK，顯示名稱統一取自 `STAFF_MEMBERS` |
 | 系統 | `API_LOGS` | request audit / performance log |
 | 活動 | `EVENTS` | 目前只有媒體清理時檢查 cover media 參照 |
 

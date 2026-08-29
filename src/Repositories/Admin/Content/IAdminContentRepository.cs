@@ -33,6 +33,7 @@ public interface IAdminContentRepository
     Task SaveStaffMemberAsync(string id, SaveStaffMemberRequest request, string actorId, DateTime now, CancellationToken cancellationToken);
     Task UpdateStaffMemberStatusAsync(string id, bool? isWorkingToday, bool? isActive, string actorId, DateTime now, CancellationToken cancellationToken);
     Task ReorderStaffMembersAsync(IReadOnlyList<ReorderStaffMemberItem> items, string actorId, DateTime now, CancellationToken cancellationToken);
+    Task<bool> StaffMemberHasAdminAccountAsync(string id, CancellationToken cancellationToken);
     Task DeleteStaffMemberAsync(string id, string actorId, DateTime now, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<AdminGalleryAlbumRow>> GetGalleryAlbumsAsync(CancellationToken cancellationToken);

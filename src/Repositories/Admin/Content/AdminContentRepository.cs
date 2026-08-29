@@ -290,6 +290,12 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
         await transaction.CommitAsync(cancellationToken);
     }
 
+    public async Task<bool> StaffMemberHasAdminAccountAsync(string id, CancellationToken cancellationToken)
+    {
+        const string sql = "SELECT EXISTS(SELECT 1 FROM `ADMIN_USERS` WHERE `STAFF_MEMBER_ID` = @Id);";
+        return await QuerySingleOrDefaultAsync<bool>(sql, new { Id = id }, cancellationToken);
+    }
+
     public async Task DeleteStaffMemberAsync(string id, string actorId, DateTime now, CancellationToken cancellationToken)
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);

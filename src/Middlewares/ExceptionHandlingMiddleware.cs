@@ -43,6 +43,7 @@ public sealed class ExceptionHandlingMiddleware
         return exception switch
         {
             BusinessException businessException => (HttpStatusCode.BadRequest, businessException.ErrorCode, businessException.Message),
+            ConflictException conflictException => (HttpStatusCode.Conflict, conflictException.ErrorCode, conflictException.Message),
             NotFoundException notFoundException => (HttpStatusCode.NotFound, notFoundException.ErrorCode, notFoundException.Message),
             ForbiddenException forbiddenException => (HttpStatusCode.Forbidden, forbiddenException.ErrorCode, forbiddenException.Message),
             UnauthorizedException unauthorizedException => (HttpStatusCode.Unauthorized, unauthorizedException.ErrorCode, "Unauthorized"),

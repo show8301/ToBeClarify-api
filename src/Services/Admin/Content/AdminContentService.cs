@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using MySqlConnector;
 using ToBeClarify.Api.Auth;
 using ToBeClarify.Api.Exceptions;
 using ToBeClarify.Api.Infrastructure;
@@ -186,7 +187,19 @@ public sealed class AdminContentService : IAdminContentService
     public async Task DeleteStaffMemberAsync(string id, ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
         EnsureManager(actor);
-        await _repository.DeleteStaffMemberAsync(Required(id, "STAFF_ID_REQUIRED"), ActorId(actor), _clock.LocalDateTime, cancellationToken);
+        var staffId = Required(id, "STAFF_ID_REQUIRED");
+        if (await _repository.StaffMemberHasAdminAccountAsync(staffId, cancellationToken))
+            throw StaffMemberHasAdminAccount();
+
+        try
+        {
+            await _repository.DeleteStaffMemberAsync(
+                staffId, ActorId(actor), _clock.LocalDateTime, cancellationToken);
+        }
+        catch (MySqlException exception) when (exception.Number == 1451)
+        {
+            throw StaffMemberHasAdminAccount();
+        }
     }
 
     public async Task<IReadOnlyList<AdminGalleryAlbumDto>> GetGalleryAlbumsAsync(CancellationToken cancellationToken)
@@ -392,6 +405,11 @@ public sealed class AdminContentService : IAdminContentService
         => string.IsNullOrWhiteSpace(value) ? throw new BusinessException("Id is required.", errorCode) : value.Trim();
 
     private static string NewId() => Guid.NewGuid().ToString("D");
+
+    private static ConflictException StaffMemberHasAdminAccount()
+        => new(
+            "This staff member is linked to an admin account and cannot be deleted.",
+            "STAFF_MEMBER_HAS_ADMIN_ACCOUNT");
 
     private AdminSiteSettingDto MapSiteSetting(AdminSiteSettingRow row)
     {
