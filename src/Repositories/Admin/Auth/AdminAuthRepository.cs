@@ -14,12 +14,13 @@ public sealed class AdminAuthRepository : DapperRepositoryBase, IAdminAuthReposi
     public async Task<AdminUserRow?> GetByLoginNameAsync(string loginName, CancellationToken cancellationToken)
     {
         const string sql = """
-            SELECT `ID` AS Id, `LOGIN_NAME` AS LoginName, `DISPLAY_NAME` AS DisplayName,
-                   `PASSWORD_HASH` AS PasswordHash, `ROLE_LEVEL` AS RoleLevel,
-                   `STAFF_MEMBER_ID` AS StaffMemberId, `IS_ACTIVE` AS IsActive,
-                   `TOKEN_VERSION` AS TokenVersion
-            FROM `ADMIN_USERS`
-            WHERE `LOGIN_NAME` = @LoginName
+            SELECT U.`ID` AS Id, U.`LOGIN_NAME` AS LoginName, S.`DISPLAY_NAME` AS DisplayName,
+                   U.`PASSWORD_HASH` AS PasswordHash, U.`ROLE_LEVEL` AS RoleLevel,
+                   U.`STAFF_MEMBER_ID` AS StaffMemberId, U.`IS_ACTIVE` AS IsActive,
+                   U.`TOKEN_VERSION` AS TokenVersion
+            FROM `ADMIN_USERS` U
+            INNER JOIN `STAFF_MEMBERS` S ON S.`ID` = U.`STAFF_MEMBER_ID`
+            WHERE U.`LOGIN_NAME` = @LoginName
             LIMIT 1;
             """;
         return await QuerySingleOrDefaultAsync<AdminUserRow>(sql, new { LoginName = loginName }, cancellationToken);
@@ -28,12 +29,13 @@ public sealed class AdminAuthRepository : DapperRepositoryBase, IAdminAuthReposi
     public async Task<AdminUserRow?> GetActiveByIdAsync(string id, CancellationToken cancellationToken)
     {
         const string sql = """
-            SELECT `ID` AS Id, `LOGIN_NAME` AS LoginName, `DISPLAY_NAME` AS DisplayName,
-                   `PASSWORD_HASH` AS PasswordHash, `ROLE_LEVEL` AS RoleLevel,
-                   `STAFF_MEMBER_ID` AS StaffMemberId, `IS_ACTIVE` AS IsActive,
-                   `TOKEN_VERSION` AS TokenVersion
-            FROM `ADMIN_USERS`
-            WHERE `ID` = @Id AND `IS_ACTIVE` = TRUE
+            SELECT U.`ID` AS Id, U.`LOGIN_NAME` AS LoginName, S.`DISPLAY_NAME` AS DisplayName,
+                   U.`PASSWORD_HASH` AS PasswordHash, U.`ROLE_LEVEL` AS RoleLevel,
+                   U.`STAFF_MEMBER_ID` AS StaffMemberId, U.`IS_ACTIVE` AS IsActive,
+                   U.`TOKEN_VERSION` AS TokenVersion
+            FROM `ADMIN_USERS` U
+            INNER JOIN `STAFF_MEMBERS` S ON S.`ID` = U.`STAFF_MEMBER_ID`
+            WHERE U.`ID` = @Id AND U.`IS_ACTIVE` = TRUE
             LIMIT 1;
             """;
         return await QuerySingleOrDefaultAsync<AdminUserRow>(sql, new { Id = id }, cancellationToken);
@@ -41,11 +43,12 @@ public sealed class AdminAuthRepository : DapperRepositoryBase, IAdminAuthReposi
 
     public Task<IReadOnlyList<AdminUserListRow>> GetAllStaffListAsync(CancellationToken cancellationToken)
         => QueryAsync<AdminUserListRow>("""
-            SELECT `ID` AS Id,
-                   `LOGIN_NAME` AS LoginName,
-                   `DISPLAY_NAME` AS DisplayName
-            FROM `ADMIN_USERS`
-            ORDER BY `DISPLAY_NAME`, `LOGIN_NAME`, `ID`;
+            SELECT U.`ID` AS Id,
+                   U.`LOGIN_NAME` AS LoginName,
+                   S.`DISPLAY_NAME` AS DisplayName
+            FROM `ADMIN_USERS` U
+            INNER JOIN `STAFF_MEMBERS` S ON S.`ID` = U.`STAFF_MEMBER_ID`
+            ORDER BY S.`DISPLAY_NAME`, U.`LOGIN_NAME`, U.`ID`;
             """, null, cancellationToken);
 
     public async Task<AdminTokenStateRow?> GetTokenStateByIdAsync(string id, CancellationToken cancellationToken)
@@ -58,31 +61,6 @@ public sealed class AdminAuthRepository : DapperRepositoryBase, IAdminAuthReposi
             LIMIT 1;
             """;
         return await QuerySingleOrDefaultAsync<AdminTokenStateRow>(sql, new { Id = id }, cancellationToken);
-    }
-
-    public async Task<bool> StaffMemberExistsAsync(string id, CancellationToken cancellationToken)
-    {
-        const string sql = "SELECT EXISTS(SELECT 1 FROM `STAFF_MEMBERS` WHERE `ID` = @Id);";
-        return await QuerySingleOrDefaultAsync<bool>(sql, new { Id = id }, cancellationToken);
-    }
-
-    public async Task CreateAsync(string id, string loginName, string displayName, string passwordHash, string roleLevel,
-        string? staffMemberId, string actorId, CancellationToken cancellationToken)
-    {
-        const string sql = """
-            INSERT INTO `ADMIN_USERS`
-                (`ID`, `LOGIN_NAME`, `DISPLAY_NAME`, `PASSWORD_HASH`, `ROLE_LEVEL`, `STAFF_MEMBER_ID`,
-                 `IS_ACTIVE`, `TOKEN_VERSION`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
-            VALUES (@Id, @LoginName, @DisplayName, @PasswordHash, @RoleLevel, @StaffMemberId,
-                    TRUE, 1, CURRENT_TIMESTAMP, @ActorId, CURRENT_TIMESTAMP, @ActorId);
-            """;
-
-        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
-        await connection.ExecuteAsync(new CommandDefinition(sql, new
-        {
-            Id = id, LoginName = loginName, DisplayName = displayName, PasswordHash = passwordHash,
-            RoleLevel = roleLevel, StaffMemberId = staffMemberId, ActorId = actorId
-        }, cancellationToken: cancellationToken));
     }
 
     public async Task CreateStaffAccountAsync(
@@ -105,15 +83,14 @@ public sealed class AdminAuthRepository : DapperRepositoryBase, IAdminAuthReposi
 
         await connection.ExecuteAsync(new CommandDefinition("""
             INSERT INTO `ADMIN_USERS`
-                (`ID`, `LOGIN_NAME`, `DISPLAY_NAME`, `PASSWORD_HASH`, `ROLE_LEVEL`, `STAFF_MEMBER_ID`,
+                (`ID`, `LOGIN_NAME`, `PASSWORD_HASH`, `ROLE_LEVEL`, `STAFF_MEMBER_ID`,
                  `IS_ACTIVE`, `TOKEN_VERSION`, `CREATED_AT`, `UPDATED_AT`)
-            VALUES (@AdminId, @LoginName, @DisplayName, @PasswordHash, 'clerk', @StaffMemberId,
+            VALUES (@AdminId, @LoginName, @PasswordHash, 'clerk', @StaffMemberId,
                     TRUE, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
             """, new
         {
             AdminId = adminId,
             LoginName = loginName,
-            DisplayName = displayName,
             PasswordHash = passwordHash,
             StaffMemberId = staffMemberId
         }, transaction, cancellationToken: cancellationToken));
