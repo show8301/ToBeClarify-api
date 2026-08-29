@@ -358,7 +358,7 @@ Cookie 特性：
 
 | Method | Path | 權限 | 功能 |
 | --- | --- | --- | --- |
-| GET | `/api/admin/all-staff-list` | developer | 取得所有後台帳號的顯示名稱、店員帳號與帳號 ID；不回傳密碼或驗證資訊 |
+| GET | `/api/admin/all-staff-list` | developer | 取得所有後台帳號的店員顯示名稱、登入帳號與帳號 ID；顯示名稱以 `STAFF_MEMBERS` 為準，不回傳密碼或驗證資訊 |
 
 ### 8.3 內容管理端點
 
@@ -497,7 +497,7 @@ resize 使用 `ResizeMode.Max`，會維持比例，不會強制裁成指定長�
 | 菜單 | `MENU_SETS`、`MENU_SET_ITEMS` | 套餐一對多明細，明細參照 menu item |
 | 排行 | `RANKINGS` | staff / monetary 共表，以 period 分期 |
 | 媒體 | `MEDIA_ASSETS` | 磁碟路徑、MIME、尺寸、版本與建立者 |
-| 帳號 | `ADMIN_USERS` | 帳號、password hash、角色與 staff 綁定 |
+| 帳號 | `ADMIN_USERS` | 登入帳號、password hash、角色與 staff 綁定；顯示名稱統一取自 `STAFF_MEMBERS` |
 | 系統 | `API_LOGS` | request audit / performance log |
 | 活動 | `EVENTS` | 目前只有媒體清理時檢查 cover media 參照 |
 
