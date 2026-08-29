@@ -19,10 +19,12 @@ public sealed class StaffRepository : DapperRepositoryBase, IStaffRepository
                    M.`IS_NOMINATABLE` AS IsNominatable,
                    COALESCE(S.`IS_WORKING`, TRUE) AS IsWorkingToday,
                    CASE WHEN COALESCE(S.`IS_WORKING`, TRUE) = FALSE THEN 'off'
-                        WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= NOW() AND R.`ENDS_AT` > NOW()) THEN 'busy'
+                        WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= NOW() AND R.`ENDS_AT` > NOW())
+                          OR EXISTS (SELECT 1 FROM `STAFF_BUSY_BLOCKS` B WHERE B.`STAFF_ID` = M.`ID` AND B.`BLOCK_STATUS` = 'active' AND B.`STARTS_AT` <= NOW() AND B.`ENDS_AT` > NOW()) THEN 'busy'
                         ELSE 'available' END AS CurrentStatus,
                    CASE WHEN COALESCE(S.`IS_WORKING`, TRUE) = FALSE THEN '未上班'
-                        WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= NOW() AND R.`ENDS_AT` > NOW()) THEN '指名中'
+                        WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= NOW() AND R.`ENDS_AT` > NOW())
+                          OR EXISTS (SELECT 1 FROM `STAFF_BUSY_BLOCKS` B WHERE B.`STAFF_ID` = M.`ID` AND B.`BLOCK_STATUS` = 'active' AND B.`STARTS_AT` <= NOW() AND B.`ENDS_AT` > NOW()) THEN '指名中'
                         ELSE '待命中' END AS StatusText,
                    NULL AS TodayShift
             FROM `STAFF_MEMBERS` M
@@ -43,10 +45,12 @@ public sealed class StaffRepository : DapperRepositoryBase, IStaffRepository
                    M.`IS_NOMINATABLE` AS IsNominatable,
                    COALESCE(S.`IS_WORKING`, TRUE) AS IsWorkingToday,
                    CASE WHEN COALESCE(S.`IS_WORKING`, TRUE) = FALSE THEN 'off'
-                        WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= NOW() AND R.`ENDS_AT` > NOW()) THEN 'busy'
+                        WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= NOW() AND R.`ENDS_AT` > NOW())
+                          OR EXISTS (SELECT 1 FROM `STAFF_BUSY_BLOCKS` B WHERE B.`STAFF_ID` = M.`ID` AND B.`BLOCK_STATUS` = 'active' AND B.`STARTS_AT` <= NOW() AND B.`ENDS_AT` > NOW()) THEN 'busy'
                         ELSE 'available' END AS CurrentStatus,
                    CASE WHEN COALESCE(S.`IS_WORKING`, TRUE) = FALSE THEN '未上班'
-                        WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= NOW() AND R.`ENDS_AT` > NOW()) THEN '指名中'
+                        WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= NOW() AND R.`ENDS_AT` > NOW())
+                          OR EXISTS (SELECT 1 FROM `STAFF_BUSY_BLOCKS` B WHERE B.`STAFF_ID` = M.`ID` AND B.`BLOCK_STATUS` = 'active' AND B.`STARTS_AT` <= NOW() AND B.`ENDS_AT` > NOW()) THEN '指名中'
                         ELSE '待命中' END AS StatusText,
                    NULL AS TodayShift
             FROM `STAFF_MEMBERS` M

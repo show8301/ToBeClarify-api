@@ -20,6 +20,19 @@ public sealed class ReservationRepository : DapperRepositoryBase, IReservationRe
                    `CUSTOMER_NAME` AS CustomerName
             FROM `STAFF_RESERVATIONS`
             WHERE `ENDS_AT` > @From AND `STARTS_AT` < @To
+            UNION ALL
+            SELECT B.`ID` AS Id, B.`STAFF_ID` AS StaffId, N.`STAFF_NAME_SNAPSHOT` AS StaffNameSnapshot,
+                   M.`AVATAR_MEDIA_ID` AS StaffAvatarMediaId, NULL AS LegacyStaffAvatarSnapshot,
+                   CASE WHEN B.`BLOCK_STATUS` = 'active' THEN 'active' ELSE B.`BLOCK_STATUS` END AS ReservationStatus,
+                   B.`STARTS_AT` AS StartsAt, B.`ENDS_AT` AS EndsAt,
+                   N.`SERVICE_NAME_SNAPSHOT` AS ServiceLabel, S.`CUSTOMER_NAME` AS CustomerName
+            FROM `STAFF_BUSY_BLOCKS` B
+            JOIN `ORDER_NOMINEES` N ON N.`ID` = B.`ORDER_NOMINEE_ID`
+            JOIN `ORDERS` O ON O.`ID` = B.`ORDER_ID`
+            JOIN `CUSTOMER_ORDER_SESSIONS` S ON S.`ID` = O.`SESSION_ID`
+            LEFT JOIN `STAFF_MEMBERS` M ON M.`ID` = B.`STAFF_ID`
+            WHERE B.`BLOCK_STATUS` IN ('active', 'completed')
+              AND B.`ENDS_AT` > @From AND B.`STARTS_AT` < @To
             ORDER BY `STAFF_ID`, `STARTS_AT`;
             """;
         return await QueryAsync<StaffReservationRow>(sql, new { From = from, To = to }, cancellationToken);

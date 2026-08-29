@@ -22,6 +22,7 @@ using ToBeClarify.Api.Repositories.Client.Rankings;
 using ToBeClarify.Api.Repositories.Client.Reservations;
 using ToBeClarify.Api.Repositories.Client.Site;
 using ToBeClarify.Api.Repositories.Client.Staff;
+using ToBeClarify.Api.Repositories.Ordering;
 using ToBeClarify.Api.Services.Client.Gallery;
 using ToBeClarify.Api.Services.Client.Guestbook;
 using ToBeClarify.Api.Services.Client.Home;
@@ -30,6 +31,7 @@ using ToBeClarify.Api.Services.Client.Rankings;
 using ToBeClarify.Api.Services.Client.Reservations;
 using ToBeClarify.Api.Services.Client.Site;
 using ToBeClarify.Api.Services.Client.Staff;
+using ToBeClarify.Api.Services.Ordering;
 using ToBeClarify.Api.Services.Admin.Auth;
 using ToBeClarify.Api.Services.Logging;
 using ToBeClarify.Api.Services.Media;
@@ -63,6 +65,7 @@ var allowedOrigins = configuredOrigins
 builder.Services.Configure<JwtAuthOptions>(builder.Configuration.GetSection(JwtAuthOptions.SectionName));
 builder.Services.Configure<AdminAuthOptions>(builder.Configuration.GetSection(AdminAuthOptions.SectionName));
 builder.Services.Configure<OneTimeTokenOptions>(builder.Configuration.GetSection(OneTimeTokenOptions.SectionName));
+builder.Services.Configure<OrderingTokenOptions>(builder.Configuration.GetSection(OrderingTokenOptions.SectionName));
 builder.Services.Configure<ApiLoggingOptions>(builder.Configuration.GetSection(ApiLoggingOptions.SectionName));
 builder.Services.Configure<MediaOptions>(builder.Configuration.GetSection(MediaOptions.SectionName));
 builder.Services.AddHttpContextAccessor();
@@ -73,12 +76,16 @@ builder.Services.AddScoped<IApiLogService, ApiLogService>();
 builder.Services.AddScoped<IAdminAuthRepository, AdminAuthRepository>();
 builder.Services.AddScoped<IAdminAuthService, AdminAuthService>();
 builder.Services.AddSingleton<IOneTimeTokenService, OneTimeTokenService>();
+builder.Services.AddSingleton<IOrderingTokenService, OrderingTokenService>();
+builder.Services.AddScoped<IOrderingRepository, OrderingRepository>();
+builder.Services.AddScoped<IOrderingService, OrderingService>();
 builder.Services.AddScoped<ToBeClarify.Api.Repositories.Admin.Content.IAdminContentRepository,
     ToBeClarify.Api.Repositories.Admin.Content.AdminContentRepository>();
 builder.Services.AddScoped<ToBeClarify.Api.Services.Admin.Content.IAdminContentService,
     ToBeClarify.Api.Services.Admin.Content.AdminContentService>();
 builder.Services.AddScoped<ToBeClarify.Api.Services.Media.AdminMediaUploadService>();
 builder.Services.AddHostedService<MediaMaintenanceHostedService>();
+builder.Services.AddHostedService<OrderingMaintenanceHostedService>();
 builder.Services.AddScoped<IHomeRepository, HomeRepository>();
 builder.Services.AddScoped<ISiteRepository, SiteRepository>();
 builder.Services.AddScoped<IMenuRepository, MenuRepository>();
@@ -142,6 +149,33 @@ builder.Services.AddRateLimiter(options =>
         {
             PermitLimit = 5,
             Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+            AutoReplenishment = true
+        }));
+    options.AddPolicy("ordering-access", httpContext => RateLimitPartition.GetFixedWindowLimiter(
+        httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 60,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+            AutoReplenishment = true
+        }));
+    options.AddPolicy("ordering-write", httpContext => RateLimitPartition.GetFixedWindowLimiter(
+        $"{httpContext.Connection.RemoteIpAddress}:{httpContext.Request.Headers["X-Order-Token"].ToString().GetHashCode()}",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 20,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+            AutoReplenishment = true
+        }));
+    options.AddPolicy("ordering-recovery", httpContext => RateLimitPartition.GetFixedWindowLimiter(
+        httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 5,
+            Window = TimeSpan.FromMinutes(5),
             QueueLimit = 0,
             AutoReplenishment = true
         }));

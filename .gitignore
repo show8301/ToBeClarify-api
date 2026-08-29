@@ -1,6 +1,7 @@
 # Local .NET SDK installed for this workspace
 .dotnet/
 .dotnet-home/
+.nuget-packages/
 dotnet-install.sh
 
 # Build output
