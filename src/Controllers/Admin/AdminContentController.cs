@@ -156,6 +156,7 @@ public sealed class AdminContentController : ControllerBase
     }
 
     [HttpDelete("staff-members/{id}")]
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status409Conflict)]
     public async Task<ActionResult<ApiResponse<bool>>> DeleteStaffMember(string id, CancellationToken cancellationToken)
     {
         await _service.DeleteStaffMemberAsync(id, User, cancellationToken);
