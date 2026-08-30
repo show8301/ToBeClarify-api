@@ -50,6 +50,12 @@ public sealed class OrdersController : ControllerBase
     public async Task<ActionResult<ApiResponse<OrderingSettingsDto>>> Settings(CancellationToken cancellationToken)
         => Ok(ApiResponse<OrderingSettingsDto>.Ok(await _service.GetSettingsAsync(cancellationToken)));
 
+    [HttpGet("ordering-context")]
+    public async Task<ActionResult<ApiResponse<OrderingBusinessContextDto>>> BusinessContext(
+        CancellationToken cancellationToken)
+        => Ok(ApiResponse<OrderingBusinessContextDto>.Ok(
+            await _service.GetBusinessContextAsync(cancellationToken)));
+
     [HttpPut("ordering-settings")]
     [Authorize(Policy = "AdminManager")]
     public async Task<ActionResult<ApiResponse<OrderingSettingsDto>>> SaveSettings(
@@ -69,16 +75,45 @@ public sealed class OrdersController : ControllerBase
         string orderId, CancellationToken cancellationToken)
         => Ok(ApiResponse<OrderDto>.Ok(await _service.ConfirmNomineeAsync(orderId, User, cancellationToken)));
 
+    [HttpGet("order-nominees/{nomineeId}/addon-options")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<StaffServiceDto>>>> AddonOptions(
+        string nomineeId, CancellationToken cancellationToken)
+        => Ok(ApiResponse<IReadOnlyList<StaffServiceDto>>.Ok(
+            await _service.GetAddonOptionsAsync(nomineeId, User, cancellationToken)));
+
+    [HttpPost("order-nominees/{nomineeId}/addons")]
+    public async Task<ActionResult<ApiResponse<OrderDto>>> SubmitAdminAddon(
+        string nomineeId, SubmitAddonRequest request, CancellationToken cancellationToken)
+        => Ok(ApiResponse<OrderDto>.Ok(
+            await _service.SubmitAdminAddonAsync(nomineeId, request, User, cancellationToken)));
+
+    [HttpPost("orders/{orderId}/confirm-addon")]
+    public async Task<ActionResult<ApiResponse<OrderDto>>> ConfirmAddon(
+        string orderId, CancellationToken cancellationToken)
+        => Ok(ApiResponse<OrderDto>.Ok(await _service.ConfirmAddonAsync(orderId, User, cancellationToken)));
+
     [HttpPost("orders/{orderId}/reschedule")]
     public async Task<ActionResult<ApiResponse<OrderDto>>> Reschedule(
         string orderId, RescheduleOrderRequest request, CancellationToken cancellationToken)
         => Ok(ApiResponse<OrderDto>.Ok(
             await _service.RescheduleOrderAsync(orderId, request, User, cancellationToken)));
 
+    [HttpPost("orders/{orderId}/nominees/{nomineeId}/shorten")]
+    public async Task<ActionResult<ApiResponse<OrderDto>>> ShortenNomination(
+        string orderId, string nomineeId, ShortenNominationRequest request, CancellationToken cancellationToken)
+        => Ok(ApiResponse<OrderDto>.Ok(
+            await _service.ShortenNominationAsync(orderId, nomineeId, request, User, cancellationToken)));
+
     [HttpPut("orders/{orderId}")]
     public async Task<ActionResult<ApiResponse<OrderDto>>> UpdateOrder(
         string orderId, UpdateAdminOrderRequest request, CancellationToken cancellationToken)
         => Ok(ApiResponse<OrderDto>.Ok(await _service.UpdateOrderAsync(orderId, request, User, cancellationToken)));
+
+    [HttpPost("orders/{orderId}/transition")]
+    public async Task<ActionResult<ApiResponse<OrderDto>>> TransitionOrder(
+        string orderId, OrderTransitionRequest request, CancellationToken cancellationToken)
+        => Ok(ApiResponse<OrderDto>.Ok(
+            await _service.TransitionOrderAsync(orderId, request, User, cancellationToken)));
 
     [HttpPut("orders/{orderId}/items/{itemId}")]
     public async Task<ActionResult<ApiResponse<OrderDto>>> UpdateItem(

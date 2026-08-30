@@ -45,6 +45,12 @@ public sealed class OrderingController : ControllerBase
         SubmitOrderRequest request, CancellationToken cancellationToken)
         => Ok(ApiResponse<OrderDto>.Ok(await _service.SubmitOrderAsync(Token(), request, cancellationToken)));
 
+    [HttpPost("addons")]
+    [EnableRateLimiting("ordering-write")]
+    public async Task<ActionResult<ApiResponse<OrderDto>>> SubmitAddon(
+        SubmitAddonRequest request, CancellationToken cancellationToken)
+        => Ok(ApiResponse<OrderDto>.Ok(await _service.SubmitAddonAsync(Token(), request, cancellationToken)));
+
     private string Token()
         => Request.Headers.TryGetValue("X-Order-Token", out var token) && !string.IsNullOrWhiteSpace(token)
             ? token.ToString()

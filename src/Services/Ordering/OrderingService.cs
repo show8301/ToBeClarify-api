@@ -35,10 +35,12 @@ public sealed class OrderingService : IOrderingService
         ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
         var gameId = Required(request.GameId, "GAME_ID_REQUIRED");
-        var day = DateOnly.FromDateTime(_clock.LocalDateTime);
+        var settings = await _repository.GetSettingsAsync(cancellationToken);
+        var context = await ResolveBusinessContextAsync(settings, _clock.LocalDateTime, cancellationToken);
+        var day = context.CurrentBusinessDate
+            ?? throw new BusinessException("目前不在設定的營業時段內，無法開立點餐碼。", "ORDERING_CLOSED");
         if (await _repository.GetSessionByGameIdAsync(gameId, day, cancellationToken) is not null)
             throw new BusinessException("此顧客今天已有點餐碼，請使用尋回功能。", "ORDER_SESSION_EXISTS");
-        var settings = await _repository.GetSettingsAsync(cancellationToken);
         var id = NewId();
         var token = _tokens.Create(id, gameId, day);
         var recoveryCode = _tokens.CreateRecoveryCode();
@@ -65,7 +67,9 @@ public sealed class OrderingService : IOrderingService
         CancellationToken cancellationToken)
     {
         var session = await GetSessionByIdAsync(sessionId, cancellationToken);
-        EnsureTodayAndActive(session);
+        var context = await ResolveBusinessContextAsync(await _repository.GetSettingsAsync(cancellationToken),
+            _clock.LocalDateTime, cancellationToken);
+        EnsureCurrentAndActive(session, context.CurrentBusinessDate);
         var token = _tokens.Create(session.Id, session.GameId, DateOnly.FromDateTime(session.BusinessDate));
         var recoveryCode = _tokens.CreateRecoveryCode();
         await _repository.RotateSessionCredentialsAsync(session.Id, _tokens.Hash(token), _tokens.Hash(recoveryCode),
@@ -96,10 +100,13 @@ public sealed class OrderingService : IOrderingService
         CancellationToken cancellationToken)
     {
         var gameId = Required(request.GameId, "GAME_ID_REQUIRED");
-        var day = DateOnly.FromDateTime(_clock.LocalDateTime);
+        var context = await ResolveBusinessContextAsync(await _repository.GetSettingsAsync(cancellationToken),
+            _clock.LocalDateTime, cancellationToken);
+        var day = context.CurrentBusinessDate
+            ?? throw new BusinessException("目前不在設定的營業時段內，無法尋回點餐碼。", "ORDERING_CLOSED");
         var session = await _repository.GetSessionByGameIdAsync(gameId, day, cancellationToken)
             ?? throw new BusinessException("找不到今天的點餐資料，請洽店員。", "ORDER_SESSION_NOT_FOUND");
-        EnsureTodayAndActive(session);
+        EnsureCurrentAndActive(session, day);
         var expected = Convert.FromHexString(session.RecoveryCodeHash);
         var provided = Convert.FromHexString(_tokens.Hash(request.RecoveryCode));
         if (!CryptographicOperations.FixedTimeEquals(expected, provided))
@@ -133,6 +140,9 @@ public sealed class OrderingService : IOrderingService
 
         var settings = await _repository.GetSettingsAsync(cancellationToken);
         var now = _clock.LocalDateTime;
+        var businessContext = await ResolveBusinessContextAsync(settings, now, cancellationToken);
+        var businessDate = businessContext.CurrentBusinessDate
+            ?? throw new BusinessException("目前不在設定的營業時段內，無法送出訂單。", "ORDERING_CLOSED");
         if (request.Nominations.Count > 0 && settings.NominationPausedUntil is { } pausedUntil && pausedUntil > now)
             throw new BusinessException("目前暫停受理指名服務，請稍後再試。", "NOMINATION_PAUSED");
 
@@ -157,41 +167,55 @@ public sealed class OrderingService : IOrderingService
 
         foreach (var line in request.Nominations)
         {
-            var offer = await _repository.GetStaffOfferAsync(Required(line.StaffId, "STAFF_ID_REQUIRED"),
-                Required(line.ServiceId, "SERVICE_ID_REQUIRED"), cancellationToken);
-            if (offer is null || !offer.IsWorkingToday || !offer.StaffIsNominatable ||
-                !offer.ServiceIsNominatable || !offer.ServiceIsEnabled || !offer.Price.HasValue)
-                throw new BusinessException("此店員或服務目前無法指名。", "NOMINATION_UNAVAILABLE");
+            var staffId = Required(line.StaffId, "STAFF_ID_REQUIRED");
+            var mode = line.Mode == "companionship" ? "companionship" : "service";
+            var staff = await _repository.GetStaffNominationAsync(staffId, businessDate, cancellationToken);
+            if (staff is null || !staff.IsWorkingToday || !staff.StaffIsNominatable)
+                throw new BusinessException("此店員目前無法指名。", "NOMINATION_UNAVAILABLE");
+            StaffOfferRow? offer = null;
+            if (mode == "service")
+            {
+                offer = await _repository.GetStaffOfferAsync(staffId,
+                    Required(line.ServiceId, "SERVICE_ID_REQUIRED"), businessDate, cancellationToken);
+                if (offer is null || !offer.ServiceIsNominatable || !offer.ServiceIsEnabled || !offer.Price.HasValue)
+                    throw new BusinessException("此服務目前無法指名。", "NOMINATION_UNAVAILABLE");
+            }
             var startsAt = ToTaiwanDateTime(line.RequestedStartsAt);
             if (startsAt < now)
                 throw new BusinessException("指名開始時間不可早於目前時間。", "NOMINATION_START_IN_PAST");
             var coveredMinutes = checked(line.SegmentCount * settings.SegmentMinutes);
-            var serviceDuration = offer.DurationMinutes is > 0 ? offer.DurationMinutes.Value : coveredMinutes;
+            var serviceDuration = offer?.DurationMinutes is > 0 ? offer.DurationMinutes.Value : coveredMinutes;
             var requiredSegments = (int)Math.Ceiling(serviceDuration / (double)settings.SegmentMinutes);
             if (line.SegmentCount < requiredSegments)
-                throw new BusinessException($"{offer.ServiceName} 需要至少 {requiredSegments} 節，才能完整覆蓋 {serviceDuration} 分鐘。",
+                throw new BusinessException($"{offer?.ServiceName ?? "純陪伴"} 需要至少 {requiredSegments} 節，才能完整覆蓋 {serviceDuration} 分鐘。",
                     "NOMINATION_SEGMENTS_INSUFFICIENT");
             // Slots are sold in whole segments. A 30-minute service therefore reserves
             // the staff for the full 40-minute two-segment window before their buffer.
             var serviceEnds = startsAt.AddMinutes(coveredMinutes);
-            var busyUntil = serviceEnds.AddMinutes(Math.Max(0, offer.BufferMinutes));
-            if (await _repository.IsStaffBusyAsync(offer.StaffId, startsAt, busyUntil, cancellationToken))
-                throw new BusinessException($"{offer.StaffName} 在所選時段已忙碌，請改選時段。", "STAFF_TIME_CONFLICT");
+            var busyUntil = serviceEnds.AddMinutes(Math.Max(0, staff.BufferMinutes));
+            if (busyUntil > businessContext.ReferenceEndsAt.DateTime)
+                throw new BusinessException("所選時段加上服務與休息時間後超出本營業日，請提早開始。", "NOMINATION_OUTSIDE_BUSINESS_HOURS");
+            if (await _repository.IsStaffBusyAsync(staff.StaffId, startsAt, busyUntil, cancellationToken))
+                throw new BusinessException($"{staff.StaffName} 在所選時段已忙碌，請改選時段。", "STAFF_TIME_CONFLICT");
 
             var baseItemId = NewId();
             var baseTotal = checked(settings.BaseNominationFee * line.SegmentCount);
-            items.Add(new NewOrderItem(baseItemId, "nomination_base", offer.StaffId, null,
-                $"{offer.StaffName}｜基礎指名費", settings.BaseNominationFee, line.SegmentCount,
+            items.Add(new NewOrderItem(baseItemId, "nomination_base", staff.StaffId, null,
+                $"{staff.StaffName}｜基礎指名費", settings.BaseNominationFee, line.SegmentCount,
                 line.SegmentCount, coveredMinutes, baseTotal, "per_segment", sort++));
 
-            var perService = checked(offer.Price.Value + Math.Max(0, line.ParticipantCount - 1) * (offer.AdditionalPersonPrice ?? 0));
-            var serviceTotal = offer.DurationMinutes is > 0 ? perService : checked(perService * line.SegmentCount);
-            items.Add(new NewOrderItem(NewId(), "staff_service", offer.ServiceId, baseItemId,
-                $"{offer.StaffName}｜{offer.ServiceName}", perService,
-                offer.DurationMinutes is > 0 ? 1 : line.SegmentCount, line.SegmentCount, serviceDuration,
-                serviceTotal, offer.DurationMinutes is > 0 ? "fixed_duration" : "per_segment", sort++));
-            nominees.Add(new NewOrderNominee(NewId(), offer.StaffId, offer.StaffName, offer.ServiceId,
-                offer.ServiceName, line.SegmentCount, coveredMinutes, startsAt, serviceEnds, busyUntil));
+            if (offer is not null)
+            {
+                var perService = checked(offer.Price!.Value + Math.Max(0, line.ParticipantCount - 1) * (offer.AdditionalPersonPrice ?? 0));
+                var serviceTotal = offer.DurationMinutes is > 0 ? perService : checked(perService * line.SegmentCount);
+                items.Add(new NewOrderItem(NewId(), "staff_service", offer.ServiceId, baseItemId,
+                    $"{offer.StaffName}｜{offer.ServiceName}", perService,
+                    offer.DurationMinutes is > 0 ? 1 : line.SegmentCount, line.SegmentCount, serviceDuration,
+                    serviceTotal, offer.DurationMinutes is > 0 ? "fixed_duration" : "per_segment", sort++));
+            }
+            nominees.Add(new NewOrderNominee(NewId(), staff.StaffId, staff.StaffName, offer?.ServiceId,
+                offer?.ServiceName ?? "純陪伴", mode, line.SegmentCount, serviceDuration, settings.SegmentMinutes,
+                coveredMinutes, Math.Max(0, staff.BufferMinutes), startsAt, serviceEnds, busyUntil));
         }
 
         foreach (var line in request.Tips)
@@ -216,12 +240,22 @@ public sealed class OrderingService : IOrderingService
         var subtotal = items.Sum(item => item.LineTotal);
         var creditApplied = Math.Min(session.RemainingMealCredit, mealSubtotal);
         var hasNomination = nominees.Count > 0;
-        var aggregate = new NewOrderAggregate(orderId, session.Id, CreateOrderNumber(now),
+        var aggregate = new NewOrderAggregate(orderId, session.Id, CreateOrderNumber(now), "standard", null,
             hasNomination ? "submitted" : "confirmed", hasNomination ? now : null, now,
             subtotal, creditApplied, subtotal - creditApplied,
             string.IsNullOrWhiteSpace(request.CustomerNote) ? null : request.CustomerNote.Trim(), items, nominees, tips);
         await _repository.CreateOrderAsync(aggregate, cancellationToken);
         return (await MapOrdersAsync(await _repository.GetOrderAsync(orderId, cancellationToken), cancellationToken)).Single();
+    }
+
+    public async Task<OrderDto> SubmitAddonAsync(string token, SubmitAddonRequest request,
+        CancellationToken cancellationToken)
+    {
+        var session = await ValidateTokenAsync(token, cancellationToken);
+        var parent = await GetAddonParentAsync(request.ParentNomineeId, cancellationToken);
+        if (parent.SessionId != session.Id)
+            throw new ForbiddenException("不可替其他顧客的指名追加服務。", "ADDON_SESSION_FORBIDDEN");
+        return await CreateAddonAsync(parent, request, "customer", null, null, false, cancellationToken);
     }
 
     public async Task<IReadOnlyList<OrderDto>> GetMyOrdersAsync(string token, CancellationToken cancellationToken)
@@ -233,7 +267,7 @@ public sealed class OrderingService : IOrderingService
     public async Task<IReadOnlyList<AdminOrderSessionDto>> GetAdminSessionsAsync(DateOnly? businessDate,
         string? search, CancellationToken cancellationToken)
     {
-        var day = businessDate ?? DateOnly.FromDateTime(_clock.LocalDateTime);
+        var day = businessDate ?? (await GetBusinessContextAsync(cancellationToken)).ReferenceBusinessDate;
         return (await _repository.GetAdminSessionsAsync(day, search, cancellationToken)).Select(row =>
             new AdminOrderSessionDto(MapSession(row), row.OrderCount, row.WaitingOrderCount,
                 row.ConfirmedOrderCount, row.TotalAmount, ToOffset(row.LastOrderedAt))).ToArray();
@@ -248,12 +282,18 @@ public sealed class OrderingService : IOrderingService
     public async Task<OrderingSettingsDto> GetSettingsAsync(CancellationToken cancellationToken)
         => MapSettings(await _repository.GetSettingsAsync(cancellationToken));
 
+    public async Task<OrderingBusinessContextDto> GetBusinessContextAsync(CancellationToken cancellationToken)
+        => await ResolveBusinessContextAsync(await _repository.GetSettingsAsync(cancellationToken),
+            _clock.LocalDateTime, cancellationToken);
+
     public async Task<OrderingSettingsDto> SaveSettingsAsync(UpdateOrderingSettingsRequest request,
         ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
         if (!(request.ReminderAfterMinutes < request.EscalateAfterMinutes &&
               request.EscalateAfterMinutes < request.ExpireAfterMinutes))
             throw new BusinessException("提醒時間必須早於升級時間，升級時間必須早於失效時間。", "ORDER_TIMEOUT_SEQUENCE_INVALID");
+        ValidateBusinessHours(request.BusinessDayStartMinute, request.BusinessDayEndMinute,
+            request.BusinessDayEndsNextDay);
         var row = new OrderingSettingsRow
         {
             MinimumMealCredit = request.MinimumMealCredit,
@@ -261,7 +301,10 @@ public sealed class OrderingService : IOrderingService
             SegmentMinutes = request.SegmentMinutes,
             ReminderAfterMinutes = request.ReminderAfterMinutes,
             EscalateAfterMinutes = request.EscalateAfterMinutes,
-            ExpireAfterMinutes = request.ExpireAfterMinutes
+            ExpireAfterMinutes = request.ExpireAfterMinutes,
+            BusinessDayStartMinute = request.BusinessDayStartMinute,
+            BusinessDayEndMinute = request.BusinessDayEndMinute,
+            BusinessDayEndsNextDay = request.BusinessDayEndsNextDay
         };
         await _repository.SaveSettingsAsync(row, ActorId(actor), _clock.LocalDateTime, cancellationToken);
         return await GetSettingsAsync(cancellationToken);
@@ -298,7 +341,67 @@ public sealed class OrderingService : IOrderingService
     public async Task<OrderDto> UpdateOrderAsync(string orderId, UpdateAdminOrderRequest request,
         ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
-        await _repository.UpdateOrderAsync(orderId, request.CustomerNote, request.InternalNote, request.Status,
+        if (!string.IsNullOrWhiteSpace(request.Status))
+            throw new BusinessException("不可直接指定訂單狀態，請使用合法的狀態操作。", "ORDER_STATUS_DIRECT_UPDATE_FORBIDDEN");
+        await _repository.UpdateOrderAsync(orderId, request.CustomerNote, request.InternalNote,
+            ActorId(actor), ActorRole(actor), _clock.LocalDateTime, cancellationToken);
+        return (await MapOrdersAsync(await _repository.GetOrderAsync(orderId, cancellationToken), cancellationToken)).Single();
+    }
+
+    public async Task<IReadOnlyList<StaffServiceDto>> GetAddonOptionsAsync(string nomineeId,
+        ClaimsPrincipal actor, CancellationToken cancellationToken)
+    {
+        var parent = await GetAddonParentAsync(nomineeId, cancellationToken);
+        EnsureAddonActor(parent, actor);
+        EnsureAddonParentActive(parent);
+        return (await _staffService.GetStaffServicesAsync(parent.StaffId, cancellationToken))
+            .Where(item => item.IsNominatable && item.Price.HasValue).ToArray();
+    }
+
+    public async Task<OrderDto> SubmitAdminAddonAsync(string nomineeId, SubmitAddonRequest request,
+        ClaimsPrincipal actor, CancellationToken cancellationToken)
+    {
+        var parent = await GetAddonParentAsync(nomineeId, cancellationToken);
+        EnsureAddonActor(parent, actor);
+        var normalized = new SubmitAddonRequest
+        {
+            ParentNomineeId = nomineeId,
+            ServiceId = request.ServiceId,
+            SegmentCount = request.SegmentCount,
+            ParticipantCount = request.ParticipantCount
+        };
+        return await CreateAddonAsync(parent, normalized, "staff", ActorId(actor), ActorRole(actor), true,
+            cancellationToken);
+    }
+
+    public async Task<OrderDto> ConfirmAddonAsync(string orderId, ClaimsPrincipal actor,
+        CancellationToken cancellationToken)
+    {
+        var staffId = actor.FindFirstValue(AdminAuthConstants.StaffMemberIdClaimType)
+            ?? throw new ForbiddenException("此帳號尚未連結店員，無法確認加購服務。", "STAFF_ACCOUNT_NOT_LINKED");
+        await _repository.ConfirmAddonAsync(orderId, staffId, ActorId(actor), _clock.LocalDateTime,
+            cancellationToken);
+        return (await MapOrdersAsync(await _repository.GetOrderAsync(orderId, cancellationToken), cancellationToken)).Single();
+    }
+
+    public async Task<OrderDto> ShortenNominationAsync(string orderId, string nomineeId,
+        ShortenNominationRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken)
+    {
+        var reason = Required(request.Reason, "NOMINATION_SHORTEN_REASON_REQUIRED");
+        await _repository.ShortenNominationAsync(orderId,
+            Required(nomineeId, "ORDER_NOMINEE_ID_REQUIRED"), request.SegmentCount, reason,
+            ActorId(actor), ActorRole(actor), _clock.LocalDateTime, cancellationToken);
+        return (await MapOrdersAsync(await _repository.GetOrderAsync(orderId, cancellationToken), cancellationToken)).Single();
+    }
+
+    public async Task<OrderDto> TransitionOrderAsync(string orderId, OrderTransitionRequest request,
+        ClaimsPrincipal actor, CancellationToken cancellationToken)
+    {
+        var action = Required(request.Action, "ORDER_TRANSITION_ACTION_REQUIRED");
+        if (action is "cancel" or "reject" or "return_to_reschedule" && string.IsNullOrWhiteSpace(request.Reason))
+            throw new BusinessException("取消、退回或要求重新排程時必須填寫原因。", "ORDER_TRANSITION_REASON_REQUIRED");
+        await _repository.TransitionOrderAsync(orderId, action,
+            string.IsNullOrWhiteSpace(request.Reason) ? null : request.Reason.Trim(),
             ActorId(actor), ActorRole(actor), _clock.LocalDateTime, cancellationToken);
         return (await MapOrdersAsync(await _repository.GetOrderAsync(orderId, cancellationToken), cancellationToken)).Single();
     }
@@ -346,15 +449,18 @@ public sealed class OrderingService : IOrderingService
         if (string.IsNullOrWhiteSpace(token))
             throw new BusinessException("缺少點餐碼。", "ORDER_TOKEN_REQUIRED");
         var payload = _tokens.Read(token.Trim());
-        var today = DateOnly.FromDateTime(_clock.LocalDateTime);
-        if (payload.BusinessDate != today)
+        var context = await ResolveBusinessContextAsync(await _repository.GetSettingsAsync(cancellationToken),
+            _clock.LocalDateTime, cancellationToken);
+        var currentBusinessDate = context.CurrentBusinessDate
+            ?? throw new BusinessException("目前不在設定的營業時段內。", "ORDERING_CLOSED");
+        if (payload.BusinessDate != currentBusinessDate)
             throw new BusinessException("點餐碼僅限開立當日使用。", "ORDER_TOKEN_EXPIRED");
         var session = await _repository.GetSessionByTokenHashAsync(_tokens.Hash(token.Trim()), cancellationToken)
             ?? throw new BusinessException("點餐碼已失效或已重新補發。", "ORDER_TOKEN_REVOKED");
         if (!string.Equals(session.Id, payload.SessionId, StringComparison.Ordinal) ||
             !string.Equals(session.GameId, payload.GameId, StringComparison.Ordinal))
             throw new BusinessException("點餐碼資料不一致。", "ORDER_TOKEN_MISMATCH");
-        EnsureTodayAndActive(session);
+        EnsureCurrentAndActive(session, currentBusinessDate);
         return session;
     }
 
@@ -362,11 +468,11 @@ public sealed class OrderingService : IOrderingService
         => await _repository.GetSessionByIdAsync(Required(sessionId, "ORDER_SESSION_ID_REQUIRED"), cancellationToken)
             ?? throw new BusinessException("找不到顧客點餐資料。", "ORDER_SESSION_NOT_FOUND");
 
-    private void EnsureTodayAndActive(OrderSessionRow session)
+    private static void EnsureCurrentAndActive(OrderSessionRow session, DateOnly? currentBusinessDate)
     {
         if (session.SessionStatus != "active")
             throw new BusinessException("此點餐碼已停用。", "ORDER_SESSION_INACTIVE");
-        if (DateOnly.FromDateTime(session.BusinessDate) != DateOnly.FromDateTime(_clock.LocalDateTime))
+        if (!currentBusinessDate.HasValue || DateOnly.FromDateTime(session.BusinessDate) != currentBusinessDate.Value)
             throw new BusinessException("點餐碼僅限開立當日使用。", "ORDER_TOKEN_EXPIRED");
     }
 
@@ -379,26 +485,103 @@ public sealed class OrderingService : IOrderingService
             var queueMinutes = order.QueueEnteredAt.HasValue
                 ? Math.Max(0, (int)Math.Floor((now - order.QueueEnteredAt.Value).TotalMinutes)) : 0;
             var stage = QueueStage(order.OrderStatus, queueMinutes, settings);
-            return new OrderDto(order.Id, order.OrderNumber, order.OrderStatus, stage, queueMinutes,
+            return new OrderDto(order.Id, order.OrderNumber, order.OrderKind, order.ParentNomineeId,
+                order.OrderStatus, stage, queueMinutes,
                 ToOffset(order.SubmittedAt)!.Value, ToOffset(order.ConfirmedAt), order.Subtotal,
                 order.MealCreditApplied, order.TotalAmount, order.CustomerNote, order.InternalNote,
                 bundle.Items.Where(item => item.OrderId == order.Id).OrderBy(item => item.SortOrder).Select(item =>
                     new OrderItemDto(item.Id, item.ItemType, item.ReferenceId, item.ParentItemId,
                         item.NameSnapshot, item.UnitPrice, item.Quantity, item.SegmentCount,
                         item.DurationMinutes, item.LineTotal, item.PriceRule)).ToArray(),
-                bundle.Nominees.Where(item => item.OrderId == order.Id).Select(item =>
-                    new OrderNomineeDto(item.Id, item.StaffId, item.StaffNameSnapshot, item.ServiceId,
-                        item.ServiceNameSnapshot, item.SegmentCount, item.ServiceDurationMinutes,
-                        ToOffset(item.RequestedStartsAt)!.Value, ToOffset(item.RequestedServiceEndsAt)!.Value,
-                        ToOffset(item.RequestedBusyUntil)!.Value, item.ConfirmationStatus,
-                        ToOffset(item.ConfirmedAt))).ToArray(),
+                bundle.Nominees.Where(item => item.OrderId == order.Id)
+                    .Select(item => MapNominee(item, bundle)).ToArray(),
                 bundle.Tips.Where(item => item.OrderId == order.Id).Select(item =>
                     new OrderTipDto(item.Id, item.StaffId, item.StaffNameSnapshot, item.TipAmount,
                         item.StaffPercentage, item.StorePercentage, item.StaffAmount, item.StoreAmount)).ToArray(),
+                bundle.Addons.Where(item => item.OrderId == order.Id).Select(item =>
+                    new OrderAddonDto(item.Id, item.ParentNomineeId, item.StaffId, item.StaffNameSnapshot,
+                        item.ServiceId, item.ServiceNameSnapshot, item.SegmentCount, item.ServiceDurationMinutes,
+                        item.ParticipantCount, item.AddonStatus, ToOffset(item.ConfirmedAt))).ToArray(),
                 bundle.History.Where(item => item.OrderId == order.Id).Select(item =>
                     new OrderStatusHistoryDto(item.FromStatus ?? string.Empty, item.ToStatus, item.Reason,
                         item.ActorType, ToOffset(item.CreatedAt)!.Value)).ToArray());
         }).ToArray();
+    }
+
+    private static OrderNomineeDto MapNominee(OrderNomineeRow item, OrderBundle bundle)
+    {
+        var serviceItem = bundle.Items.FirstOrDefault(row => row.OrderId == item.OrderId &&
+            row.ItemType == "staff_service" && row.ReferenceId == item.ServiceId);
+        var segmentMinutes = Math.Max(1, item.SegmentMinutesSnapshot);
+        var minimumSegments = serviceItem?.PriceRule == "fixed_duration"
+            ? (int)Math.Ceiling(item.ServiceDurationMinutes / (double)segmentMinutes)
+            : 1;
+        return new OrderNomineeDto(item.Id, item.StaffId, item.StaffNameSnapshot, item.ServiceId,
+            item.ServiceNameSnapshot, item.NominationMode, item.SegmentCount, item.ServiceDurationMinutes,
+            segmentMinutes, minimumSegments, item.ReservedMinutes, item.BufferMinutesSnapshot,
+            ToOffset(item.RequestedStartsAt)!.Value, ToOffset(item.RequestedServiceEndsAt)!.Value,
+            ToOffset(item.RequestedBusyUntil)!.Value, item.ConfirmationStatus, ToOffset(item.ConfirmedAt));
+    }
+
+    private async Task<AddonParentRow> GetAddonParentAsync(string nomineeId, CancellationToken cancellationToken)
+        => await _repository.GetAddonParentAsync(Required(nomineeId, "ADDON_PARENT_REQUIRED"), cancellationToken)
+            ?? throw new BusinessException("找不到原指名時段。", "ADDON_PARENT_NOT_FOUND");
+
+    private void EnsureAddonParentActive(AddonParentRow parent)
+    {
+        if (parent.ParentOrderStatus is not ("confirmed" or "in_service") ||
+            parent.ServiceEndsAt <= _clock.LocalDateTime)
+            throw new BusinessException("只有已成立且尚未結束的指名時段可以追加服務。", "ADDON_PARENT_INACTIVE");
+    }
+
+    private static void EnsureAddonActor(AddonParentRow parent, ClaimsPrincipal actor)
+    {
+        var role = ActorRole(actor);
+        var staffId = actor.FindFirstValue(AdminAuthConstants.StaffMemberIdClaimType);
+        if (staffId != parent.StaffId && role is not ("manager" or "developer"))
+            throw new ForbiddenException("只有被指名店員本人、店經理或開發者可以代客追加服務。", "ADDON_SCOPE_FORBIDDEN");
+    }
+
+    private async Task<OrderDto> CreateAddonAsync(AddonParentRow parent, SubmitAddonRequest request,
+        string actorType, string? actorId, string? actorRole, bool confirmImmediately,
+        CancellationToken cancellationToken)
+    {
+        EnsureAddonParentActive(parent);
+        var now = _clock.LocalDateTime;
+        var offer = await _repository.GetStaffOfferAsync(parent.StaffId,
+            Required(request.ServiceId, "ADDON_SERVICE_REQUIRED"), DateOnly.FromDateTime(parent.BusinessDate),
+            cancellationToken);
+        if (offer is null || !offer.ServiceIsNominatable || !offer.ServiceIsEnabled || !offer.Price.HasValue)
+            throw new BusinessException("此服務目前無法加購。", "ADDON_SERVICE_UNAVAILABLE");
+
+        var effectiveStart = parent.StartsAt > now ? parent.StartsAt : now;
+        var remainingMinutes = Math.Max(0, (int)Math.Floor((parent.ServiceEndsAt - effectiveStart).TotalMinutes));
+        var segmentMinutes = Math.Max(1, parent.SegmentMinutes);
+        var requestedDuration = offer.DurationMinutes is > 0
+            ? offer.DurationMinutes.Value
+            : checked(request.SegmentCount * segmentMinutes);
+        var minimumSegments = (int)Math.Ceiling(requestedDuration / (double)segmentMinutes);
+        if (request.SegmentCount < minimumSegments)
+            throw new BusinessException($"此加購服務至少需要 {minimumSegments} 節。", "ADDON_SEGMENTS_INSUFFICIENT");
+        if (requestedDuration > remainingMinutes)
+            throw new BusinessException($"原指名目前只剩 {remainingMinutes} 分鐘，無法放入 {requestedDuration} 分鐘的服務；請另開新指名訂單。",
+                "ADDON_EXCEEDS_REMAINING_TIME");
+
+        var unitPrice = checked(offer.Price.Value + Math.Max(0, request.ParticipantCount - 1) *
+            (offer.AdditionalPersonPrice ?? 0));
+        var quantity = offer.DurationMinutes is > 0 ? 1 : request.SegmentCount;
+        var total = checked(unitPrice * quantity);
+        var orderId = NewId();
+        var status = confirmImmediately ? "confirmed" : "submitted";
+        var item = new NewOrderItem(NewId(), "staff_service_addon", offer.ServiceId, null,
+            $"{parent.StaffName}｜加購 {offer.ServiceName}", unitPrice, quantity, request.SegmentCount,
+            requestedDuration, total, offer.DurationMinutes is > 0 ? "fixed_duration" : "per_segment", 0);
+        var aggregate = new NewAddonAggregate(orderId, parent.SessionId, CreateOrderNumber(now), parent.NomineeId,
+            status, confirmImmediately ? null : now, now, total, item, NewId(), parent.StaffId, parent.StaffName,
+            offer.ServiceId, offer.ServiceName, request.SegmentCount, requestedDuration, request.ParticipantCount,
+            confirmImmediately ? "confirmed" : "waiting", actorType, actorId, actorRole);
+        await _repository.CreateAddonOrderAsync(aggregate, cancellationToken);
+        return (await MapOrdersAsync(await _repository.GetOrderAsync(orderId, cancellationToken), cancellationToken)).Single();
     }
 
     private static string QueueStage(string status, int minutes, OrderingSettingsRow settings)
@@ -420,7 +603,66 @@ public sealed class OrderingService : IOrderingService
     private OrderingSettingsDto MapSettings(OrderingSettingsRow row)
         => new(row.MinimumMealCredit, row.BaseNominationFee, row.SegmentMinutes,
             row.ReminderAfterMinutes, row.EscalateAfterMinutes, row.ExpireAfterMinutes,
+            row.BusinessDayStartMinute, row.BusinessDayEndMinute, row.BusinessDayEndsNextDay,
             ToOffset(row.NominationPausedUntil), row.NominationPausedUntil > _clock.LocalDateTime);
+
+    private async Task<OrderingBusinessContextDto> ResolveBusinessContextAsync(OrderingSettingsRow settings,
+        DateTime now, CancellationToken cancellationToken)
+    {
+        ValidateBusinessHours(settings.BusinessDayStartMinute, settings.BusinessDayEndMinute,
+            settings.BusinessDayEndsNextDay);
+        var persisted = await _repository.GetActiveBusinessPeriodAsync(now, cancellationToken);
+        if (persisted is not null)
+        {
+            return new OrderingBusinessContextDto(DateOnly.FromDateTime(persisted.BusinessDate),
+                DateOnly.FromDateTime(persisted.BusinessDate), ClientContentMappings.ToTaiwanOffset(persisted.StartsAt),
+                ClientContentMappings.ToTaiwanOffset(persisted.EndsAt), true);
+        }
+
+        var today = DateOnly.FromDateTime(now);
+        var windows = new[] { WindowFor(today.AddDays(-1), settings), WindowFor(today, settings) };
+        var active = windows.LastOrDefault(window => now >= window.StartsAt && now < window.EndsAt);
+        if (active is not null)
+        {
+            var saved = await _repository.GetOrCreateBusinessPeriodAsync(new BusinessPeriodRow
+            {
+                Id = NewId(),
+                BusinessDate = active.BusinessDate.ToDateTime(TimeOnly.MinValue),
+                StartsAt = active.StartsAt,
+                EndsAt = active.EndsAt
+            }, cancellationToken);
+            var savedWindow = new BusinessWindow(DateOnly.FromDateTime(saved.BusinessDate), saved.StartsAt, saved.EndsAt);
+            if (now >= savedWindow.StartsAt && now < savedWindow.EndsAt)
+                active = savedWindow;
+            else
+                active = null;
+        }
+        var reference = active ?? windows.Where(window => window.StartsAt <= now)
+            .OrderByDescending(window => window.StartsAt).First();
+        return new OrderingBusinessContextDto(active?.BusinessDate, reference.BusinessDate,
+            ClientContentMappings.ToTaiwanOffset(reference.StartsAt),
+            ClientContentMappings.ToTaiwanOffset(reference.EndsAt), active is not null);
+    }
+
+    private static BusinessWindow WindowFor(DateOnly businessDate, OrderingSettingsRow settings)
+    {
+        var startsAt = businessDate.ToDateTime(TimeOnly.MinValue).AddMinutes(settings.BusinessDayStartMinute);
+        var endDate = settings.BusinessDayEndsNextDay ? businessDate.AddDays(1) : businessDate;
+        var endsAt = endDate.ToDateTime(TimeOnly.MinValue).AddMinutes(settings.BusinessDayEndMinute);
+        return new BusinessWindow(businessDate, startsAt, endsAt);
+    }
+
+    private static void ValidateBusinessHours(int startsAtMinute, int endsAtMinute, bool endsNextDay)
+    {
+        if (startsAtMinute is < 0 or > 1439 || endsAtMinute is < 0 or > 1439)
+            throw new BusinessException("營業時間必須介於 00:00 至 23:59。", "BUSINESS_HOURS_INVALID");
+        if (!endsNextDay && endsAtMinute <= startsAtMinute)
+            throw new BusinessException("同日結束時間必須晚於開始時間。", "BUSINESS_HOURS_INVALID");
+        if (endsNextDay && endsAtMinute > startsAtMinute)
+            throw new BusinessException("勾選隔日結束時，結束時間不可晚於開始時間；最長營業區段為 24 小時。", "BUSINESS_HOURS_INVALID");
+    }
+
+    private sealed record BusinessWindow(DateOnly BusinessDate, DateTime StartsAt, DateTime EndsAt);
 
     private static OrderSessionDto MapSession(OrderSessionRow row)
         => new(row.Id, row.GameId, row.CustomerName, DateOnly.FromDateTime(row.BusinessDate),

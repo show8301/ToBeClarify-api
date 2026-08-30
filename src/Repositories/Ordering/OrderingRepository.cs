@@ -18,6 +18,9 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             SELECT `MINIMUM_MEAL_CREDIT` AS MinimumMealCredit, `BASE_NOMINATION_FEE` AS BaseNominationFee,
                    `SEGMENT_MINUTES` AS SegmentMinutes, `REMINDER_AFTER_MINUTES` AS ReminderAfterMinutes,
                    `ESCALATE_AFTER_MINUTES` AS EscalateAfterMinutes, `EXPIRE_AFTER_MINUTES` AS ExpireAfterMinutes,
+                   `BUSINESS_DAY_START_MINUTE` AS BusinessDayStartMinute,
+                   `BUSINESS_DAY_END_MINUTE` AS BusinessDayEndMinute,
+                   `BUSINESS_DAY_ENDS_NEXT_DAY` AS BusinessDayEndsNextDay,
                    `NOMINATION_PAUSED_UNTIL` AS NominationPausedUntil
             FROM `ORDERING_SETTINGS` WHERE `ID` = 'default' LIMIT 1;
             """;
@@ -30,9 +33,12 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
         const string sql = """
             INSERT INTO `ORDERING_SETTINGS`
                 (`ID`, `MINIMUM_MEAL_CREDIT`, `BASE_NOMINATION_FEE`, `SEGMENT_MINUTES`,
-                 `REMINDER_AFTER_MINUTES`, `ESCALATE_AFTER_MINUTES`, `EXPIRE_AFTER_MINUTES`, `UPDATED_AT`, `UPDATED_BY`)
+                 `REMINDER_AFTER_MINUTES`, `ESCALATE_AFTER_MINUTES`, `EXPIRE_AFTER_MINUTES`,
+                 `BUSINESS_DAY_START_MINUTE`, `BUSINESS_DAY_END_MINUTE`, `BUSINESS_DAY_ENDS_NEXT_DAY`,
+                 `UPDATED_AT`, `UPDATED_BY`)
             VALUES ('default', @MinimumMealCredit, @BaseNominationFee, @SegmentMinutes,
-                    @ReminderAfterMinutes, @EscalateAfterMinutes, @ExpireAfterMinutes, @Now, @ActorId)
+                    @ReminderAfterMinutes, @EscalateAfterMinutes, @ExpireAfterMinutes,
+                    @BusinessDayStartMinute, @BusinessDayEndMinute, @BusinessDayEndsNextDay, @Now, @ActorId)
             ON DUPLICATE KEY UPDATE
                 `MINIMUM_MEAL_CREDIT` = VALUES(`MINIMUM_MEAL_CREDIT`),
                 `BASE_NOMINATION_FEE` = VALUES(`BASE_NOMINATION_FEE`),
@@ -40,6 +46,9 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
                 `REMINDER_AFTER_MINUTES` = VALUES(`REMINDER_AFTER_MINUTES`),
                 `ESCALATE_AFTER_MINUTES` = VALUES(`ESCALATE_AFTER_MINUTES`),
                 `EXPIRE_AFTER_MINUTES` = VALUES(`EXPIRE_AFTER_MINUTES`),
+                `BUSINESS_DAY_START_MINUTE` = VALUES(`BUSINESS_DAY_START_MINUTE`),
+                `BUSINESS_DAY_END_MINUTE` = VALUES(`BUSINESS_DAY_END_MINUTE`),
+                `BUSINESS_DAY_ENDS_NEXT_DAY` = VALUES(`BUSINESS_DAY_ENDS_NEXT_DAY`),
                 `UPDATED_AT` = VALUES(`UPDATED_AT`), `UPDATED_BY` = VALUES(`UPDATED_BY`);
             """;
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
@@ -47,6 +56,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
         {
             settings.MinimumMealCredit, settings.BaseNominationFee, settings.SegmentMinutes,
             settings.ReminderAfterMinutes, settings.EscalateAfterMinutes, settings.ExpireAfterMinutes,
+            settings.BusinessDayStartMinute, settings.BusinessDayEndMinute, settings.BusinessDayEndsNextDay,
             Now = now, ActorId = actorId
         }, cancellationToken: cancellationToken));
     }
@@ -154,19 +164,84 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
         return await QuerySingleOrDefaultAsync<MenuProductRow>(sql, new { Id = referenceId }, cancellationToken);
     }
 
-    public async Task<StaffOfferRow?> GetStaffOfferAsync(string staffId, string serviceId, CancellationToken cancellationToken)
+    public async Task<StaffOfferRow?> GetStaffOfferAsync(string staffId, string serviceId, DateOnly businessDate,
+        CancellationToken cancellationToken)
     {
         const string sql = """
-            SELECT M.`ID` AS StaffId, M.`DISPLAY_NAME` AS StaffName, M.`IS_WORKING_TODAY` AS IsWorkingToday,
+            SELECT M.`ID` AS StaffId, M.`DISPLAY_NAME` AS StaffName,
+                   COALESCE(SC.`IS_WORKING`, TRUE) AS IsWorkingToday,
                    M.`IS_NOMINATABLE` AS StaffIsNominatable, M.`BUFFER_MINUTES` AS BufferMinutes,
-                   S.`ID` AS ServiceId, S.`SERVICE_NAME` AS ServiceName, S.`PRICE` AS Price,
-                   S.`DURATION_MINUTES` AS DurationMinutes, S.`IS_NOMINATABLE` AS ServiceIsNominatable,
-                   S.`ADDITIONAL_PERSON_PRICE` AS AdditionalPersonPrice, S.`IS_ENABLED` AS ServiceIsEnabled
+                   SV.`ID` AS ServiceId, SV.`SERVICE_NAME` AS ServiceName, SV.`PRICE` AS Price,
+                   SV.`DURATION_MINUTES` AS DurationMinutes, SV.`IS_NOMINATABLE` AS ServiceIsNominatable,
+                   SV.`ADDITIONAL_PERSON_PRICE` AS AdditionalPersonPrice, SV.`IS_ENABLED` AS ServiceIsEnabled
             FROM `STAFF_MEMBERS` M
-            JOIN `STAFF_SERVICES` S ON S.`STAFF_ID` = M.`ID`
-            WHERE M.`ID` = @StaffId AND S.`ID` = @ServiceId AND M.`IS_ACTIVE` = TRUE LIMIT 1;
+            JOIN `STAFF_SERVICES` SV ON SV.`STAFF_ID` = M.`ID`
+            LEFT JOIN `STAFF_SCHEDULES` SC
+                   ON SC.`STAFF_ID` = M.`ID` AND SC.`WORK_DATE` = @BusinessDate
+            WHERE M.`ID` = @StaffId AND SV.`ID` = @ServiceId AND M.`IS_ACTIVE` = TRUE LIMIT 1;
             """;
-        return await QuerySingleOrDefaultAsync<StaffOfferRow>(sql, new { StaffId = staffId, ServiceId = serviceId }, cancellationToken);
+        return await QuerySingleOrDefaultAsync<StaffOfferRow>(sql, new
+        {
+            StaffId = staffId,
+            ServiceId = serviceId,
+            BusinessDate = businessDate.ToDateTime(TimeOnly.MinValue)
+        }, cancellationToken);
+    }
+
+    public async Task<StaffNominationRow?> GetStaffNominationAsync(string staffId, DateOnly businessDate,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT M.`ID` AS StaffId, M.`DISPLAY_NAME` AS StaffName,
+                   COALESCE(SC.`IS_WORKING`, TRUE) AS IsWorkingToday,
+                   M.`IS_NOMINATABLE` AS StaffIsNominatable, M.`BUFFER_MINUTES` AS BufferMinutes
+            FROM `STAFF_MEMBERS` M
+            LEFT JOIN `STAFF_SCHEDULES` SC
+                   ON SC.`STAFF_ID` = M.`ID` AND SC.`WORK_DATE` = @BusinessDate
+            WHERE M.`ID` = @StaffId AND M.`IS_ACTIVE` = TRUE LIMIT 1;
+            """;
+        return await QuerySingleOrDefaultAsync<StaffNominationRow>(sql, new
+        {
+            StaffId = staffId,
+            BusinessDate = businessDate.ToDateTime(TimeOnly.MinValue)
+        }, cancellationToken);
+    }
+
+    public async Task<BusinessPeriodRow?> GetActiveBusinessPeriodAsync(DateTime now,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT `ID` AS Id, `BUSINESS_DATE` AS BusinessDate, `STARTS_AT` AS StartsAt, `ENDS_AT` AS EndsAt
+            FROM `BUSINESS_PERIODS`
+            WHERE `PERIOD_STATUS` = 'open' AND `STARTS_AT` <= @Now AND `ENDS_AT` > @Now
+            ORDER BY `STARTS_AT` DESC LIMIT 1;
+            """;
+        return await QuerySingleOrDefaultAsync<BusinessPeriodRow>(sql, new { Now = now }, cancellationToken);
+    }
+
+    public async Task<BusinessPeriodRow> GetOrCreateBusinessPeriodAsync(BusinessPeriodRow period,
+        CancellationToken cancellationToken)
+    {
+        const string insertSql = """
+            INSERT IGNORE INTO `BUSINESS_PERIODS`
+                (`ID`, `BUSINESS_DATE`, `STARTS_AT`, `ENDS_AT`, `TIMEZONE`, `PERIOD_STATUS`, `CREATED_AT`, `UPDATED_AT`)
+            VALUES (@Id, @BusinessDate, @StartsAt, @EndsAt, 'Asia/Taipei', 'open', @StartsAt, @StartsAt);
+            """;
+        const string selectSql = """
+            SELECT `ID` AS Id, `BUSINESS_DATE` AS BusinessDate, `STARTS_AT` AS StartsAt, `ENDS_AT` AS EndsAt
+            FROM `BUSINESS_PERIODS` WHERE `BUSINESS_DATE` = @BusinessDate LIMIT 1;
+            """;
+        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        var parameters = new
+        {
+            period.Id,
+            BusinessDate = period.BusinessDate.Date,
+            period.StartsAt,
+            period.EndsAt
+        };
+        await connection.ExecuteAsync(new CommandDefinition(insertSql, parameters, cancellationToken: cancellationToken));
+        return await connection.QuerySingleAsync<BusinessPeriodRow>(new CommandDefinition(selectSql, parameters,
+            cancellationToken: cancellationToken));
     }
 
     public async Task<string?> GetStaffNameAsync(string staffId, CancellationToken cancellationToken)
@@ -204,9 +279,10 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
 
             const string insertOrder = """
                 INSERT INTO `ORDERS`
-                    (`ID`, `SESSION_ID`, `ORDER_NUMBER`, `ORDER_STATUS`, `QUEUE_ENTERED_AT`, `SUBMITTED_AT`,
+                    (`ID`, `SESSION_ID`, `ORDER_NUMBER`, `ORDER_KIND`, `PARENT_NOMINEE_ID`,
+                     `ORDER_STATUS`, `QUEUE_ENTERED_AT`, `SUBMITTED_AT`,
                      `CONFIRMED_AT`, `SUBTOTAL`, `MEAL_CREDIT_APPLIED`, `TOTAL_AMOUNT`, `CUSTOMER_NOTE`, `CREATED_AT`, `UPDATED_AT`)
-                VALUES (@Id, @SessionId, @OrderNumber, @Status, @QueueEnteredAt, @SubmittedAt,
+                VALUES (@Id, @SessionId, @OrderNumber, @OrderKind, @ParentNomineeId, @Status, @QueueEnteredAt, @SubmittedAt,
                         CASE WHEN @Status = 'confirmed' THEN @SubmittedAt ELSE NULL END,
                         @Subtotal, @MealCreditApplied, @TotalAmount, @CustomerNote, @SubmittedAt, @SubmittedAt);
                 UPDATE `CUSTOMER_ORDER_SESSIONS`
@@ -235,15 +311,19 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
                     INSERT INTO `ORDER_NOMINEES`
                         (`ID`, `ORDER_ID`, `STAFF_ID`, `STAFF_NAME_SNAPSHOT`, `SERVICE_ID`, `SERVICE_NAME_SNAPSHOT`,
                          `SEGMENT_COUNT`, `SERVICE_DURATION_MINUTES`, `REQUESTED_STARTS_AT`, `REQUESTED_SERVICE_ENDS_AT`,
-                         `REQUESTED_BUSY_UNTIL`, `CONFIRMATION_STATUS`, `CREATED_AT`, `UPDATED_AT`)
+                         `SEGMENT_MINUTES_SNAPSHOT`, `RESERVED_MINUTES`, `BUFFER_MINUTES_SNAPSHOT`,
+                         `REQUESTED_BUSY_UNTIL`, `NOMINATION_MODE`, `CONFIRMATION_STATUS`, `CREATED_AT`, `UPDATED_AT`)
                     VALUES (@Id, @OrderId, @StaffId, @StaffName, @ServiceId, @ServiceName,
                             @SegmentCount, @ServiceDurationMinutes, @StartsAt, @ServiceEndsAt,
-                            @BusyUntil, 'waiting', @Now, @Now);
+                            @SegmentMinutesSnapshot, @ReservedMinutes, @BufferMinutesSnapshot,
+                            @BusyUntil, @NominationMode, 'waiting', @Now, @Now);
                     """;
                 await connection.ExecuteAsync(new CommandDefinition(insertNominee,
                     order.Nominees.Select(item => new { item.Id, OrderId = order.Id, item.StaffId, item.StaffName,
                         item.ServiceId, item.ServiceName, item.SegmentCount, item.ServiceDurationMinutes,
-                        item.StartsAt, item.ServiceEndsAt, item.BusyUntil, Now = order.SubmittedAt }),
+                        item.SegmentMinutesSnapshot, item.ReservedMinutes, item.BufferMinutesSnapshot,
+                        item.StartsAt, item.ServiceEndsAt, item.BusyUntil, item.NominationMode,
+                        Now = order.SubmittedAt }),
                     transaction, cancellationToken: cancellationToken));
             }
 
@@ -284,6 +364,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
     {
         var sql = $"""
             SELECT O.`ID` AS Id, O.`SESSION_ID` AS SessionId, O.`ORDER_NUMBER` AS OrderNumber,
+                   O.`ORDER_KIND` AS OrderKind, O.`PARENT_NOMINEE_ID` AS ParentNomineeId,
                    O.`ORDER_STATUS` AS OrderStatus, O.`QUEUE_ENTERED_AT` AS QueueEnteredAt,
                    O.`SUBMITTED_AT` AS SubmittedAt, O.`CONFIRMED_AT` AS ConfirmedAt,
                    O.`STARTED_AT` AS StartedAt, O.`COMPLETED_AT` AS CompletedAt,
@@ -301,8 +382,12 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             ORDER BY I.`ORDER_ID`, I.`SORT_ORDER`;
             SELECT N.`ID` AS Id, N.`ORDER_ID` AS OrderId, N.`STAFF_ID` AS StaffId,
                    N.`STAFF_NAME_SNAPSHOT` AS StaffNameSnapshot, N.`SERVICE_ID` AS ServiceId,
-                   N.`SERVICE_NAME_SNAPSHOT` AS ServiceNameSnapshot, N.`SEGMENT_COUNT` AS SegmentCount,
+                   N.`SERVICE_NAME_SNAPSHOT` AS ServiceNameSnapshot, N.`NOMINATION_MODE` AS NominationMode,
+                   N.`SEGMENT_COUNT` AS SegmentCount,
                    N.`SERVICE_DURATION_MINUTES` AS ServiceDurationMinutes,
+                   N.`SEGMENT_MINUTES_SNAPSHOT` AS SegmentMinutesSnapshot,
+                   N.`RESERVED_MINUTES` AS ReservedMinutes,
+                   N.`BUFFER_MINUTES_SNAPSHOT` AS BufferMinutesSnapshot,
                    N.`REQUESTED_STARTS_AT` AS RequestedStartsAt,
                    N.`REQUESTED_SERVICE_ENDS_AT` AS RequestedServiceEndsAt,
                    N.`REQUESTED_BUSY_UNTIL` AS RequestedBusyUntil,
@@ -319,6 +404,13 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
                    H.`CREATED_AT` AS CreatedAt
             FROM `ORDER_STATUS_HISTORY` H JOIN `ORDERS` O ON O.`ID` = H.`ORDER_ID` WHERE {where}
             ORDER BY H.`CREATED_AT`;
+            SELECT A.`ID` AS Id, A.`ORDER_ID` AS OrderId, A.`PARENT_NOMINEE_ID` AS ParentNomineeId,
+                   A.`STAFF_ID` AS StaffId, A.`STAFF_NAME_SNAPSHOT` AS StaffNameSnapshot,
+                   A.`SERVICE_ID` AS ServiceId, A.`SERVICE_NAME_SNAPSHOT` AS ServiceNameSnapshot,
+                   A.`SEGMENT_COUNT` AS SegmentCount, A.`SERVICE_DURATION_MINUTES` AS ServiceDurationMinutes,
+                   A.`PARTICIPANT_COUNT` AS ParticipantCount, A.`ADDON_STATUS` AS AddonStatus,
+                   A.`CONFIRMED_AT` AS ConfirmedAt
+            FROM `ORDER_SERVICE_ADDONS` A JOIN `ORDERS` O ON O.`ID` = A.`ORDER_ID` WHERE {where};
             """;
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         using var grid = await connection.QueryMultipleAsync(new CommandDefinition(sql, new { Value = value }, cancellationToken: cancellationToken));
@@ -327,7 +419,8 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             (await grid.ReadAsync<OrderItemRow>()).AsList(),
             (await grid.ReadAsync<OrderNomineeRow>()).AsList(),
             (await grid.ReadAsync<OrderTipRow>()).AsList(),
-            (await grid.ReadAsync<OrderHistoryRow>()).AsList());
+            (await grid.ReadAsync<OrderHistoryRow>()).AsList(),
+            (await grid.ReadAsync<OrderAddonRow>()).AsList());
     }
 
     public async Task<IReadOnlyList<AdminOrderSessionRow>> GetAdminSessionsAsync(DateOnly businessDate, string? search,
@@ -377,6 +470,9 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             UPDATE `ORDER_NOMINEES` N JOIN `ORDERS` O ON O.`ID` = N.`ORDER_ID`
             SET N.`CONFIRMATION_STATUS` = 'expired', N.`UPDATED_AT` = @Now
             WHERE O.`ORDER_STATUS` = 'expired' AND N.`CONFIRMATION_STATUS` IN ('waiting', 'confirmed');
+            UPDATE `ORDER_SERVICE_ADDONS` A JOIN `ORDERS` O ON O.`ID` = A.`ORDER_ID`
+            SET A.`ADDON_STATUS` = 'expired', A.`UPDATED_AT` = @Now
+            WHERE O.`ORDER_STATUS` = 'expired' AND A.`ADDON_STATUS` = 'waiting';
             """;
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         var command = new CommandDefinition(sql, new { Cutoff = cutoff, Now = now }, cancellationToken: cancellationToken);
@@ -397,14 +493,16 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             if (order.OrderStatus is not ("submitted" or "partially_confirmed"))
                 throw new BusinessException("此訂單目前不可確認。", "ORDER_NOT_CONFIRMABLE");
 
-            var nominee = await connection.QuerySingleOrDefaultAsync<OrderNomineeRow>(new CommandDefinition("""
+            var nominees = (await connection.QueryAsync<OrderNomineeRow>(new CommandDefinition("""
                 SELECT `ID` AS Id, `ORDER_ID` AS OrderId, `STAFF_ID` AS StaffId,
                        `REQUESTED_STARTS_AT` AS RequestedStartsAt,
                        `REQUESTED_SERVICE_ENDS_AT` AS RequestedServiceEndsAt,
                        `REQUESTED_BUSY_UNTIL` AS RequestedBusyUntil,
                        `CONFIRMATION_STATUS` AS ConfirmationStatus
-                FROM `ORDER_NOMINEES` WHERE `ORDER_ID` = @OrderId AND `STAFF_ID` = @StaffId FOR UPDATE;
-                """, new { OrderId = orderId, StaffId = staffId }, transaction, cancellationToken: cancellationToken));
+                FROM `ORDER_NOMINEES` WHERE `ORDER_ID` = @OrderId FOR UPDATE;
+                """, new { OrderId = orderId }, transaction, cancellationToken: cancellationToken))).AsList();
+            await LockStaffRowsAsync(connection, transaction, nominees.Select(item => item.StaffId), cancellationToken);
+            var nominee = nominees.SingleOrDefault(item => item.StaffId == staffId);
             if (nominee is null) throw new BusinessException("你不是此訂單的被指名店員。", "NOMINEE_SCOPE_FORBIDDEN");
             if (nominee.ConfirmationStatus == "confirmed") return order.OrderStatus;
             if (nominee.RequestedStartsAt < now)
@@ -430,14 +528,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
                 """, new { Now = now, ActorId = actorId, NomineeId = nominee.Id }, transaction,
                 cancellationToken: cancellationToken));
 
-            var nominees = (await connection.QueryAsync<OrderNomineeRow>(new CommandDefinition("""
-                SELECT `ID` AS Id, `ORDER_ID` AS OrderId, `STAFF_ID` AS StaffId,
-                       `REQUESTED_STARTS_AT` AS RequestedStartsAt,
-                       `REQUESTED_SERVICE_ENDS_AT` AS RequestedServiceEndsAt,
-                       `REQUESTED_BUSY_UNTIL` AS RequestedBusyUntil,
-                       `CONFIRMATION_STATUS` AS ConfirmationStatus
-                FROM `ORDER_NOMINEES` WHERE `ORDER_ID` = @OrderId FOR UPDATE;
-                """, new { OrderId = orderId }, transaction, cancellationToken: cancellationToken))).AsList();
+            nominee.ConfirmationStatus = "confirmed";
             if (nominees.Any(item => item.ConfirmationStatus != "confirmed"))
             {
                 await connection.ExecuteAsync(new CommandDefinition(
@@ -499,14 +590,14 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
         if (status is not ("submitted" or "partially_confirmed" or "needs_reschedule"))
             throw new BusinessException("此訂單目前不可重新排程。", "ORDER_NOT_RESCHEDULABLE");
         var nominees = (await connection.QueryAsync<OrderNomineeRow>(new CommandDefinition("""
-            SELECT `ID` AS Id, `SERVICE_DURATION_MINUTES` AS ServiceDurationMinutes,
-                   TIMESTAMPDIFF(MINUTE, `REQUESTED_SERVICE_ENDS_AT`, `REQUESTED_BUSY_UNTIL`) AS SegmentCount
+            SELECT `ID` AS Id, `RESERVED_MINUTES` AS ReservedMinutes,
+                   `BUFFER_MINUTES_SNAPSHOT` AS BufferMinutesSnapshot
             FROM `ORDER_NOMINEES` WHERE `ORDER_ID` = @OrderId FOR UPDATE;
             """, new { OrderId = orderId }, transaction, cancellationToken: cancellationToken))).AsList();
         foreach (var nominee in nominees)
         {
-            var serviceEnds = startsAt.AddMinutes(nominee.ServiceDurationMinutes);
-            var buffer = Math.Max(0, nominee.SegmentCount);
+            var serviceEnds = startsAt.AddMinutes(nominee.ReservedMinutes);
+            var buffer = Math.Max(0, nominee.BufferMinutesSnapshot);
             await connection.ExecuteAsync(new CommandDefinition("""
                 UPDATE `ORDER_NOMINEES`
                 SET `REQUESTED_STARTS_AT` = @StartsAt, `REQUESTED_SERVICE_ENDS_AT` = @ServiceEnds,
@@ -526,7 +617,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
         await transaction.CommitAsync(cancellationToken);
     }
 
-    public async Task UpdateOrderAsync(string orderId, string? customerNote, string? internalNote, string? status,
+    public async Task UpdateOrderAsync(string orderId, string? customerNote, string? internalNote,
         string actorId, string actorRole, DateTime now, CancellationToken cancellationToken)
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
@@ -539,44 +630,392 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             ?? throw new BusinessException("找不到訂單。", "ORDER_NOT_FOUND");
         if (current.OrderStatus is "completed" or "cancelled" or "expired" or "rejected")
             throw new BusinessException("已結案訂單不可修改。", "ORDER_LOCKED");
-        var nextStatus = status ?? current.OrderStatus;
         await connection.ExecuteAsync(new CommandDefinition("""
             UPDATE `ORDERS` SET `CUSTOMER_NOTE` = COALESCE(@CustomerNote, `CUSTOMER_NOTE`),
                    `INTERNAL_NOTE` = COALESCE(@InternalNote, `INTERNAL_NOTE`),
-                   `ORDER_STATUS` = @Status,
-                   `STARTED_AT` = CASE WHEN @Status = 'in_service' THEN COALESCE(`STARTED_AT`, @Now) ELSE `STARTED_AT` END,
-                   `COMPLETED_AT` = CASE WHEN @Status = 'completed' THEN COALESCE(`COMPLETED_AT`, @Now) ELSE `COMPLETED_AT` END,
-                   `CANCELLED_AT` = CASE WHEN @Status IN ('cancelled', 'rejected') THEN COALESCE(`CANCELLED_AT`, @Now) ELSE `CANCELLED_AT` END,
                    `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId WHERE `ID` = @OrderId;
-            """, new { CustomerNote = customerNote, InternalNote = internalNote, Status = nextStatus,
+            """, new { CustomerNote = customerNote, InternalNote = internalNote,
                 Now = now, ActorId = actorId, OrderId = orderId }, transaction, cancellationToken: cancellationToken));
-        if (nextStatus is "cancelled" or "rejected")
-        {
-            await connection.ExecuteAsync(new CommandDefinition("""
-                UPDATE `STAFF_BUSY_BLOCKS` SET `BLOCK_STATUS` = 'released', `UPDATED_AT` = @Now
-                WHERE `ORDER_ID` = @OrderId AND `BLOCK_STATUS` = 'active';
-                UPDATE `ORDER_NOMINEES` SET `CONFIRMATION_STATUS` = @Status, `UPDATED_AT` = @Now
-                WHERE `ORDER_ID` = @OrderId;
-                UPDATE `CUSTOMER_ORDER_SESSIONS`
-                SET `REMAINING_MEAL_CREDIT` = `REMAINING_MEAL_CREDIT` + @Credit, `UPDATED_AT` = @Now
-                WHERE `ID` = @SessionId;
-                """, new { Now = now, OrderId = orderId, Status = nextStatus,
-                    Credit = current.MealCreditApplied, current.SessionId }, transaction,
-                cancellationToken: cancellationToken));
-        }
-        else if (nextStatus == "completed")
-        {
-            await connection.ExecuteAsync(new CommandDefinition("""
-                UPDATE `STAFF_BUSY_BLOCKS` SET `BLOCK_STATUS` = 'completed', `UPDATED_AT` = @Now
-                WHERE `ORDER_ID` = @OrderId AND `BLOCK_STATUS` = 'active';
-                """, new { Now = now, OrderId = orderId }, transaction, cancellationToken: cancellationToken));
-        }
-        if (nextStatus != current.OrderStatus)
-            await InsertHistoryAsync(connection, transaction, orderId, current.OrderStatus, nextStatus,
-                "店員緊急調整訂單狀態", "admin", actorId, now, cancellationToken);
         await InsertAuditAsync(connection, transaction, orderId, null, "order.updated", JsonSerializer.Serialize(current),
-            JsonSerializer.Serialize(new { customerNote, internalNote, status = nextStatus }), actorId, actorRole, now, cancellationToken);
+            JsonSerializer.Serialize(new { customerNote, internalNote }), actorId, actorRole, now, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task ShortenNominationAsync(string orderId, string nomineeId, int segmentCount, string reason,
+        string actorId, string actorRole, DateTime now, CancellationToken cancellationToken)
+    {
+        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            var row = await connection.QuerySingleOrDefaultAsync<NominationEditRow>(new CommandDefinition("""
+                SELECT N.`ID` AS NomineeId, N.`ORDER_ID` AS OrderId, N.`STAFF_ID` AS StaffId,
+                       N.`SERVICE_ID` AS ServiceId, N.`SEGMENT_COUNT` AS SegmentCount,
+                       N.`SERVICE_DURATION_MINUTES` AS ServiceDurationMinutes,
+                       N.`SEGMENT_MINUTES_SNAPSHOT` AS SegmentMinutesSnapshot,
+                       N.`RESERVED_MINUTES` AS ReservedMinutes,
+                       N.`BUFFER_MINUTES_SNAPSHOT` AS BufferMinutesSnapshot,
+                       N.`REQUESTED_STARTS_AT` AS RequestedStartsAt,
+                       N.`REQUESTED_SERVICE_ENDS_AT` AS RequestedServiceEndsAt,
+                       N.`REQUESTED_BUSY_UNTIL` AS RequestedBusyUntil,
+                       O.`ORDER_STATUS` AS OrderStatus,
+                       SI.`ID` AS ServiceItemId, COALESCE(SI.`PRICE_RULE`, 'per_segment') AS ServicePriceRule,
+                       BI.`ID` AS BaseItemId
+                FROM `ORDER_NOMINEES` N
+                JOIN `ORDERS` O ON O.`ID` = N.`ORDER_ID`
+                LEFT JOIN `ORDER_ITEMS` SI ON SI.`ORDER_ID` = N.`ORDER_ID`
+                    AND SI.`ITEM_TYPE` = 'staff_service' AND SI.`REFERENCE_ID` = N.`SERVICE_ID`
+                JOIN `ORDER_ITEMS` BI ON BI.`ORDER_ID` = N.`ORDER_ID`
+                    AND BI.`ITEM_TYPE` = 'nomination_base' AND BI.`REFERENCE_ID` = N.`STAFF_ID`
+                WHERE N.`ID` = @NomineeId AND N.`ORDER_ID` = @OrderId
+                FOR UPDATE;
+                """, new { NomineeId = nomineeId, OrderId = orderId }, transaction,
+                cancellationToken: cancellationToken));
+            if (row is null)
+                throw new BusinessException("找不到可縮短的指名預約。", "ORDER_NOMINEE_NOT_FOUND");
+            if (row.OrderStatus is not ("submitted" or "partially_confirmed" or "needs_reschedule" or "confirmed"))
+                throw new BusinessException("服務開始後不可正式縮短預約；請使用實際提早完成功能。", "NOMINATION_SHORTEN_STATUS_INVALID");
+            if (row.RequestedStartsAt <= now)
+                throw new BusinessException("已到開始時間的指名不可修改預約；若提早結束請記錄實際完成。", "NOMINATION_ALREADY_STARTED");
+            if (segmentCount >= row.SegmentCount)
+                throw new BusinessException("正式縮短只能減少節數；需要延長時請另開新訂單。", "NOMINATION_EXTENSION_FORBIDDEN");
+
+            var segmentMinutes = Math.Max(1, row.SegmentMinutesSnapshot);
+            var minimumSegments = row.ServicePriceRule == "fixed_duration"
+                ? (int)Math.Ceiling(row.ServiceDurationMinutes / (double)segmentMinutes)
+                : 1;
+            if (segmentCount < minimumSegments)
+                throw new BusinessException($"此服務至少需要 {minimumSegments} 節，無法縮短至 {segmentCount} 節。",
+                    "NOMINATION_MINIMUM_DURATION_REQUIRED");
+
+            var reservedMinutes = checked(segmentCount * segmentMinutes);
+            var serviceEndsAt = row.RequestedStartsAt.AddMinutes(reservedMinutes);
+            var busyUntil = serviceEndsAt.AddMinutes(Math.Max(0, row.BufferMinutesSnapshot));
+            await connection.ExecuteAsync(new CommandDefinition("""
+                UPDATE `ORDER_NOMINEES`
+                SET `SEGMENT_COUNT` = @SegmentCount, `RESERVED_MINUTES` = @ReservedMinutes,
+                    `SERVICE_DURATION_MINUTES` = CASE WHEN @ServicePriceRule = 'per_segment' THEN @ReservedMinutes ELSE `SERVICE_DURATION_MINUTES` END,
+                    `REQUESTED_SERVICE_ENDS_AT` = @ServiceEndsAt, `REQUESTED_BUSY_UNTIL` = @BusyUntil,
+                    `UPDATED_AT` = @Now
+                WHERE `ID` = @NomineeId;
+                UPDATE `ORDER_ITEMS`
+                SET `QUANTITY` = @SegmentCount, `SEGMENT_COUNT` = @SegmentCount,
+                    `DURATION_MINUTES` = @ReservedMinutes, `LINE_TOTAL` = `UNIT_PRICE` * @SegmentCount,
+                    `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId
+                WHERE `ID` = @BaseItemId;
+                UPDATE `ORDER_ITEMS`
+                SET `QUANTITY` = CASE WHEN `PRICE_RULE` = 'per_segment' THEN @SegmentCount ELSE 1 END,
+                    `SEGMENT_COUNT` = @SegmentCount,
+                    `DURATION_MINUTES` = CASE WHEN `PRICE_RULE` = 'per_segment' THEN @ReservedMinutes ELSE `DURATION_MINUTES` END,
+                    `LINE_TOTAL` = `UNIT_PRICE` * CASE WHEN `PRICE_RULE` = 'per_segment' THEN @SegmentCount ELSE 1 END,
+                    `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId
+                WHERE `ID` = @ServiceItemId;
+                UPDATE `STAFF_BUSY_BLOCKS`
+                SET `SERVICE_ENDS_AT` = @ServiceEndsAt, `ENDS_AT` = @BusyUntil, `UPDATED_AT` = @Now
+                WHERE `ORDER_NOMINEE_ID` = @NomineeId AND `BLOCK_STATUS` = 'active';
+                """, new
+            {
+                SegmentCount = segmentCount,
+                ReservedMinutes = reservedMinutes,
+                ServicePriceRule = row.ServicePriceRule,
+                ServiceEndsAt = serviceEndsAt,
+                BusyUntil = busyUntil,
+                Now = now,
+                ActorId = actorId,
+                row.NomineeId,
+                row.BaseItemId,
+                row.ServiceItemId
+            }, transaction, cancellationToken: cancellationToken));
+            await RecalculateOrderAsync(connection, transaction, orderId, now, actorId, cancellationToken);
+            await InsertHistoryAsync(connection, transaction, orderId, row.OrderStatus, row.OrderStatus,
+                $"指名預約由 {row.SegmentCount} 節正式縮短為 {segmentCount} 節。原因：{reason}",
+                "admin", actorId, now, cancellationToken);
+            await InsertAuditAsync(connection, transaction, orderId, null, "order.nomination.shortened",
+                JsonSerializer.Serialize(row), JsonSerializer.Serialize(new
+                {
+                    nomineeId,
+                    previousSegmentCount = row.SegmentCount,
+                    segmentCount,
+                    reservedMinutes,
+                    serviceEndsAt,
+                    busyUntil,
+                    reason
+                }), actorId, actorRole, now, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    public async Task<AddonParentRow?> GetAddonParentAsync(string nomineeId, CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT N.`ID` AS NomineeId, N.`ORDER_ID` AS ParentOrderId, O.`SESSION_ID` AS SessionId,
+                   S.`BUSINESS_DATE` AS BusinessDate, O.`ORDER_STATUS` AS ParentOrderStatus,
+                   N.`STAFF_ID` AS StaffId, N.`STAFF_NAME_SNAPSHOT` AS StaffName,
+                   N.`REQUESTED_STARTS_AT` AS StartsAt, N.`REQUESTED_SERVICE_ENDS_AT` AS ServiceEndsAt,
+                   N.`SEGMENT_MINUTES_SNAPSHOT` AS SegmentMinutes
+            FROM `ORDER_NOMINEES` N
+            JOIN `ORDERS` O ON O.`ID` = N.`ORDER_ID`
+            JOIN `CUSTOMER_ORDER_SESSIONS` S ON S.`ID` = O.`SESSION_ID`
+            WHERE N.`ID` = @NomineeId LIMIT 1;
+            """;
+        return await QuerySingleOrDefaultAsync<AddonParentRow>(sql, new { NomineeId = nomineeId }, cancellationToken);
+    }
+
+    public async Task CreateAddonOrderAsync(NewAddonAggregate addon, CancellationToken cancellationToken)
+    {
+        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            var parent = await connection.QuerySingleOrDefaultAsync<AddonParentRow>(new CommandDefinition("""
+                SELECT N.`ID` AS NomineeId, N.`ORDER_ID` AS ParentOrderId, O.`SESSION_ID` AS SessionId,
+                       O.`ORDER_STATUS` AS ParentOrderStatus, N.`STAFF_ID` AS StaffId,
+                       N.`REQUESTED_STARTS_AT` AS StartsAt,
+                       N.`REQUESTED_SERVICE_ENDS_AT` AS ServiceEndsAt
+                FROM `ORDER_NOMINEES` N JOIN `ORDERS` O ON O.`ID` = N.`ORDER_ID`
+                WHERE N.`ID` = @ParentNomineeId FOR UPDATE;
+                """, new { addon.ParentNomineeId }, transaction, cancellationToken: cancellationToken));
+            if (parent is null || parent.SessionId != addon.SessionId || parent.StaffId != addon.StaffId)
+                throw new BusinessException("原指名資料已變更，無法送出加購服務。", "ADDON_PARENT_CHANGED");
+            if (parent.ParentOrderStatus is not ("confirmed" or "in_service") || parent.ServiceEndsAt <= addon.SubmittedAt)
+                throw new BusinessException("原指名已不在可加購狀態。", "ADDON_PARENT_INACTIVE");
+            var effectiveStart = parent.StartsAt > addon.SubmittedAt ? parent.StartsAt : addon.SubmittedAt;
+            if (effectiveStart.AddMinutes(addon.ServiceDurationMinutes) > parent.ServiceEndsAt)
+                throw new BusinessException("原指名的剩餘時段已變更，無法容納此加購服務。", "ADDON_EXCEEDS_REMAINING_TIME");
+
+            const string sql = """
+                INSERT INTO `ORDERS`
+                    (`ID`, `SESSION_ID`, `ORDER_NUMBER`, `ORDER_KIND`, `PARENT_NOMINEE_ID`, `ORDER_STATUS`,
+                     `QUEUE_ENTERED_AT`, `SUBMITTED_AT`, `CONFIRMED_AT`, `SUBTOTAL`, `MEAL_CREDIT_APPLIED`,
+                     `TOTAL_AMOUNT`, `CREATED_AT`, `UPDATED_AT`)
+                VALUES (@Id, @SessionId, @OrderNumber, 'service_addon', @ParentNomineeId, @Status,
+                        @QueueEnteredAt, @SubmittedAt, CASE WHEN @Status = 'confirmed' THEN @SubmittedAt ELSE NULL END,
+                        @TotalAmount, 0, @TotalAmount, @SubmittedAt, @SubmittedAt);
+                INSERT INTO `ORDER_ITEMS`
+                    (`ID`, `ORDER_ID`, `ITEM_TYPE`, `REFERENCE_ID`, `NAME_SNAPSHOT`, `UNIT_PRICE`, `QUANTITY`,
+                     `SEGMENT_COUNT`, `DURATION_MINUTES`, `LINE_TOTAL`, `PRICE_RULE`, `SORT_ORDER`, `CREATED_AT`, `UPDATED_AT`)
+                VALUES (@ItemId, @Id, 'staff_service_addon', @ServiceId, @ItemName, @UnitPrice, @Quantity,
+                        @ItemSegmentCount, @ItemDurationMinutes, @ItemLineTotal, @ItemPriceRule, 0, @SubmittedAt, @SubmittedAt);
+                INSERT INTO `ORDER_SERVICE_ADDONS`
+                    (`ID`, `ORDER_ID`, `PARENT_NOMINEE_ID`, `STAFF_ID`, `STAFF_NAME_SNAPSHOT`, `SERVICE_ID`,
+                     `SERVICE_NAME_SNAPSHOT`, `SEGMENT_COUNT`, `SERVICE_DURATION_MINUTES`, `PARTICIPANT_COUNT`,
+                     `ADDON_STATUS`, `CONFIRMED_AT`, `CONFIRMED_BY`, `CREATED_AT`, `UPDATED_AT`)
+                VALUES (@AddonId, @Id, @ParentNomineeId, @StaffId, @StaffName, @ServiceId,
+                        @ServiceName, @SegmentCount, @ServiceDurationMinutes, @ParticipantCount,
+                        @AddonStatus, CASE WHEN @AddonStatus = 'confirmed' THEN @SubmittedAt ELSE NULL END,
+                        CASE WHEN @AddonStatus = 'confirmed' THEN @ActorId ELSE NULL END, @SubmittedAt, @SubmittedAt);
+                """;
+            await connection.ExecuteAsync(new CommandDefinition(sql, new
+            {
+                addon.Id,
+                addon.SessionId,
+                addon.OrderNumber,
+                addon.ParentNomineeId,
+                addon.Status,
+                addon.QueueEnteredAt,
+                addon.SubmittedAt,
+                addon.TotalAmount,
+                ItemId = addon.Item.Id,
+                ItemName = addon.Item.Name,
+                addon.Item.UnitPrice,
+                addon.Item.Quantity,
+                ItemSegmentCount = addon.Item.SegmentCount,
+                ItemDurationMinutes = addon.Item.DurationMinutes,
+                ItemLineTotal = addon.Item.LineTotal,
+                ItemPriceRule = addon.Item.PriceRule,
+                addon.ServiceId,
+                addon.AddonId,
+                addon.StaffId,
+                addon.StaffName,
+                addon.ServiceName,
+                addon.SegmentCount,
+                addon.ServiceDurationMinutes,
+                addon.ParticipantCount,
+                addon.AddonStatus,
+                addon.ActorId
+            }, transaction, cancellationToken: cancellationToken));
+            await InsertHistoryAsync(connection, transaction, addon.Id, null, addon.Status,
+                addon.ActorType == "customer" ? "顧客送出附掛式加購服務，等待被指名店員確認。" : "被指名店員代客送出並確認加購服務。",
+                addon.ActorType, addon.ActorId, addon.SubmittedAt, cancellationToken);
+            await InsertAuditAsync(connection, transaction, addon.Id, addon.SessionId, "order.addon.created", null,
+                JsonSerializer.Serialize(addon), addon.ActorId ?? "customer", addon.ActorRole ?? addon.ActorType,
+                addon.SubmittedAt, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    public async Task ConfirmAddonAsync(string orderId, string staffId, string actorId, DateTime now,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            var addon = await connection.QuerySingleOrDefaultAsync<OrderAddonRow>(new CommandDefinition("""
+                SELECT A.`ID` AS Id, A.`ORDER_ID` AS OrderId, A.`STAFF_ID` AS StaffId,
+                       A.`ADDON_STATUS` AS AddonStatus, PO.`ORDER_STATUS` AS ParentOrderStatus,
+                       N.`REQUESTED_SERVICE_ENDS_AT` AS ParentServiceEndsAt
+                FROM `ORDER_SERVICE_ADDONS` A
+                JOIN `ORDERS` O ON O.`ID` = A.`ORDER_ID`
+                JOIN `ORDER_NOMINEES` N ON N.`ID` = A.`PARENT_NOMINEE_ID`
+                JOIN `ORDERS` PO ON PO.`ID` = N.`ORDER_ID`
+                WHERE A.`ORDER_ID` = @OrderId AND O.`ORDER_STATUS` = 'submitted' FOR UPDATE;
+                """, new { OrderId = orderId }, transaction, cancellationToken: cancellationToken));
+            if (addon is null) throw new BusinessException("找不到等待確認的加購服務。", "ADDON_NOT_CONFIRMABLE");
+            if (addon.StaffId != staffId)
+                throw new BusinessException("只有被指名店員本人可以確認此加購服務。", "ADDON_SCOPE_FORBIDDEN");
+            if (addon.ParentOrderStatus is not ("confirmed" or "in_service") || addon.ParentServiceEndsAt <= now)
+                throw new BusinessException("原指名已結束或失效，無法再確認此加購服務。", "ADDON_PARENT_INACTIVE");
+            await connection.ExecuteAsync(new CommandDefinition("""
+                UPDATE `ORDER_SERVICE_ADDONS`
+                SET `ADDON_STATUS` = 'confirmed', `CONFIRMED_AT` = @Now, `CONFIRMED_BY` = @ActorId,
+                    `UPDATED_AT` = @Now WHERE `ORDER_ID` = @OrderId;
+                UPDATE `ORDERS`
+                SET `ORDER_STATUS` = 'confirmed', `CONFIRMED_AT` = @Now, `UPDATED_AT` = @Now,
+                    `UPDATED_BY` = @ActorId WHERE `ID` = @OrderId;
+                """, new { Now = now, ActorId = actorId, OrderId = orderId }, transaction,
+                cancellationToken: cancellationToken));
+            await InsertHistoryAsync(connection, transaction, orderId, "submitted", "confirmed",
+                "被指名店員已確認加購服務。", "staff", actorId, now, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    public async Task TransitionOrderAsync(string orderId, string action, string? reason,
+        string actorId, string actorRole, DateTime now, CancellationToken cancellationToken)
+    {
+        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            var order = await connection.QuerySingleOrDefaultAsync<OrderRow>(new CommandDefinition("""
+                SELECT `ID` AS Id, `SESSION_ID` AS SessionId, `ORDER_KIND` AS OrderKind,
+                       `ORDER_STATUS` AS OrderStatus,
+                       `MEAL_CREDIT_APPLIED` AS MealCreditApplied
+                FROM `ORDERS` WHERE `ID` = @OrderId FOR UPDATE;
+                """, new { OrderId = orderId }, transaction, cancellationToken: cancellationToken))
+                ?? throw new BusinessException("找不到訂單。", "ORDER_NOT_FOUND");
+            var reservedEndsAt = await connection.ExecuteScalarAsync<DateTime?>(new CommandDefinition(
+                "SELECT MAX(`REQUESTED_SERVICE_ENDS_AT`) FROM `ORDER_NOMINEES` WHERE `ORDER_ID` = @OrderId;",
+                new { OrderId = orderId }, transaction, cancellationToken: cancellationToken));
+            var isEarlyCompletion = action == "complete" && reservedEndsAt.HasValue && now < reservedEndsAt.Value;
+
+            var (allowed, nextStatus, defaultReason) = action switch
+            {
+                "start" => (order.OrderStatus == "confirmed", "in_service", "店員開始執行訂單。"),
+                "complete" => (order.OrderStatus == "in_service", "completed",
+                    isEarlyCompletion ? "服務於預約結束前提早完成。" : "店員完成訂單。"),
+                "cancel" => (order.OrderStatus is "submitted" or "partially_confirmed" or "needs_reschedule" or "confirmed",
+                    "cancelled", "店員取消尚未完成的訂單。"),
+                "reject" => (order.OrderStatus is "submitted" or "partially_confirmed" or "needs_reschedule",
+                    "rejected", "店員退回等待訂單。"),
+                "return_to_reschedule" => (order.OrderKind != "service_addon" && order.OrderStatus == "confirmed",
+                    "needs_reschedule", "店員退回並要求重新排程。"),
+                _ => (false, string.Empty, string.Empty)
+            };
+            if (!allowed)
+                throw new BusinessException($"目前狀態「{order.OrderStatus}」不可執行此操作。", "ORDER_TRANSITION_INVALID");
+
+            var transitionReason = string.IsNullOrWhiteSpace(reason) ? defaultReason : reason.Trim();
+            if (action is "cancel" or "reject" or "return_to_reschedule" && string.IsNullOrWhiteSpace(reason))
+                throw new BusinessException("取消、退回或要求重新排程時必須填寫原因。", "ORDER_TRANSITION_REASON_REQUIRED");
+            if (isEarlyCompletion && string.IsNullOrWhiteSpace(reason))
+                throw new BusinessException("實際提早完成必須填寫原因；此操作不會自動改變已成立訂單金額。",
+                    "EARLY_COMPLETION_REASON_REQUIRED");
+
+            await connection.ExecuteAsync(new CommandDefinition("""
+                UPDATE `ORDERS`
+                SET `ORDER_STATUS` = @NextStatus,
+                    `QUEUE_ENTERED_AT` = CASE WHEN @Action = 'return_to_reschedule' THEN @Now ELSE `QUEUE_ENTERED_AT` END,
+                    `CONFIRMED_AT` = CASE WHEN @Action = 'return_to_reschedule' THEN NULL ELSE `CONFIRMED_AT` END,
+                    `STARTED_AT` = CASE WHEN @Action = 'start' THEN COALESCE(`STARTED_AT`, @Now) ELSE `STARTED_AT` END,
+                    `COMPLETED_AT` = CASE WHEN @Action = 'complete' THEN COALESCE(`COMPLETED_AT`, @Now) ELSE `COMPLETED_AT` END,
+                    `CANCELLED_AT` = CASE WHEN @Action IN ('cancel','reject') THEN COALESCE(`CANCELLED_AT`, @Now) ELSE `CANCELLED_AT` END,
+                    `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId
+                WHERE `ID` = @OrderId;
+                """, new { NextStatus = nextStatus, Action = action, Now = now, ActorId = actorId, OrderId = orderId },
+                transaction, cancellationToken: cancellationToken));
+
+            if (order.OrderKind == "service_addon")
+            {
+                await connection.ExecuteAsync(new CommandDefinition("""
+                    UPDATE `ORDER_SERVICE_ADDONS`
+                    SET `ADDON_STATUS` = @NextStatus, `UPDATED_AT` = @Now
+                    WHERE `ORDER_ID` = @OrderId;
+                    """, new { NextStatus = nextStatus, Now = now, OrderId = orderId }, transaction,
+                    cancellationToken: cancellationToken));
+            }
+
+            if (action is "cancel" or "reject")
+            {
+                await connection.ExecuteAsync(new CommandDefinition("""
+                    UPDATE `STAFF_BUSY_BLOCKS` SET `BLOCK_STATUS` = 'released', `UPDATED_AT` = @Now
+                    WHERE `ORDER_ID` = @OrderId AND `BLOCK_STATUS` = 'active';
+                    UPDATE `ORDER_NOMINEES` SET `CONFIRMATION_STATUS` = @NextStatus, `UPDATED_AT` = @Now
+                    WHERE `ORDER_ID` = @OrderId;
+                    UPDATE `ORDER_SERVICE_ADDONS` SET `ADDON_STATUS` = @NextStatus, `UPDATED_AT` = @Now
+                    WHERE `ORDER_ID` = @OrderId;
+                    UPDATE `CUSTOMER_ORDER_SESSIONS`
+                    SET `REMAINING_MEAL_CREDIT` = `REMAINING_MEAL_CREDIT` + @Credit, `UPDATED_AT` = @Now
+                    WHERE `ID` = @SessionId;
+                    """, new { Now = now, OrderId = orderId, NextStatus = nextStatus,
+                        Credit = order.MealCreditApplied, order.SessionId }, transaction,
+                    cancellationToken: cancellationToken));
+            }
+            else if (action == "return_to_reschedule")
+            {
+                await connection.ExecuteAsync(new CommandDefinition("""
+                    UPDATE `STAFF_BUSY_BLOCKS` SET `BLOCK_STATUS` = 'released', `UPDATED_AT` = @Now
+                    WHERE `ORDER_ID` = @OrderId AND `BLOCK_STATUS` = 'active';
+                    UPDATE `ORDER_NOMINEES`
+                    SET `CONFIRMATION_STATUS` = 'waiting', `CONFIRMED_AT` = NULL,
+                        `CONFIRMED_BY` = NULL, `UPDATED_AT` = @Now
+                    WHERE `ORDER_ID` = @OrderId;
+                    """, new { Now = now, OrderId = orderId }, transaction, cancellationToken: cancellationToken));
+            }
+            else if (action == "complete")
+            {
+                await connection.ExecuteAsync(new CommandDefinition("""
+                    UPDATE `STAFF_BUSY_BLOCKS` SET `BLOCK_STATUS` = 'completed', `UPDATED_AT` = @Now
+                    WHERE `ORDER_ID` = @OrderId AND `BLOCK_STATUS` = 'active';
+                    """, new { Now = now, OrderId = orderId }, transaction, cancellationToken: cancellationToken));
+            }
+
+            await InsertHistoryAsync(connection, transaction, orderId, order.OrderStatus, nextStatus,
+                transitionReason, "admin", actorId, now, cancellationToken);
+            var auditAction = isEarlyCompletion ? "order.complete_early" : $"order.{action}";
+            await InsertAuditAsync(connection, transaction, orderId, order.SessionId, auditAction,
+                JsonSerializer.Serialize(order), JsonSerializer.Serialize(new
+                {
+                    action,
+                    reason = transitionReason,
+                    actualCompletedAt = action == "complete" ? now : (DateTime?)null,
+                    reservedEndsAt,
+                    isEarlyCompletion
+                }),
+                actorId, actorRole, now, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
     }
 
     public async Task UpdateOrderItemAsync(string orderId, string itemId, string? name, int? unitPrice, int? quantity,
@@ -617,12 +1056,28 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
                 new { OrderId = orderId, ItemId = itemId }, transaction, cancellationToken: cancellationToken));
             if (childCount > 0)
                 throw new BusinessException("請先刪除服務項目，才能刪除基礎指名費。", "DELETE_SERVICE_BEFORE_BASE_FEE");
+            await connection.ExecuteAsync(new CommandDefinition("""
+                UPDATE `STAFF_BUSY_BLOCKS` B
+                JOIN `ORDER_NOMINEES` N ON N.`ID` = B.`ORDER_NOMINEE_ID`
+                SET B.`BLOCK_STATUS` = 'released', B.`UPDATED_AT` = @Now
+                WHERE N.`ORDER_ID` = @OrderId AND N.`STAFF_ID` = @StaffId
+                  AND B.`BLOCK_STATUS` = 'active';
+                DELETE FROM `ORDER_NOMINEES`
+                WHERE `ORDER_ID` = @OrderId AND `STAFF_ID` = @StaffId;
+                """, new { OrderId = orderId, StaffId = item.ReferenceId, Now = now }, transaction,
+                cancellationToken: cancellationToken));
         }
         if (item.ItemType == "staff_service")
         {
             await connection.ExecuteAsync(new CommandDefinition("""
+                UPDATE `STAFF_BUSY_BLOCKS` B
+                JOIN `ORDER_NOMINEES` N ON N.`ID` = B.`ORDER_NOMINEE_ID`
+                SET B.`BLOCK_STATUS` = 'released', B.`UPDATED_AT` = @Now
+                WHERE N.`ORDER_ID` = @OrderId AND N.`SERVICE_ID` = @ServiceId
+                  AND B.`BLOCK_STATUS` = 'active';
                 DELETE FROM `ORDER_NOMINEES` WHERE `ORDER_ID` = @OrderId AND `SERVICE_ID` = @ServiceId;
-                """, new { OrderId = orderId, ServiceId = item.ReferenceId }, transaction, cancellationToken: cancellationToken));
+                """, new { OrderId = orderId, ServiceId = item.ReferenceId, Now = now }, transaction,
+                cancellationToken: cancellationToken));
         }
         if (item.ItemType == "tip")
             await connection.ExecuteAsync(new CommandDefinition("DELETE FROM `ORDER_TIPS` WHERE `ORDER_ITEM_ID` = @ItemId;",
@@ -669,6 +1124,8 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             UPDATE `ORDERS` SET `ORDER_STATUS` = 'cancelled', `CANCELLED_AT` = @Now,
                    `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId WHERE `ID` = @OrderId;
             UPDATE `ORDER_NOMINEES` SET `CONFIRMATION_STATUS` = 'cancelled', `UPDATED_AT` = @Now
+            WHERE `ORDER_ID` = @OrderId;
+            UPDATE `ORDER_SERVICE_ADDONS` SET `ADDON_STATUS` = 'cancelled', `UPDATED_AT` = @Now
             WHERE `ORDER_ID` = @OrderId;
             UPDATE `CUSTOMER_ORDER_SESSIONS`
             SET `REMAINING_MEAL_CREDIT` = `REMAINING_MEAL_CREDIT` + @Credit, `UPDATED_AT` = @Now
@@ -756,16 +1213,34 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
         => await connection.ExecuteScalarAsync<int>(new CommandDefinition("""
             SELECT COUNT(*) FROM `STAFF_BUSY_BLOCKS`
             WHERE `STAFF_ID` = @StaffId AND `BLOCK_STATUS` = 'active'
-              AND `ENDS_AT` > @StartsAt AND `STARTS_AT` < @EndsAt FOR UPDATE;
+              AND `ENDS_AT` > @StartsAt AND `STARTS_AT` < @EndsAt;
             """, new { StaffId = staffId, StartsAt = startsAt, EndsAt = endsAt }, transaction,
             cancellationToken: cancellationToken)) > 0;
+
+    private static async Task LockStaffRowsAsync(MySqlConnection connection, MySqlTransaction transaction,
+        IEnumerable<string> staffIds, CancellationToken cancellationToken)
+    {
+        foreach (var staffId in staffIds.Distinct(StringComparer.Ordinal).OrderBy(value => value, StringComparer.Ordinal))
+        {
+            var lockedId = await connection.ExecuteScalarAsync<string?>(new CommandDefinition(
+                "SELECT `ID` FROM `STAFF_MEMBERS` WHERE `ID` = @StaffId FOR UPDATE;",
+                new { StaffId = staffId }, transaction, cancellationToken: cancellationToken));
+            if (lockedId is null)
+                throw new BusinessException("被指名店員資料已不存在。", "NOMINEE_STAFF_NOT_FOUND");
+        }
+    }
 
     private static async Task ReturnToRescheduleAsync(MySqlConnection connection, MySqlTransaction transaction,
         string orderId, string fromStatus, string reason, string actorId, DateTime now,
         CancellationToken cancellationToken)
     {
         await connection.ExecuteAsync(new CommandDefinition("""
-            UPDATE `ORDERS` SET `ORDER_STATUS` = 'needs_reschedule', `UPDATED_AT` = @Now WHERE `ID` = @OrderId;
+            UPDATE `ORDERS`
+            SET `ORDER_STATUS` = 'needs_reschedule', `QUEUE_ENTERED_AT` = @Now,
+                `CONFIRMED_AT` = NULL, `UPDATED_AT` = @Now
+            WHERE `ID` = @OrderId;
+            UPDATE `STAFF_BUSY_BLOCKS` SET `BLOCK_STATUS` = 'released', `UPDATED_AT` = @Now
+            WHERE `ORDER_ID` = @OrderId AND `BLOCK_STATUS` = 'active';
             UPDATE `ORDER_NOMINEES` SET `CONFIRMATION_STATUS` = 'waiting', `CONFIRMED_AT` = NULL,
                    `CONFIRMED_BY` = NULL, `UPDATED_AT` = @Now WHERE `ORDER_ID` = @OrderId;
             """, new { Now = now, OrderId = orderId }, transaction, cancellationToken: cancellationToken));
@@ -815,5 +1290,25 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
         public int NetAmount { get; set; }
         public int StaffTipAmount { get; set; }
         public int StoreTipAmount { get; set; }
+    }
+
+    private sealed class NominationEditRow
+    {
+        public string NomineeId { get; set; } = string.Empty;
+        public string OrderId { get; set; } = string.Empty;
+        public string StaffId { get; set; } = string.Empty;
+        public string ServiceId { get; set; } = string.Empty;
+        public string OrderStatus { get; set; } = string.Empty;
+        public int SegmentCount { get; set; }
+        public int ServiceDurationMinutes { get; set; }
+        public int SegmentMinutesSnapshot { get; set; }
+        public int ReservedMinutes { get; set; }
+        public int BufferMinutesSnapshot { get; set; }
+        public DateTime RequestedStartsAt { get; set; }
+        public DateTime RequestedServiceEndsAt { get; set; }
+        public DateTime RequestedBusyUntil { get; set; }
+        public string? ServiceItemId { get; set; }
+        public string ServicePriceRule { get; set; } = string.Empty;
+        public string BaseItemId { get; set; } = string.Empty;
     }
 }

@@ -8,7 +8,18 @@ public sealed class OrderingSettingsRow
     public int ReminderAfterMinutes { get; set; }
     public int EscalateAfterMinutes { get; set; }
     public int ExpireAfterMinutes { get; set; }
+    public int BusinessDayStartMinute { get; set; }
+    public int BusinessDayEndMinute { get; set; }
+    public bool BusinessDayEndsNextDay { get; set; } = true;
     public DateTime? NominationPausedUntil { get; set; }
+}
+
+public sealed class BusinessPeriodRow
+{
+    public string Id { get; set; } = string.Empty;
+    public DateTime BusinessDate { get; set; }
+    public DateTime StartsAt { get; set; }
+    public DateTime EndsAt { get; set; }
 }
 
 public class OrderSessionRow
@@ -51,11 +62,22 @@ public sealed class StaffOfferRow
     public bool ServiceIsEnabled { get; set; }
 }
 
+public sealed class StaffNominationRow
+{
+    public string StaffId { get; set; } = string.Empty;
+    public string StaffName { get; set; } = string.Empty;
+    public bool IsWorkingToday { get; set; }
+    public bool StaffIsNominatable { get; set; }
+    public int BufferMinutes { get; set; }
+}
+
 public sealed class OrderRow
 {
     public string Id { get; set; } = string.Empty;
     public string SessionId { get; set; } = string.Empty;
     public string OrderNumber { get; set; } = string.Empty;
+    public string OrderKind { get; set; } = "standard";
+    public string? ParentNomineeId { get; set; }
     public string OrderStatus { get; set; } = string.Empty;
     public DateTime? QueueEnteredAt { get; set; }
     public DateTime SubmittedAt { get; set; }
@@ -93,10 +115,14 @@ public sealed class OrderNomineeRow
     public string OrderId { get; set; } = string.Empty;
     public string StaffId { get; set; } = string.Empty;
     public string StaffNameSnapshot { get; set; } = string.Empty;
-    public string ServiceId { get; set; } = string.Empty;
+    public string? ServiceId { get; set; }
     public string ServiceNameSnapshot { get; set; } = string.Empty;
+    public string NominationMode { get; set; } = "service";
     public int SegmentCount { get; set; }
     public int ServiceDurationMinutes { get; set; }
+    public int SegmentMinutesSnapshot { get; set; }
+    public int ReservedMinutes { get; set; }
+    public int BufferMinutesSnapshot { get; set; }
     public DateTime RequestedStartsAt { get; set; }
     public DateTime RequestedServiceEndsAt { get; set; }
     public DateTime RequestedBusyUntil { get; set; }
@@ -128,6 +154,38 @@ public sealed class OrderHistoryRow
     public DateTime CreatedAt { get; set; }
 }
 
+public sealed class OrderAddonRow
+{
+    public string Id { get; set; } = string.Empty;
+    public string OrderId { get; set; } = string.Empty;
+    public string ParentNomineeId { get; set; } = string.Empty;
+    public string StaffId { get; set; } = string.Empty;
+    public string StaffNameSnapshot { get; set; } = string.Empty;
+    public string ServiceId { get; set; } = string.Empty;
+    public string ServiceNameSnapshot { get; set; } = string.Empty;
+    public int SegmentCount { get; set; }
+    public int ServiceDurationMinutes { get; set; }
+    public int ParticipantCount { get; set; }
+    public string AddonStatus { get; set; } = string.Empty;
+    public DateTime? ConfirmedAt { get; set; }
+    public string ParentOrderStatus { get; set; } = string.Empty;
+    public DateTime ParentServiceEndsAt { get; set; }
+}
+
+public sealed class AddonParentRow
+{
+    public string NomineeId { get; set; } = string.Empty;
+    public string ParentOrderId { get; set; } = string.Empty;
+    public string SessionId { get; set; } = string.Empty;
+    public DateTime BusinessDate { get; set; }
+    public string ParentOrderStatus { get; set; } = string.Empty;
+    public string StaffId { get; set; } = string.Empty;
+    public string StaffName { get; set; } = string.Empty;
+    public DateTime StartsAt { get; set; }
+    public DateTime ServiceEndsAt { get; set; }
+    public int SegmentMinutes { get; set; }
+}
+
 public sealed class AdminOrderSessionRow : OrderSessionRow
 {
     public int OrderCount { get; set; }
@@ -143,8 +201,9 @@ public sealed record NewOrderItem(
     int? DurationMinutes, int LineTotal, string? PriceRule, int SortOrder);
 
 public sealed record NewOrderNominee(
-    string Id, string StaffId, string StaffName, string ServiceId, string ServiceName,
-    int SegmentCount, int ServiceDurationMinutes, DateTime StartsAt,
+    string Id, string StaffId, string StaffName, string? ServiceId, string ServiceName, string NominationMode,
+    int SegmentCount, int ServiceDurationMinutes, int SegmentMinutesSnapshot,
+    int ReservedMinutes, int BufferMinutesSnapshot, DateTime StartsAt,
     DateTime ServiceEndsAt, DateTime BusyUntil);
 
 public sealed record NewOrderTip(
@@ -152,7 +211,8 @@ public sealed record NewOrderTip(
     int Amount, int StaffPercentage, int StorePercentage, int StaffAmount, int StoreAmount);
 
 public sealed record NewOrderAggregate(
-    string Id, string SessionId, string OrderNumber, string Status, DateTime? QueueEnteredAt,
+    string Id, string SessionId, string OrderNumber, string OrderKind, string? ParentNomineeId,
+    string Status, DateTime? QueueEnteredAt,
     DateTime SubmittedAt, int Subtotal, int MealCreditApplied, int TotalAmount,
     string? CustomerNote, IReadOnlyList<NewOrderItem> Items,
     IReadOnlyList<NewOrderNominee> Nominees, IReadOnlyList<NewOrderTip> Tips);
@@ -162,4 +222,12 @@ public sealed record OrderBundle(
     IReadOnlyList<OrderItemRow> Items,
     IReadOnlyList<OrderNomineeRow> Nominees,
     IReadOnlyList<OrderTipRow> Tips,
-    IReadOnlyList<OrderHistoryRow> History);
+    IReadOnlyList<OrderHistoryRow> History,
+    IReadOnlyList<OrderAddonRow> Addons);
+
+public sealed record NewAddonAggregate(
+    string Id, string SessionId, string OrderNumber, string ParentNomineeId, string Status,
+    DateTime? QueueEnteredAt, DateTime SubmittedAt, int TotalAmount, NewOrderItem Item,
+    string AddonId, string StaffId, string StaffName, string ServiceId, string ServiceName,
+    int SegmentCount, int ServiceDurationMinutes, int ParticipantCount, string AddonStatus,
+    string ActorType, string? ActorId, string? ActorRole);

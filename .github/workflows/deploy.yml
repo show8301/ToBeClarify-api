@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - main
+      - dev
   pull_request:
     branches:
       - main
+      - dev
   workflow_dispatch:
 
 permissions:
@@ -48,7 +50,9 @@ jobs:
 
   deploy:
     name: Deploy to IIS
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'))
     needs: build
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 10
@@ -67,6 +71,28 @@ jobs:
         shell: powershell
         env:
           ARTIFACT_PATH: ${{ runner.temp }}\tobeclarify-api-publish
-          DEPLOY_PATH: ${{ vars.API_DEPLOY_PATH }}
-          HEALTH_CHECK_URL: ${{ vars.API_HEALTHCHECK_URL }}
-        run: .\scripts\deploy-iis.ps1 -ArtifactPath $env:ARTIFACT_PATH -DeployPath $env:DEPLOY_PATH -HealthCheckUrl $env:HEALTH_CHECK_URL
+          BRANCH_REF: ${{ github.ref }}
+          DEV_DEPLOY_PATH: ${{ vars.DEV_API_DEPLOY_PATH }}
+          DEV_HEALTH_CHECK_URL: ${{ vars.DEV_API_HEALTHCHECK_URL }}
+          PROD_DEPLOY_PATH: ${{ vars.API_DEPLOY_PATH }}
+          PROD_HEALTH_CHECK_URL: ${{ vars.API_HEALTHCHECK_URL }}
+        run: |
+          if ($env:BRANCH_REF -eq 'refs/heads/main') {
+            $deployPath = $env:PROD_DEPLOY_PATH
+            $healthCheckUrl = $env:PROD_HEALTH_CHECK_URL
+            $targetName = 'production'
+          }
+          elseif ($env:BRANCH_REF -eq 'refs/heads/dev') {
+            $deployPath = $env:DEV_DEPLOY_PATH
+            $healthCheckUrl = $env:DEV_HEALTH_CHECK_URL
+            $targetName = 'development'
+          }
+          else {
+            throw "Deployment is not allowed from branch ref $($env:BRANCH_REF)."
+          }
+
+          if ([string]::IsNullOrWhiteSpace($deployPath) -or [string]::IsNullOrWhiteSpace($healthCheckUrl)) {
+            throw "Missing API deployment variables for ${targetName}."
+          }
+
+          .\scripts\deploy-iis.ps1 -ArtifactPath $env:ARTIFACT_PATH -DeployPath $deployPath -HealthCheckUrl $healthCheckUrl

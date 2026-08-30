@@ -2,10 +2,10 @@
 
 ## Deployment order
 
-1. Apply `db/migrations/20260830_01_ordering_system.sql` to the production MySQL/MariaDB database. It creates nine tables and does not require `CREATE VIEW`/`DROP VIEW` privileges.
+1. Apply `db/migrations/20260830_01_ordering_system.sql`, then `db/migrations/20260830_02_business_hours_and_order_transitions.sql` to the target MySQL/MariaDB database. The second migration adds cross-day business windows, immutable nomination snapshots, pure-companionship mode and attached service add-on orders.
 2. Set `OrderingToken__Secret` to a random secret of at least 32 characters. Keep it stable across deployments; changing it invalidates all current-day customer links.
 3. Set `OrderingToken__PublicWebBaseUrl` to the customer order page, for example `https://www-dev.marchgroup.net/order` while the Web is in the test environment.
-4. Deploy the API, then deploy the Web test branch.
+4. Deploy the API, then deploy the Web test branch. The API workflow supports `main` and `dev`; the test deployment uses `DEV_API_DEPLOY_PATH` and `DEV_API_HEALTHCHECK_URL` repository variables.
 
 The migration is deliberately not applied by application startup. This repository treats versioned migration files as the database source of truth and the deployment operator applies them before the matching API release.
 

@@ -9,8 +9,18 @@ public sealed record OrderingSettingsDto(
     int ReminderAfterMinutes,
     int EscalateAfterMinutes,
     int ExpireAfterMinutes,
+    int BusinessDayStartMinute,
+    int BusinessDayEndMinute,
+    bool BusinessDayEndsNextDay,
     DateTimeOffset? NominationPausedUntil,
     bool NominationPaused);
+
+public sealed record OrderingBusinessContextDto(
+    DateOnly? CurrentBusinessDate,
+    DateOnly ReferenceBusinessDate,
+    DateTimeOffset ReferenceStartsAt,
+    DateTimeOffset ReferenceEndsAt,
+    bool OrderingOpen);
 
 public sealed record OrderSessionDto(
     string Id,
@@ -54,10 +64,15 @@ public sealed record OrderNomineeDto(
     string Id,
     string StaffId,
     string StaffName,
-    string ServiceId,
+    string? ServiceId,
     string ServiceName,
+    string NominationMode,
     int SegmentCount,
     int ServiceDurationMinutes,
+    int SegmentMinutes,
+    int MinimumSegmentCount,
+    int ReservedMinutes,
+    int BufferMinutes,
     DateTimeOffset RequestedStartsAt,
     DateTimeOffset RequestedServiceEndsAt,
     DateTimeOffset BusyUntil,
@@ -74,6 +89,19 @@ public sealed record OrderTipDto(
     int StaffAmount,
     int StoreAmount);
 
+public sealed record OrderAddonDto(
+    string Id,
+    string ParentNomineeId,
+    string StaffId,
+    string StaffName,
+    string ServiceId,
+    string ServiceName,
+    int SegmentCount,
+    int ServiceDurationMinutes,
+    int ParticipantCount,
+    string Status,
+    DateTimeOffset? ConfirmedAt);
+
 public sealed record OrderStatusHistoryDto(
     string FromStatus,
     string ToStatus,
@@ -84,6 +112,8 @@ public sealed record OrderStatusHistoryDto(
 public sealed record OrderDto(
     string Id,
     string OrderNumber,
+    string OrderKind,
+    string? ParentNomineeId,
     string Status,
     string QueueStage,
     int QueueMinutes,
@@ -97,6 +127,7 @@ public sealed record OrderDto(
     IReadOnlyList<OrderItemDto> Items,
     IReadOnlyList<OrderNomineeDto> Nominees,
     IReadOnlyList<OrderTipDto> Tips,
+    IReadOnlyList<OrderAddonDto> Addons,
     IReadOnlyList<OrderStatusHistoryDto> History);
 
 public sealed record AdminOrderSessionDto(
@@ -172,8 +203,10 @@ public sealed class NominationOrderLineRequest
     [Required]
     public string StaffId { get; init; } = string.Empty;
 
-    [Required]
-    public string ServiceId { get; init; } = string.Empty;
+    [RegularExpression("^(companionship|service)$")]
+    public string Mode { get; init; } = "service";
+
+    public string? ServiceId { get; init; }
 
     [Range(1, 72)]
     public int SegmentCount { get; init; } = 1;
@@ -224,6 +257,14 @@ public sealed class UpdateOrderingSettingsRequest
 
     [Range(1, 1440)]
     public int ExpireAfterMinutes { get; init; } = 20;
+
+    [Range(0, 1439)]
+    public int BusinessDayStartMinute { get; init; }
+
+    [Range(0, 1439)]
+    public int BusinessDayEndMinute { get; init; }
+
+    public bool BusinessDayEndsNextDay { get; init; } = true;
 }
 
 public sealed class PauseNominationRequest
@@ -240,8 +281,33 @@ public sealed class UpdateAdminOrderRequest
     [StringLength(1000)]
     public string? InternalNote { get; init; }
 
-    [RegularExpression("^(submitted|needs_reschedule|confirmed|in_service|completed|rejected|cancelled)$")]
+    // Kept temporarily so older clients receive an explicit business error instead of a silent no-op.
+    [StringLength(32)]
     public string? Status { get; init; }
+}
+
+public sealed class SubmitAddonRequest
+{
+    [Required]
+    public string ParentNomineeId { get; init; } = string.Empty;
+
+    [Required]
+    public string ServiceId { get; init; } = string.Empty;
+
+    [Range(1, 72)]
+    public int SegmentCount { get; init; } = 1;
+
+    [Range(1, 20)]
+    public int ParticipantCount { get; init; } = 1;
+}
+
+public sealed class OrderTransitionRequest
+{
+    [Required, RegularExpression("^(start|complete|cancel|reject|return_to_reschedule)$")]
+    public string Action { get; init; } = string.Empty;
+
+    [StringLength(500)]
+    public string? Reason { get; init; }
 }
 
 public sealed class UpdateOrderItemRequest
@@ -259,6 +325,15 @@ public sealed class UpdateOrderItemRequest
 public sealed class RescheduleOrderRequest
 {
     public DateTimeOffset RequestedStartsAt { get; init; }
+}
+
+public sealed class ShortenNominationRequest
+{
+    [Range(1, 72)]
+    public int SegmentCount { get; init; }
+
+    [Required, StringLength(500, MinimumLength = 1)]
+    public string Reason { get; init; } = string.Empty;
 }
 
 public sealed class OrderActionRequest

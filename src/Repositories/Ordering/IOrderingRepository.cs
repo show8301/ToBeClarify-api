@@ -6,6 +6,8 @@ public interface IOrderingRepository
 {
     Task<OrderingSettingsRow> GetSettingsAsync(CancellationToken cancellationToken);
     Task SaveSettingsAsync(OrderingSettingsRow settings, string actorId, DateTime now, CancellationToken cancellationToken);
+    Task<BusinessPeriodRow?> GetActiveBusinessPeriodAsync(DateTime now, CancellationToken cancellationToken);
+    Task<BusinessPeriodRow> GetOrCreateBusinessPeriodAsync(BusinessPeriodRow period, CancellationToken cancellationToken);
     Task SetNominationPauseAsync(DateTime? pausedUntil, string actorId, DateTime now, CancellationToken cancellationToken);
     Task<OrderSessionRow?> GetSessionByIdAsync(string id, CancellationToken cancellationToken);
     Task<OrderSessionRow?> GetSessionByGameIdAsync(string gameId, DateOnly businessDate, CancellationToken cancellationToken);
@@ -15,10 +17,17 @@ public interface IOrderingRepository
     Task UpdateSessionAsync(string sessionId, string? customerName, int? maxNominatedStaff, int? remainingMealCredit,
         string actorId, string actorRole, DateTime now, CancellationToken cancellationToken);
     Task<MenuProductRow?> GetMenuProductAsync(string referenceId, string kind, CancellationToken cancellationToken);
-    Task<StaffOfferRow?> GetStaffOfferAsync(string staffId, string serviceId, CancellationToken cancellationToken);
+    Task<StaffOfferRow?> GetStaffOfferAsync(string staffId, string serviceId, DateOnly businessDate,
+        CancellationToken cancellationToken);
+    Task<StaffNominationRow?> GetStaffNominationAsync(string staffId, DateOnly businessDate,
+        CancellationToken cancellationToken);
     Task<string?> GetStaffNameAsync(string staffId, CancellationToken cancellationToken);
     Task<bool> IsStaffBusyAsync(string staffId, DateTime startsAt, DateTime endsAt, CancellationToken cancellationToken);
     Task CreateOrderAsync(NewOrderAggregate order, CancellationToken cancellationToken);
+    Task<AddonParentRow?> GetAddonParentAsync(string nomineeId, CancellationToken cancellationToken);
+    Task CreateAddonOrderAsync(NewAddonAggregate addon, CancellationToken cancellationToken);
+    Task ConfirmAddonAsync(string orderId, string staffId, string actorId, DateTime now,
+        CancellationToken cancellationToken);
     Task<OrderBundle> GetOrdersBySessionAsync(string sessionId, CancellationToken cancellationToken);
     Task<OrderBundle> GetOrderAsync(string orderId, CancellationToken cancellationToken);
     Task<IReadOnlyList<AdminOrderSessionRow>> GetAdminSessionsAsync(DateOnly businessDate, string? search,
@@ -28,7 +37,11 @@ public interface IOrderingRepository
         CancellationToken cancellationToken);
     Task RescheduleOrderAsync(string orderId, DateTime startsAt, string actorId, string actorRole, DateTime now,
         CancellationToken cancellationToken);
-    Task UpdateOrderAsync(string orderId, string? customerNote, string? internalNote, string? status,
+    Task ShortenNominationAsync(string orderId, string nomineeId, int segmentCount, string reason,
+        string actorId, string actorRole, DateTime now, CancellationToken cancellationToken);
+    Task UpdateOrderAsync(string orderId, string? customerNote, string? internalNote,
+        string actorId, string actorRole, DateTime now, CancellationToken cancellationToken);
+    Task TransitionOrderAsync(string orderId, string action, string? reason,
         string actorId, string actorRole, DateTime now, CancellationToken cancellationToken);
     Task UpdateOrderItemAsync(string orderId, string itemId, string? name, int? unitPrice, int? quantity,
         string actorId, string actorRole, DateTime now, CancellationToken cancellationToken);
