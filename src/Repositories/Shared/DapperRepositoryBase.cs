@@ -3,6 +3,9 @@ using ToBeClarify.Api.Infrastructure;
 
 namespace ToBeClarify.Api.Repositories.Shared;
 
+// Database account policy: the runtime account is SELECT/INSERT/UPDATE only.
+// Do not add DELETE, DROP, TRUNCATE, or equivalent destructive SQL to repositories.
+// Use status/soft-disable updates and audit history so order and reporting data remain recoverable.
 public abstract class DapperRepositoryBase
 {
     protected DapperRepositoryBase(AppDbContext dbContext)

@@ -1,5 +1,7 @@
 # Customer ordering system
 
+> **資料庫權限限制：** 測試與執行環境帳號僅可查詢、新增、修改，沒有刪除資料或資料表的權限。點餐流程不得呼叫 `DELETE`／`DROP`／`TRUNCATE`；取消、失效與移除畫面項目一律以狀態更新保留歷史資料。請先閱讀 [資料庫帳號權限限制](DATABASE-PERMISSIONS.md)。
+
 ## Deployment order
 
 1. Apply `db/migrations/20260830_01_ordering_system.sql`, then `db/migrations/20260830_02_business_hours_and_order_transitions.sql` to the target MySQL/MariaDB database. The second migration adds cross-day business windows, immutable nomination snapshots, pure-companionship mode and attached service add-on orders.
@@ -41,4 +43,4 @@ All admin roles may read customer sessions and orders, create/reissue sessions, 
 - An existing nomination cannot increase its segment quantity. Additional time is a new order.
 - Tips snapshot staff/store percentages and amounts. Omitting a staff member forces a 0/100 allocation.
 - Final multi-staff confirmation checks every staff member again in one transaction. A past start or a conflict returns the order to `needs_reschedule` instead of silently starting in the past.
-- Deleting a nomination base fee is rejected while its service child remains.
+- 既有的訂單明細刪除端點僅為遺留相容程式，受限帳號環境不得呼叫；指名服務與基礎費用應以取消／失效狀態更新保留紀錄。

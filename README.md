@@ -2,6 +2,8 @@
 
 ToBeClarify 公開網站與後台管理系統共用的 ASP.NET Core API。
 
+> **資料庫權限限制：** 執行帳號僅可查詢、新增、修改，沒有刪除資料或資料表的權限。請勿新增或呼叫 `DELETE`、`DROP`、`TRUNCATE` 等破壞性操作；詳細規範請見 [資料庫帳號權限限制](docs/DATABASE-PERMISSIONS.md)。
+
 - 公開 API：`/api/client/*`
 - 後台 API：`/api/admin/*`
 - Swagger UI：<https://api.marchgroup.net/swagger/index.html>

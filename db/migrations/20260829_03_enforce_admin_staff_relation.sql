@@ -1,3 +1,6 @@
+-- RESTRICTED ACCOUNT NOTICE: this migration drops an existing index before adding
+-- constraints. The runtime account has no DROP privilege, so a DBA must review and
+-- execute it separately; it is not part of the restricted-account deployment path.
 -- Enforce the one-to-one relationship between admin accounts and staff members.
 -- Target: MariaDB database `tobeclarify`.
 --

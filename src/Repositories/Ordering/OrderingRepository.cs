@@ -8,6 +8,9 @@ using ToBeClarify.Api.Repositories.Shared;
 
 namespace ToBeClarify.Api.Repositories.Ordering;
 
+// IMPORTANT: the configured database account cannot delete rows or schema objects.
+// DeleteOrderItemAsync is legacy code retained for compatibility only; do not call it
+// until it is replaced with an update-based cancellation/disable flow.
 public sealed class OrderingRepository : DapperRepositoryBase, IOrderingRepository
 {
     public OrderingRepository(AppDbContext dbContext) : base(dbContext) { }

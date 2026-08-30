@@ -1,3 +1,6 @@
+-- RESTRICTED ACCOUNT NOTICE: this migration removes schema and cannot be run with
+-- the runtime account. The account has no DROP privilege. Apply only through a DBA
+-- change using a separately authorized migration account; do not run from API deploy.
 -- Remove the deprecated ADMIN_USERS.DISPLAY_NAME column.
 -- Target: MariaDB database `tobeclarify`.
 --
