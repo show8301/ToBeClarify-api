@@ -7,7 +7,9 @@
 1. Apply `db/migrations/20260830_01_ordering_system.sql`, then `db/migrations/20260830_02_business_hours_and_order_transitions.sql` to the target MySQL/MariaDB database. The second migration adds cross-day business windows, immutable nomination snapshots, pure-companionship mode and attached service add-on orders.
 2. Set `OrderingToken__Secret` to a random secret of at least 32 characters. Keep it stable across deployments; changing it invalidates all current-day customer links.
 3. Set `OrderingToken__PublicWebBaseUrl` to the customer order page, for example `https://www-dev.marchgroup.net/order` while the Web is in the test environment.
-4. Deploy the API, then deploy the Web test branch. The API workflow supports `main` and `dev`; the test deployment uses `DEV_API_DEPLOY_PATH` and `DEV_API_HEALTHCHECK_URL` repository variables.
+4. Merge the release into `main`. The API workflow may build `dev` and pull requests for verification, but it deploys only from `main` to the single production IIS environment using `API_DEPLOY_PATH` and `API_HEALTHCHECK_URL`. There is currently no API test-environment deployment.
+
+The API repository does not require `DEV_API_DEPLOY_PATH` or `DEV_API_HEALTHCHECK_URL`; those variables are intentionally unused because no separate API test host exists.
 
 The migration is deliberately not applied by application startup. This repository treats versioned migration files as the database source of truth and the deployment operator applies them before the matching API release.
 

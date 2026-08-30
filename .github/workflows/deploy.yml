@@ -1,5 +1,7 @@
 name: API CI/CD
 
+# API currently has no separate test host. The dev branch remains build-only;
+# production files are deployed only from main after the release is merged.
 on:
   push:
     branches:
@@ -51,8 +53,8 @@ jobs:
   deploy:
     name: Deploy to IIS
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'))
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' || github.event_name == 'push')
     needs: build
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 10
@@ -72,24 +74,16 @@ jobs:
         env:
           ARTIFACT_PATH: ${{ runner.temp }}\tobeclarify-api-publish
           BRANCH_REF: ${{ github.ref }}
-          DEV_DEPLOY_PATH: ${{ vars.DEV_API_DEPLOY_PATH }}
-          DEV_HEALTH_CHECK_URL: ${{ vars.DEV_API_HEALTHCHECK_URL }}
           PROD_DEPLOY_PATH: ${{ vars.API_DEPLOY_PATH }}
           PROD_HEALTH_CHECK_URL: ${{ vars.API_HEALTHCHECK_URL }}
         run: |
-          if ($env:BRANCH_REF -eq 'refs/heads/main') {
-            $deployPath = $env:PROD_DEPLOY_PATH
-            $healthCheckUrl = $env:PROD_HEALTH_CHECK_URL
-            $targetName = 'production'
+          if ($env:BRANCH_REF -ne 'refs/heads/main') {
+            throw "Production deployment is only allowed from refs/heads/main, not $($env:BRANCH_REF)."
           }
-          elseif ($env:BRANCH_REF -eq 'refs/heads/dev') {
-            $deployPath = $env:DEV_DEPLOY_PATH
-            $healthCheckUrl = $env:DEV_HEALTH_CHECK_URL
-            $targetName = 'development'
-          }
-          else {
-            throw "Deployment is not allowed from branch ref $($env:BRANCH_REF)."
-          }
+
+          $deployPath = $env:PROD_DEPLOY_PATH
+          $healthCheckUrl = $env:PROD_HEALTH_CHECK_URL
+          $targetName = 'production'
 
           if ([string]::IsNullOrWhiteSpace($deployPath) -or [string]::IsNullOrWhiteSpace($healthCheckUrl)) {
             throw "Missing API deployment variables for ${targetName}."

@@ -538,8 +538,9 @@ resize 使用 `ResizeMode.Max`，會維持比例，不會強制裁成指定長�
 `.github/workflows/deploy.yml` 行為：
 
 - Pull request 指向 `main`：restore、Release build、publish、上傳 artifact，不部署。
-- Push 到 `main`：完成 build 後，由 self-hosted Windows X64 runner 部署到 IIS。
-- `workflow_dispatch`：可手動執行 build + deploy。
+- Push 到 `dev` 或指向 `dev` 的 pull request：僅執行 CI build，不部署；API 目前沒有獨立測試環境。
+- Push 到 `main`：完成 build 後，由 self-hosted Windows X64 runner 部署到唯一的正式 IIS 環境。
+- `workflow_dispatch`：只有從 `main` 執行時才會進行正式 build + deploy；其他分支不會部署。
 - 同一 ref 新 run 會取消前一個尚未完成的 run。
 - publish artifact 保留 7 天。
 
@@ -547,6 +548,8 @@ resize 使用 `ResizeMode.Max`，會維持比例，不會強制裁成指定長�
 
 - `API_DEPLOY_PATH`
 - `API_HEALTHCHECK_URL`
+
+API 目前沒有獨立測試主機，因此不使用 `DEV_API_DEPLOY_PATH` 或 `DEV_API_HEALTHCHECK_URL`。`dev` 只做 CI 驗證；正式上板必須先合併至 `main`。
 
 部署腳本的保護措施：
 
