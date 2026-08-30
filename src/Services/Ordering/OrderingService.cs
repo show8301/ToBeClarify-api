@@ -344,6 +344,39 @@ public sealed class OrderingService : IOrderingService
         return (await MapOrdersAsync(await _repository.GetOrderAsync(orderId, cancellationToken), cancellationToken)).Single();
     }
 
+    public async Task<OrderDto> BackfillServedOrderAsync(string orderId, BackfillServedOrderRequest request,
+        ClaimsPrincipal actor, CancellationToken cancellationToken)
+    {
+        var status = Required(request.Status, "BACKFILL_STATUS_REQUIRED");
+        var reason = Required(request.Reason, "BACKFILL_REASON_REQUIRED");
+        var now = _clock.LocalDateTime;
+        if (request.ActualStartsAt == default)
+            throw new BusinessException("補登已接待必須填寫實際開始時間。", "BACKFILL_START_REQUIRED");
+        var actualStartsAt = ToTaiwanDateTime(request.ActualStartsAt);
+        var actualEndsAt = request.ActualEndsAt.HasValue ? ToTaiwanDateTime(request.ActualEndsAt.Value) : (DateTime?)null;
+
+        if (actualStartsAt > now)
+            throw new BusinessException("實際開始時間不可晚於目前時間。", "BACKFILL_START_IN_FUTURE");
+        if (status == "completed")
+        {
+            if (!actualEndsAt.HasValue)
+                throw new BusinessException("補登已完成必須填寫實際結束時間。", "BACKFILL_END_REQUIRED");
+            if (actualEndsAt.Value < actualStartsAt)
+                throw new BusinessException("實際結束時間不可早於開始時間。", "BACKFILL_TIME_RANGE_INVALID");
+            if (actualEndsAt.Value > now)
+                throw new BusinessException("已完成服務的實際結束時間不可晚於目前時間。", "BACKFILL_END_IN_FUTURE");
+        }
+        else if (actualEndsAt.HasValue)
+        {
+            throw new BusinessException("補登服務中不需要填寫實際結束時間。", "BACKFILL_END_NOT_ALLOWED");
+        }
+
+        await _repository.BackfillServedOrderAsync(orderId, status, actualStartsAt, actualEndsAt, reason,
+            ActorId(actor), ActorRole(actor), actor.FindFirstValue(AdminAuthConstants.StaffMemberIdClaimType),
+            now, cancellationToken);
+        return (await MapOrdersAsync(await _repository.GetOrderAsync(orderId, cancellationToken), cancellationToken)).Single();
+    }
+
     public async Task<OrderDto> UpdateOrderAsync(string orderId, UpdateAdminOrderRequest request,
         ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
@@ -493,7 +526,8 @@ public sealed class OrderingService : IOrderingService
             var stage = QueueStage(order.OrderStatus, queueMinutes, settings);
             return new OrderDto(order.Id, order.OrderNumber, order.OrderKind, order.ParentNomineeId,
                 order.OrderStatus, stage, queueMinutes,
-                ToOffset(order.SubmittedAt)!.Value, ToOffset(order.ConfirmedAt), order.Subtotal,
+                ToOffset(order.SubmittedAt)!.Value, ToOffset(order.ConfirmedAt), ToOffset(order.StartedAt),
+                ToOffset(order.CompletedAt), order.Subtotal,
                 order.MealCreditApplied, order.TotalAmount, order.CustomerNote, order.InternalNote,
                 bundle.Items.Where(item => item.OrderId == order.Id).OrderBy(item => item.SortOrder).Select(item =>
                     new OrderItemDto(item.Id, item.ItemType, item.ReferenceId, item.ParentItemId,

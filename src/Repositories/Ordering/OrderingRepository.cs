@@ -512,6 +512,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
 
             var nominees = (await connection.QueryAsync<OrderNomineeRow>(new CommandDefinition("""
                 SELECT `ID` AS Id, `ORDER_ID` AS OrderId, `STAFF_ID` AS StaffId,
+                       `STAFF_NAME_SNAPSHOT` AS StaffNameSnapshot,
                        `REQUESTED_STARTS_AT` AS RequestedStartsAt,
                        `REQUESTED_SERVICE_ENDS_AT` AS RequestedServiceEndsAt,
                        `REQUESTED_BUSY_UNTIL` AS RequestedBusyUntil,
@@ -653,6 +654,153 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             JsonSerializer.Serialize(new { startsAt, wasExpired = status == "expired" }), actorId, actorRole, now,
             cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task BackfillServedOrderAsync(string orderId, string status, DateTime actualStartsAt,
+        DateTime? actualEndsAt, string reason, string actorId, string actorRole, string? actorStaffId, DateTime now,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            var order = await connection.QuerySingleOrDefaultAsync<OrderRow>(new CommandDefinition("""
+                SELECT `ID` AS Id, `SESSION_ID` AS SessionId, `ORDER_KIND` AS OrderKind,
+                       `ORDER_STATUS` AS OrderStatus, `MEAL_CREDIT_APPLIED` AS MealCreditApplied
+                FROM `ORDERS` WHERE `ID` = @OrderId FOR UPDATE;
+                """, new { OrderId = orderId }, transaction, cancellationToken: cancellationToken))
+                ?? throw new BusinessException("找不到訂單。", "ORDER_NOT_FOUND");
+            if (order.OrderStatus != "expired")
+                throw new BusinessException("只有已失效訂單可以補登已接待。", "ORDER_BACKFILL_STATUS_INVALID");
+            if (order.OrderKind == "service_addon")
+                throw new BusinessException("附掛式加購服務請依原指名訂單處理，不可單獨補登。", "ORDER_BACKFILL_ADDON_FORBIDDEN");
+            if (status is not ("in_service" or "completed"))
+                throw new BusinessException("補登狀態不正確。", "ORDER_BACKFILL_STATUS_INVALID");
+
+            var nominees = (await connection.QueryAsync<OrderNomineeRow>(new CommandDefinition("""
+                SELECT `ID` AS Id, `ORDER_ID` AS OrderId, `STAFF_ID` AS StaffId,
+                       `STAFF_NAME_SNAPSHOT` AS StaffNameSnapshot,
+                       `REQUESTED_STARTS_AT` AS RequestedStartsAt,
+                       `REQUESTED_SERVICE_ENDS_AT` AS RequestedServiceEndsAt,
+                       `REQUESTED_BUSY_UNTIL` AS RequestedBusyUntil,
+                       `RESERVED_MINUTES` AS ReservedMinutes,
+                       `BUFFER_MINUTES_SNAPSHOT` AS BufferMinutesSnapshot,
+                       `CONFIRMATION_STATUS` AS ConfirmationStatus
+                FROM `ORDER_NOMINEES` WHERE `ORDER_ID` = @OrderId FOR UPDATE;
+                """, new { OrderId = orderId }, transaction, cancellationToken: cancellationToken))).AsList();
+            if (nominees.Count == 0)
+                throw new BusinessException("此訂單沒有可補登的指名服務。", "ORDER_BACKFILL_NOMINEE_REQUIRED");
+            await LockStaffRowsAsync(connection, transaction, nominees.Select(item => item.StaffId), cancellationToken);
+
+            var privileged = actorRole is "manager" or "developer";
+            if (!privileged && (actorStaffId is null || nominees.Count != 1 || nominees[0].StaffId != actorStaffId))
+                throw new ForbiddenException("只有被指名店員本人可補登單人已接待訂單；多人訂單需由店經理或開發者處理。",
+                    "ORDER_BACKFILL_SCOPE_FORBIDDEN");
+
+            if (status == "in_service")
+            {
+                foreach (var nominee in nominees)
+                {
+                    if (nominee.RequestedServiceEndsAt <= now || nominee.RequestedBusyUntil <= now)
+                        throw new BusinessException("原預約時段已結束，請改用「補登已完成」。", "BACKFILL_SERVICE_ALREADY_ENDED");
+                    if (await HasConflictAsync(connection, transaction, nominee.StaffId, actualStartsAt,
+                            nominee.RequestedBusyUntil, cancellationToken))
+                        throw new BusinessException($"{nominee.StaffNameSnapshot} 目前已有其他忙碌區段，無法補登服務中。",
+                            "BACKFILL_STAFF_BUSY");
+                }
+            }
+
+            if (order.MealCreditApplied > 0)
+            {
+                var debited = await connection.ExecuteAsync(new CommandDefinition("""
+                    UPDATE `CUSTOMER_ORDER_SESSIONS`
+                    SET `REMAINING_MEAL_CREDIT` = `REMAINING_MEAL_CREDIT` - @Credit, `UPDATED_AT` = @Now
+                    WHERE `ID` = @SessionId AND `REMAINING_MEAL_CREDIT` >= @Credit;
+                    """, new { order.SessionId, Credit = order.MealCreditApplied, Now = now }, transaction,
+                    cancellationToken: cancellationToken));
+                if (debited != 1)
+                    throw new BusinessException("顧客目前的信物餘額不足以補回此失效訂單折抵，請改由後台處理補收或調整。",
+                        "MEAL_CREDIT_UNAVAILABLE_FOR_BACKFILL");
+            }
+
+            await connection.ExecuteAsync(new CommandDefinition("""
+                UPDATE `STAFF_BUSY_BLOCKS` SET `BLOCK_STATUS` = 'released', `UPDATED_AT` = @Now
+                WHERE `ORDER_ID` = @OrderId AND `BLOCK_STATUS` = 'active';
+                UPDATE `ORDER_NOMINEES`
+                SET `CONFIRMATION_STATUS` = 'confirmed', `CONFIRMED_AT` = @Now,
+                    `CONFIRMED_BY` = @ActorId, `UPDATED_AT` = @Now
+                WHERE `ORDER_ID` = @OrderId;
+                UPDATE `ORDERS`
+                SET `ORDER_STATUS` = @NextStatus, `QUEUE_ENTERED_AT` = NULL,
+                    `CONFIRMED_AT` = @Now, `STARTED_AT` = @ActualStartsAt,
+                    `COMPLETED_AT` = @ActualEndsAt, `CANCELLED_AT` = NULL,
+                    `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId
+                WHERE `ID` = @OrderId;
+                """, new
+                {
+                    OrderId = orderId,
+                    NextStatus = status,
+                    ActualStartsAt = actualStartsAt,
+                    ActualEndsAt = actualEndsAt,
+                    Now = now,
+                    ActorId = actorId
+                }, transaction, cancellationToken: cancellationToken));
+
+            var blockStatus = status == "completed" ? "completed" : "active";
+            var blockRows = nominees.Select(nominee =>
+            {
+                var serviceEndsAt = status == "completed" ? actualEndsAt!.Value : nominee.RequestedServiceEndsAt;
+                var endsAt = status == "completed"
+                    ? serviceEndsAt.AddMinutes(Math.Max(0, nominee.BufferMinutesSnapshot))
+                    : nominee.RequestedBusyUntil;
+                return new
+                {
+                    Id = NewId(),
+                    OrderId = orderId,
+                    NomineeId = nominee.Id,
+                    nominee.StaffId,
+                    StartsAt = actualStartsAt,
+                    ServiceEndsAt = serviceEndsAt,
+                    EndsAt = endsAt,
+                    BlockStatus = blockStatus,
+                    Now = now
+                };
+            }).ToArray();
+            await connection.ExecuteAsync(new CommandDefinition("""
+                INSERT INTO `STAFF_BUSY_BLOCKS`
+                    (`ID`, `ORDER_ID`, `ORDER_NOMINEE_ID`, `STAFF_ID`, `STARTS_AT`, `SERVICE_ENDS_AT`, `ENDS_AT`,
+                     `BLOCK_STATUS`, `CREATED_AT`, `UPDATED_AT`)
+                VALUES (@Id, @OrderId, @NomineeId, @StaffId, @StartsAt, @ServiceEndsAt, @EndsAt,
+                        @BlockStatus, @Now, @Now)
+                ON DUPLICATE KEY UPDATE
+                    `ORDER_ID` = VALUES(`ORDER_ID`), `STAFF_ID` = VALUES(`STAFF_ID`),
+                    `STARTS_AT` = VALUES(`STARTS_AT`), `SERVICE_ENDS_AT` = VALUES(`SERVICE_ENDS_AT`),
+                    `ENDS_AT` = VALUES(`ENDS_AT`), `BLOCK_STATUS` = VALUES(`BLOCK_STATUS`),
+                    `UPDATED_AT` = VALUES(`UPDATED_AT`);
+                """, blockRows, transaction, cancellationToken: cancellationToken));
+
+            var nextLabel = status == "completed" ? "已完成" : "服務中";
+            var historyReason = $"失效訂單補登{nextLabel}。原因：{reason}";
+            var actorType = privileged ? "admin" : "staff";
+            await InsertHistoryAsync(connection, transaction, orderId, "expired", status, historyReason,
+                actorType, actorId, now, cancellationToken);
+            await InsertAuditAsync(connection, transaction, orderId, order.SessionId, "order.backfill_served",
+                JsonSerializer.Serialize(new { previousStatus = "expired" }),
+                JsonSerializer.Serialize(new
+                {
+                    status,
+                    actualStartsAt,
+                    actualEndsAt,
+                    reason,
+                    staffId = actorStaffId
+                }), actorId, actorRole, now, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
     }
 
     public async Task UpdateOrderAsync(string orderId, string? customerNote, string? internalNote,

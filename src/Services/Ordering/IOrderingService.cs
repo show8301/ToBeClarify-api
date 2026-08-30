@@ -25,6 +25,8 @@ public interface IOrderingService
     Task<OrderDto> SubmitAdminAddonAsync(string nomineeId, SubmitAddonRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<OrderDto> ConfirmAddonAsync(string orderId, ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<OrderDto> RescheduleOrderAsync(string orderId, RescheduleOrderRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);
+    Task<OrderDto> BackfillServedOrderAsync(string orderId, BackfillServedOrderRequest request,
+        ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<OrderDto> ShortenNominationAsync(string orderId, string nomineeId, ShortenNominationRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<OrderDto> UpdateOrderAsync(string orderId, UpdateAdminOrderRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<OrderDto> TransitionOrderAsync(string orderId, OrderTransitionRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);

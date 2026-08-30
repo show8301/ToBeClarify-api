@@ -37,6 +37,9 @@ public interface IOrderingRepository
         CancellationToken cancellationToken);
     Task RescheduleOrderAsync(string orderId, DateTime startsAt, string actorId, string actorRole, DateTime now,
         CancellationToken cancellationToken);
+    Task BackfillServedOrderAsync(string orderId, string status, DateTime actualStartsAt, DateTime? actualEndsAt,
+        string reason, string actorId, string actorRole, string? actorStaffId, DateTime now,
+        CancellationToken cancellationToken);
     Task ShortenNominationAsync(string orderId, string nomineeId, int segmentCount, string reason,
         string actorId, string actorRole, DateTime now, CancellationToken cancellationToken);
     Task UpdateOrderAsync(string orderId, string? customerNote, string? internalNote,

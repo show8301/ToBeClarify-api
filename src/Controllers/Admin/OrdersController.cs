@@ -98,6 +98,12 @@ public sealed class OrdersController : ControllerBase
         => Ok(ApiResponse<OrderDto>.Ok(
             await _service.RescheduleOrderAsync(orderId, request, User, cancellationToken)));
 
+    [HttpPost("orders/{orderId}/backfill-served")]
+    public async Task<ActionResult<ApiResponse<OrderDto>>> BackfillServed(
+        string orderId, BackfillServedOrderRequest request, CancellationToken cancellationToken)
+        => Ok(ApiResponse<OrderDto>.Ok(
+            await _service.BackfillServedOrderAsync(orderId, request, User, cancellationToken)));
+
     [HttpPost("orders/{orderId}/nominees/{nomineeId}/shorten")]
     public async Task<ActionResult<ApiResponse<OrderDto>>> ShortenNomination(
         string orderId, string nomineeId, ShortenNominationRequest request, CancellationToken cancellationToken)

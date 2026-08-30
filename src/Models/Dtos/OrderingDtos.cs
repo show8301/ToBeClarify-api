@@ -120,6 +120,8 @@ public sealed record OrderDto(
     int QueueMinutes,
     DateTimeOffset SubmittedAt,
     DateTimeOffset? ConfirmedAt,
+    DateTimeOffset? StartedAt,
+    DateTimeOffset? CompletedAt,
     int Subtotal,
     int MealCreditApplied,
     int TotalAmount,
@@ -329,6 +331,19 @@ public sealed class UpdateOrderItemRequest
 public sealed class RescheduleOrderRequest
 {
     public DateTimeOffset RequestedStartsAt { get; init; }
+}
+
+public sealed class BackfillServedOrderRequest
+{
+    [Required, RegularExpression("^(in_service|completed)$")]
+    public string Status { get; init; } = string.Empty;
+
+    public DateTimeOffset ActualStartsAt { get; init; }
+
+    public DateTimeOffset? ActualEndsAt { get; init; }
+
+    [Required, StringLength(500, MinimumLength = 1)]
+    public string Reason { get; init; } = string.Empty;
 }
 
 public sealed class ShortenNominationRequest
