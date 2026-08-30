@@ -5,6 +5,7 @@ namespace ToBeClarify.Api.Models.Dtos;
 public sealed record OrderingSettingsDto(
     int MinimumMealCredit,
     int BaseNominationFee,
+    IReadOnlyList<int> TipPresetAmounts,
     int SegmentMinutes,
     int ReminderAfterMinutes,
     int EscalateAfterMinutes,
@@ -245,6 +246,9 @@ public sealed class UpdateOrderingSettingsRequest
 
     [Range(0, 1000000)]
     public int BaseNominationFee { get; init; }
+
+    [Required, MinLength(4), MaxLength(4)]
+    public IReadOnlyList<int> TipPresetAmounts { get; init; } = [50, 100, 200, 500];
 
     [Range(1, 240)]
     public int SegmentMinutes { get; init; } = 20;

@@ -14,6 +14,7 @@ namespace ToBeClarify.Api.Services.Ordering;
 
 public sealed class OrderingService : IOrderingService
 {
+    private static readonly int[] DefaultTipPresetAmounts = [50, 100, 200, 500];
     private static readonly TimeSpan TaiwanOffset = TimeSpan.FromHours(8);
     private readonly IOrderingRepository _repository;
     private readonly IOrderingTokenService _tokens;
@@ -289,6 +290,7 @@ public sealed class OrderingService : IOrderingService
     public async Task<OrderingSettingsDto> SaveSettingsAsync(UpdateOrderingSettingsRequest request,
         ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
+        var tipPresetAmounts = NormalizeTipPresetAmounts(request.TipPresetAmounts);
         if (!(request.ReminderAfterMinutes < request.EscalateAfterMinutes &&
               request.EscalateAfterMinutes < request.ExpireAfterMinutes))
             throw new BusinessException("提醒時間必須早於升級時間，升級時間必須早於失效時間。", "ORDER_TIMEOUT_SEQUENCE_INVALID");
@@ -298,6 +300,10 @@ public sealed class OrderingService : IOrderingService
         {
             MinimumMealCredit = request.MinimumMealCredit,
             BaseNominationFee = request.BaseNominationFee,
+            TipPresetAmount1 = tipPresetAmounts[0],
+            TipPresetAmount2 = tipPresetAmounts[1],
+            TipPresetAmount3 = tipPresetAmounts[2],
+            TipPresetAmount4 = tipPresetAmounts[3],
             SegmentMinutes = request.SegmentMinutes,
             ReminderAfterMinutes = request.ReminderAfterMinutes,
             EscalateAfterMinutes = request.EscalateAfterMinutes,
@@ -601,10 +607,26 @@ public sealed class OrderingService : IOrderingService
         };
 
     private OrderingSettingsDto MapSettings(OrderingSettingsRow row)
-        => new(row.MinimumMealCredit, row.BaseNominationFee, row.SegmentMinutes,
+        => new(row.MinimumMealCredit, row.BaseNominationFee, TipPresetAmounts(row), row.SegmentMinutes,
             row.ReminderAfterMinutes, row.EscalateAfterMinutes, row.ExpireAfterMinutes,
             row.BusinessDayStartMinute, row.BusinessDayEndMinute, row.BusinessDayEndsNextDay,
             ToOffset(row.NominationPausedUntil), row.NominationPausedUntil > _clock.LocalDateTime);
+
+    private static IReadOnlyList<int> TipPresetAmounts(OrderingSettingsRow row)
+        => [
+            row.TipPresetAmount1 > 0 ? row.TipPresetAmount1 : DefaultTipPresetAmounts[0],
+            row.TipPresetAmount2 > 0 ? row.TipPresetAmount2 : DefaultTipPresetAmounts[1],
+            row.TipPresetAmount3 > 0 ? row.TipPresetAmount3 : DefaultTipPresetAmounts[2],
+            row.TipPresetAmount4 > 0 ? row.TipPresetAmount4 : DefaultTipPresetAmounts[3]
+        ];
+
+    private static int[] NormalizeTipPresetAmounts(IReadOnlyList<int>? values)
+    {
+        if (values is null || values.Count != 4 || values.Any(value => value is < 1 or > 1_000_000) ||
+            values.Distinct().Count() != 4)
+            throw new BusinessException("小費預設金額必須是四個不重複、介於 1 至 1,000,000 Gil 的整數。", "TIP_PRESETS_INVALID");
+        return values.ToArray();
+    }
 
     private async Task<OrderingBusinessContextDto> ResolveBusinessContextAsync(OrderingSettingsRow settings,
         DateTime now, CancellationToken cancellationToken)

@@ -19,6 +19,8 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
     {
         const string sql = """
             SELECT `MINIMUM_MEAL_CREDIT` AS MinimumMealCredit, `BASE_NOMINATION_FEE` AS BaseNominationFee,
+                   `TIP_PRESET_AMOUNT_1` AS TipPresetAmount1, `TIP_PRESET_AMOUNT_2` AS TipPresetAmount2,
+                   `TIP_PRESET_AMOUNT_3` AS TipPresetAmount3, `TIP_PRESET_AMOUNT_4` AS TipPresetAmount4,
                    `SEGMENT_MINUTES` AS SegmentMinutes, `REMINDER_AFTER_MINUTES` AS ReminderAfterMinutes,
                    `ESCALATE_AFTER_MINUTES` AS EscalateAfterMinutes, `EXPIRE_AFTER_MINUTES` AS ExpireAfterMinutes,
                    `BUSINESS_DAY_START_MINUTE` AS BusinessDayStartMinute,
@@ -28,23 +30,33 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             FROM `ORDERING_SETTINGS` WHERE `ID` = 'default' LIMIT 1;
             """;
         return await QuerySingleOrDefaultAsync<OrderingSettingsRow>(sql, null, cancellationToken)
-            ?? new OrderingSettingsRow { SegmentMinutes = 20, ReminderAfterMinutes = 5, EscalateAfterMinutes = 10, ExpireAfterMinutes = 20 };
+            ?? new OrderingSettingsRow
+            {
+                TipPresetAmount1 = 50, TipPresetAmount2 = 100, TipPresetAmount3 = 200, TipPresetAmount4 = 500,
+                SegmentMinutes = 20, ReminderAfterMinutes = 5, EscalateAfterMinutes = 10, ExpireAfterMinutes = 20
+            };
     }
 
     public async Task SaveSettingsAsync(OrderingSettingsRow settings, string actorId, DateTime now, CancellationToken cancellationToken)
     {
         const string sql = """
             INSERT INTO `ORDERING_SETTINGS`
-                (`ID`, `MINIMUM_MEAL_CREDIT`, `BASE_NOMINATION_FEE`, `SEGMENT_MINUTES`,
+                (`ID`, `MINIMUM_MEAL_CREDIT`, `BASE_NOMINATION_FEE`, `TIP_PRESET_AMOUNT_1`, `TIP_PRESET_AMOUNT_2`,
+                 `TIP_PRESET_AMOUNT_3`, `TIP_PRESET_AMOUNT_4`, `SEGMENT_MINUTES`,
                  `REMINDER_AFTER_MINUTES`, `ESCALATE_AFTER_MINUTES`, `EXPIRE_AFTER_MINUTES`,
                  `BUSINESS_DAY_START_MINUTE`, `BUSINESS_DAY_END_MINUTE`, `BUSINESS_DAY_ENDS_NEXT_DAY`,
                  `UPDATED_AT`, `UPDATED_BY`)
-            VALUES ('default', @MinimumMealCredit, @BaseNominationFee, @SegmentMinutes,
+            VALUES ('default', @MinimumMealCredit, @BaseNominationFee, @TipPresetAmount1, @TipPresetAmount2,
+                    @TipPresetAmount3, @TipPresetAmount4, @SegmentMinutes,
                     @ReminderAfterMinutes, @EscalateAfterMinutes, @ExpireAfterMinutes,
                     @BusinessDayStartMinute, @BusinessDayEndMinute, @BusinessDayEndsNextDay, @Now, @ActorId)
             ON DUPLICATE KEY UPDATE
                 `MINIMUM_MEAL_CREDIT` = VALUES(`MINIMUM_MEAL_CREDIT`),
                 `BASE_NOMINATION_FEE` = VALUES(`BASE_NOMINATION_FEE`),
+                `TIP_PRESET_AMOUNT_1` = VALUES(`TIP_PRESET_AMOUNT_1`),
+                `TIP_PRESET_AMOUNT_2` = VALUES(`TIP_PRESET_AMOUNT_2`),
+                `TIP_PRESET_AMOUNT_3` = VALUES(`TIP_PRESET_AMOUNT_3`),
+                `TIP_PRESET_AMOUNT_4` = VALUES(`TIP_PRESET_AMOUNT_4`),
                 `SEGMENT_MINUTES` = VALUES(`SEGMENT_MINUTES`),
                 `REMINDER_AFTER_MINUTES` = VALUES(`REMINDER_AFTER_MINUTES`),
                 `ESCALATE_AFTER_MINUTES` = VALUES(`ESCALATE_AFTER_MINUTES`),
@@ -57,7 +69,9 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await connection.ExecuteAsync(new CommandDefinition(sql, new
         {
-            settings.MinimumMealCredit, settings.BaseNominationFee, settings.SegmentMinutes,
+            settings.MinimumMealCredit, settings.BaseNominationFee,
+            settings.TipPresetAmount1, settings.TipPresetAmount2, settings.TipPresetAmount3, settings.TipPresetAmount4,
+            settings.SegmentMinutes,
             settings.ReminderAfterMinutes, settings.EscalateAfterMinutes, settings.ExpireAfterMinutes,
             settings.BusinessDayStartMinute, settings.BusinessDayEndMinute, settings.BusinessDayEndsNextDay,
             Now = now, ActorId = actorId
@@ -587,10 +601,13 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        var status = await connection.ExecuteScalarAsync<string?>(new CommandDefinition(
-            "SELECT `ORDER_STATUS` FROM `ORDERS` WHERE `ID` = @OrderId FOR UPDATE;", new { OrderId = orderId },
-            transaction, cancellationToken: cancellationToken));
-        if (status is not ("submitted" or "partially_confirmed" or "needs_reschedule"))
+        var order = await connection.QuerySingleOrDefaultAsync<OrderRow>(new CommandDefinition(
+            "SELECT `ID` AS Id, `SESSION_ID` AS SessionId, `ORDER_STATUS` AS OrderStatus, `MEAL_CREDIT_APPLIED` AS MealCreditApplied FROM `ORDERS` WHERE `ID` = @OrderId FOR UPDATE;",
+            new { OrderId = orderId }, transaction, cancellationToken: cancellationToken));
+        if (order is null)
+            throw new BusinessException("找不到訂單。", "ORDER_NOT_FOUND");
+        var status = order.OrderStatus;
+        if (status is not ("submitted" or "partially_confirmed" or "needs_reschedule" or "expired"))
             throw new BusinessException("此訂單目前不可重新排程。", "ORDER_NOT_RESCHEDULABLE");
         var nominees = (await connection.QueryAsync<OrderNomineeRow>(new CommandDefinition("""
             SELECT `ID` AS Id, `RESERVED_MINUTES` AS ReservedMinutes,
@@ -609,14 +626,32 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
                 """, new { StartsAt = startsAt, ServiceEnds = serviceEnds, BusyUntil = serviceEnds.AddMinutes(buffer),
                     Now = now, nominee.Id }, transaction, cancellationToken: cancellationToken));
         }
+        if (status == "expired" && order.MealCreditApplied > 0)
+        {
+            var restoredCredit = await connection.ExecuteAsync(new CommandDefinition("""
+                UPDATE `CUSTOMER_ORDER_SESSIONS`
+                SET `REMAINING_MEAL_CREDIT` = `REMAINING_MEAL_CREDIT` - @Credit, `UPDATED_AT` = @Now
+                WHERE `ID` = @SessionId AND `REMAINING_MEAL_CREDIT` >= @Credit;
+                """, new { order.SessionId, Credit = order.MealCreditApplied, Now = now }, transaction,
+                cancellationToken: cancellationToken));
+            if (restoredCredit != 1)
+                throw new BusinessException("顧客目前的信物餘額不足以重新啟動此訂單，請先由後台確認折抵金額。",
+                    "MEAL_CREDIT_UNAVAILABLE_FOR_REACTIVATION");
+        }
         await connection.ExecuteAsync(new CommandDefinition("""
             UPDATE `ORDERS` SET `ORDER_STATUS` = 'submitted', `QUEUE_ENTERED_AT` = @Now,
-                   `CONFIRMED_AT` = NULL, `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId WHERE `ID` = @OrderId;
-            """, new { Now = now, ActorId = actorId, OrderId = orderId }, transaction, cancellationToken: cancellationToken));
-        await InsertHistoryAsync(connection, transaction, orderId, status, "submitted", "重新安排指名時段",
+                   `CONFIRMED_AT` = NULL,
+                   `CANCELLED_AT` = CASE WHEN @WasExpired = 1 THEN NULL ELSE `CANCELLED_AT` END,
+                   `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId WHERE `ID` = @OrderId;
+            """, new { Now = now, ActorId = actorId, OrderId = orderId, WasExpired = status == "expired" }, transaction,
+            cancellationToken: cancellationToken));
+        var historyReason = status == "expired" ? "已失效訂單由後台強制啟動並重新排程" : "重新安排指名時段";
+        await InsertHistoryAsync(connection, transaction, orderId, status, "submitted", historyReason,
             "admin", actorId, now, cancellationToken);
-        await InsertAuditAsync(connection, transaction, orderId, null, "order.rescheduled", null,
-            JsonSerializer.Serialize(new { startsAt }), actorId, actorRole, now, cancellationToken);
+        await InsertAuditAsync(connection, transaction, orderId, null,
+            status == "expired" ? "order.force_reactivated" : "order.rescheduled", null,
+            JsonSerializer.Serialize(new { startsAt, wasExpired = status == "expired" }), actorId, actorRole, now,
+            cancellationToken);
         await transaction.CommitAsync(cancellationToken);
     }
 

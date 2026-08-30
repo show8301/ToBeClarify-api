@@ -4,7 +4,7 @@
 
 ## Deployment order
 
-1. Apply `db/migrations/20260830_01_ordering_system.sql`, then `db/migrations/20260830_02_business_hours_and_order_transitions.sql` to the target MySQL/MariaDB database. The second migration adds cross-day business windows, immutable nomination snapshots, pure-companionship mode and attached service add-on orders.
+1. Apply `db/migrations/20260830_01_ordering_system.sql`, then `db/migrations/20260830_02_business_hours_and_order_transitions.sql`, and finally `db/migrations/20260830_03_tip_presets.sql` to the target MySQL/MariaDB database. The later migrations add cross-day business windows, immutable nomination snapshots, pure-companionship mode, attached service add-on orders and four configurable tip presets.
 2. Set `OrderingToken__Secret` to a random secret of at least 32 characters. Keep it stable across deployments; changing it invalidates all current-day customer links.
 3. Set `OrderingToken__PublicWebBaseUrl` to the customer order page, for example `https://www-dev.marchgroup.net/order` while the Web is in the test environment.
 4. Merge the release into `main`. The API workflow may build `dev` and pull requests for verification, but it deploys only from `main` to the single production IIS environment using `API_DEPLOY_PATH` and `API_HEALTHCHECK_URL`. There is currently no API test-environment deployment.
@@ -31,8 +31,8 @@ All admin roles may read customer sessions and orders, create/reissue sessions, 
 - `/api/admin/order-sessions/{id}/reissue` rotates the URL and six-digit assistance code.
 - `/api/admin/order-sessions/{id}/orders` lists one customer's orders.
 - `/api/admin/orders/{id}/confirm-nominee` only confirms the staff member linked to the signed-in account; every nominee must confirm before the order is established.
-- `/api/admin/orders/{id}/reschedule` moves an expired/conflicting start time back into the queue. Existing nominations cannot have their segment quantity extended.
-- `/api/admin/ordering-settings` controls meal credit, base nomination fee, 20-minute segment configuration and reminder/escalation/expiry thresholds.
+- `/api/admin/orders/{id}/reschedule` moves an expired/conflicting start time back into the queue. For an expired order this is the backend emergency reactivation path: the original meal-credit deduction is restored before the order returns to `submitted`; it fails safely if the session no longer has enough credit. Existing nominations cannot have their segment quantity extended.
+- `/api/admin/ordering-settings` controls meal credit, base nomination fee, four tip preset amounts, 20-minute segment configuration and reminder/escalation/expiry thresholds. Only manager/developer accounts can read or update these settings.
 - `/api/admin/ordering-settings/pause-nomination` temporarily hides and disables nomination ordering.
 - `/api/admin/ordering-reports` returns immutable revenue and tip snapshots for settlement/reporting.
 

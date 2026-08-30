@@ -4,6 +4,10 @@ public sealed class OrderingSettingsRow
 {
     public int MinimumMealCredit { get; set; }
     public int BaseNominationFee { get; set; }
+    public int TipPresetAmount1 { get; set; }
+    public int TipPresetAmount2 { get; set; }
+    public int TipPresetAmount3 { get; set; }
+    public int TipPresetAmount4 { get; set; }
     public int SegmentMinutes { get; set; }
     public int ReminderAfterMinutes { get; set; }
     public int EscalateAfterMinutes { get; set; }
