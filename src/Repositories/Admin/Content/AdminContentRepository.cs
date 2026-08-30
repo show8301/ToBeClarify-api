@@ -7,9 +7,9 @@ using ToBeClarify.Api.Repositories.Shared;
 
 namespace ToBeClarify.Api.Repositories.Admin.Content;
 
-// IMPORTANT: the configured database account cannot delete rows or schema objects.
-// Delete* methods below are legacy compatibility paths and must not be invoked.
-// Replace them with status/soft-disable updates before exposing deletion in the UI.
+// Direct SQL maintenance account cannot delete rows or schema objects. The Delete*
+// methods below are API business paths; they may be invoked only through authorized
+// API requests using a deployment connection identity with the required privilege.
 public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContentRepository
 {
     public AdminContentRepository(AppDbContext dbContext) : base(dbContext)

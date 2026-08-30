@@ -11,9 +11,9 @@ using ToBeClarify.Api.Models.Media;
 
 namespace ToBeClarify.Api.Services.Media;
 
-// Database account policy: do not execute DELETE for media rows. Keep media metadata
-// for audit/reporting and use an update-based inactive state; file cleanup also requires
-// an explicit retention/DBA policy before it can be enabled.
+// Direct SQL maintenance account cannot execute DELETE for media rows. This service is
+// an API path and may clean up rows/files only when the deployed API identity, endpoint
+// authorization and retention/audit policy explicitly allow it.
 public sealed class AdminMediaUploadService
 {
     private static readonly IReadOnlyDictionary<string, string> SupportedTypes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
