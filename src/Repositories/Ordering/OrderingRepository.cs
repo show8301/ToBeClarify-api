@@ -261,6 +261,88 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             cancellationToken: cancellationToken));
     }
 
+    public async Task<BusinessDayOverrideRow?> GetActiveBusinessDayOverrideAsync(DateTime now,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT `ID` AS Id, `BUSINESS_DATE` AS BusinessDate, `STARTS_AT` AS StartsAt,
+                   `ENDS_AT` AS EndsAt, `EXPIRES_AT` AS ExpiresAt, `ENABLED` AS Enabled,
+                   `REASON` AS Reason, `UPDATED_BY` AS UpdatedBy, `UPDATED_AT` AS UpdatedAt
+            FROM `ORDERING_BUSINESS_DAY_OVERRIDE`
+            WHERE `ID` = 'default' AND `ENABLED` = TRUE AND `EXPIRES_AT` > @Now
+            LIMIT 1;
+            """;
+        return await QuerySingleOrDefaultAsync<BusinessDayOverrideRow>(sql, new { Now = now }, cancellationToken);
+    }
+
+    public async Task<BusinessDayOverrideRow?> GetBusinessDayOverrideAsync(CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT `ID` AS Id, `BUSINESS_DATE` AS BusinessDate, `STARTS_AT` AS StartsAt,
+                   `ENDS_AT` AS EndsAt, `EXPIRES_AT` AS ExpiresAt, `ENABLED` AS Enabled,
+                   `REASON` AS Reason, `UPDATED_BY` AS UpdatedBy, `UPDATED_AT` AS UpdatedAt
+            FROM `ORDERING_BUSINESS_DAY_OVERRIDE` WHERE `ID` = 'default' LIMIT 1;
+            """;
+        return await QuerySingleOrDefaultAsync<BusinessDayOverrideRow>(sql, null, cancellationToken);
+    }
+
+    public async Task SaveBusinessDayOverrideAsync(BusinessDayOverrideRow overrideRow, string actorId,
+        string actorRole, DateTime now, CancellationToken cancellationToken)
+    {
+        const string sql = """
+            INSERT INTO `ORDERING_BUSINESS_DAY_OVERRIDE`
+                (`ID`, `BUSINESS_DATE`, `STARTS_AT`, `ENDS_AT`, `EXPIRES_AT`, `ENABLED`, `REASON`, `UPDATED_AT`, `UPDATED_BY`)
+            VALUES ('default', @BusinessDate, @StartsAt, @EndsAt, @ExpiresAt, TRUE, @Reason, @Now, @ActorId)
+            ON DUPLICATE KEY UPDATE
+                `BUSINESS_DATE` = VALUES(`BUSINESS_DATE`),
+                `STARTS_AT` = VALUES(`STARTS_AT`),
+                `ENDS_AT` = VALUES(`ENDS_AT`),
+                `EXPIRES_AT` = VALUES(`EXPIRES_AT`),
+                `ENABLED` = TRUE,
+                `REASON` = VALUES(`REASON`),
+                `UPDATED_AT` = VALUES(`UPDATED_AT`),
+                `UPDATED_BY` = VALUES(`UPDATED_BY`);
+            INSERT INTO `ORDER_AUDIT_LOG`
+                (`ID`, `ACTION_TYPE`, `AFTER_JSON`, `ACTOR_ID`, `ACTOR_ROLE`, `CREATED_AT`)
+            VALUES (@AuditId, 'business_day_override.enabled', @AfterJson, @ActorId, @ActorRole, @Now);
+            """;
+        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            BusinessDate = overrideRow.BusinessDate.Date,
+            StartsAt = overrideRow.StartsAt,
+            EndsAt = overrideRow.EndsAt,
+            ExpiresAt = overrideRow.ExpiresAt,
+            overrideRow.Reason,
+            Now = now,
+            ActorId = actorId,
+            ActorRole = actorRole,
+            AuditId = NewId(),
+            AfterJson = JsonSerializer.Serialize(overrideRow)
+        }, cancellationToken: cancellationToken));
+    }
+
+    public async Task DisableBusinessDayOverrideAsync(string actorId, string actorRole, DateTime now,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            UPDATE `ORDERING_BUSINESS_DAY_OVERRIDE`
+            SET `ENABLED` = FALSE, `EXPIRES_AT` = @Now, `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId
+            WHERE `ID` = 'default';
+            INSERT INTO `ORDER_AUDIT_LOG`
+                (`ID`, `ACTION_TYPE`, `AFTER_JSON`, `ACTOR_ID`, `ACTOR_ROLE`, `CREATED_AT`)
+            VALUES (@AuditId, 'business_day_override.disabled', JSON_OBJECT('enabled', FALSE), @ActorId, @ActorRole, @Now);
+            """;
+        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            Now = now,
+            ActorId = actorId,
+            ActorRole = actorRole,
+            AuditId = NewId()
+        }, cancellationToken: cancellationToken));
+    }
+
     public async Task<string?> GetStaffNameAsync(string staffId, CancellationToken cancellationToken)
     {
         const string sql = "SELECT `DISPLAY_NAME` FROM `STAFF_MEMBERS` WHERE `ID` = @StaffId AND `IS_ACTIVE` = TRUE LIMIT 1;";

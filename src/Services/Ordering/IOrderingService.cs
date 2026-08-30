@@ -17,6 +17,10 @@ public interface IOrderingService
     Task<IReadOnlyList<AdminOrderSessionDto>> GetAdminSessionsAsync(DateOnly? businessDate, string? search, CancellationToken cancellationToken);
     Task<IReadOnlyList<OrderDto>> GetAdminOrdersAsync(string sessionId, CancellationToken cancellationToken);
     Task<OrderingBusinessContextDto> GetBusinessContextAsync(CancellationToken cancellationToken);
+    Task<OrderingBusinessDayOverrideDto?> GetBusinessDayOverrideAsync(CancellationToken cancellationToken);
+    Task<OrderingBusinessDayOverrideDto> SaveBusinessDayOverrideAsync(
+        UpdateOrderingBusinessDayOverrideRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);
+    Task DisableBusinessDayOverrideAsync(ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<OrderingSettingsDto> GetSettingsAsync(CancellationToken cancellationToken);
     Task<OrderingSettingsDto> SaveSettingsAsync(UpdateOrderingSettingsRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<OrderingSettingsDto> PauseNominationAsync(PauseNominationRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);

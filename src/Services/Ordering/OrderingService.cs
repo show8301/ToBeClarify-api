@@ -287,6 +287,56 @@ public sealed class OrderingService : IOrderingService
         => await ResolveBusinessContextAsync(await _repository.GetSettingsAsync(cancellationToken),
             _clock.LocalDateTime, cancellationToken);
 
+    public async Task<OrderingBusinessDayOverrideDto?> GetBusinessDayOverrideAsync(
+        CancellationToken cancellationToken)
+    {
+        var row = await _repository.GetBusinessDayOverrideAsync(cancellationToken);
+        if (row is null)
+            return null;
+
+        var mapped = MapBusinessDayOverride(row)!;
+        return row.Enabled && row.ExpiresAt > _clock.LocalDateTime
+            ? mapped
+            : mapped with { Enabled = false };
+    }
+
+    public async Task<OrderingBusinessDayOverrideDto> SaveBusinessDayOverrideAsync(
+        UpdateOrderingBusinessDayOverrideRequest request, ClaimsPrincipal actor,
+        CancellationToken cancellationToken)
+    {
+        var startsAt = DateTime.SpecifyKind(request.StartsAt, DateTimeKind.Unspecified);
+        var endsAt = DateTime.SpecifyKind(request.EndsAt, DateTimeKind.Unspecified);
+        if (request.BusinessDate != DateOnly.FromDateTime(startsAt))
+            throw new BusinessException("測試營業日必須與測試開始時間的日期相同。", "BUSINESS_DAY_OVERRIDE_DATE_INVALID");
+        if (endsAt <= startsAt || endsAt - startsAt > TimeSpan.FromDays(1))
+            throw new BusinessException("測試營業時間必須大於 0 且不可超過 24 小時。", "BUSINESS_DAY_OVERRIDE_WINDOW_INVALID");
+        var reason = string.IsNullOrWhiteSpace(request.Reason) ? null : request.Reason.Trim();
+        if (reason is null)
+            throw new BusinessException("啟用正式環境測試營業日必須填寫測試原因。", "BUSINESS_DAY_OVERRIDE_REASON_REQUIRED");
+        var now = _clock.LocalDateTime;
+        var expiresAt = now.AddMinutes(Math.Clamp(request.DurationMinutes, 1, 1440));
+        var row = new BusinessDayOverrideRow
+        {
+            Id = "default",
+            BusinessDate = request.BusinessDate.ToDateTime(TimeOnly.MinValue),
+            StartsAt = startsAt,
+            EndsAt = endsAt,
+            ExpiresAt = expiresAt,
+            Enabled = true,
+            Reason = reason,
+            UpdatedBy = ActorId(actor),
+            UpdatedAt = now
+        };
+        await _repository.SaveBusinessDayOverrideAsync(row, ActorId(actor), ActorRole(actor), now, cancellationToken);
+        return MapBusinessDayOverride(row)!;
+    }
+
+    public async Task DisableBusinessDayOverrideAsync(ClaimsPrincipal actor, CancellationToken cancellationToken)
+    {
+        await _repository.DisableBusinessDayOverrideAsync(ActorId(actor), ActorRole(actor),
+            _clock.LocalDateTime, cancellationToken);
+    }
+
     public async Task<OrderingSettingsDto> SaveSettingsAsync(UpdateOrderingSettingsRequest request,
         ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
@@ -665,6 +715,15 @@ public sealed class OrderingService : IOrderingService
     private async Task<OrderingBusinessContextDto> ResolveBusinessContextAsync(OrderingSettingsRow settings,
         DateTime now, CancellationToken cancellationToken)
     {
+        var overrideRow = await _repository.GetActiveBusinessDayOverrideAsync(now, cancellationToken);
+        if (overrideRow is not null)
+        {
+            var overrideDate = DateOnly.FromDateTime(overrideRow.BusinessDate);
+            return new OrderingBusinessContextDto(overrideDate, overrideDate,
+                ClientContentMappings.ToTaiwanOffset(overrideRow.StartsAt),
+                ClientContentMappings.ToTaiwanOffset(overrideRow.EndsAt), true, true,
+                ClientContentMappings.ToTaiwanOffset(overrideRow.ExpiresAt));
+        }
         ValidateBusinessHours(settings.BusinessDayStartMinute, settings.BusinessDayEndMinute,
             settings.BusinessDayEndsNextDay);
         var persisted = await _repository.GetActiveBusinessPeriodAsync(now, cancellationToken);
@@ -723,6 +782,12 @@ public sealed class OrderingService : IOrderingService
     private static OrderSessionDto MapSession(OrderSessionRow row)
         => new(row.Id, row.GameId, row.CustomerName, DateOnly.FromDateTime(row.BusinessDate),
             row.MaxNominatedStaff, row.PrepaidMealCredit, row.RemainingMealCredit, row.SessionStatus);
+
+    private static OrderingBusinessDayOverrideDto? MapBusinessDayOverride(BusinessDayOverrideRow? row)
+        => row is null ? null : new OrderingBusinessDayOverrideDto(row.Enabled,
+            DateOnly.FromDateTime(row.BusinessDate), ClientContentMappings.ToTaiwanOffset(row.StartsAt),
+            ClientContentMappings.ToTaiwanOffset(row.EndsAt), ClientContentMappings.ToTaiwanOffset(row.ExpiresAt),
+            row.Reason, row.UpdatedBy, ClientContentMappings.ToTaiwanOffset(row.UpdatedAt));
 
     private OrderSessionIssuedDto Issued(OrderSessionRow row, string token, string recoveryCode)
         => new(MapSession(row), token, _tokens.BuildOrderUrl(token), recoveryCode);

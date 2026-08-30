@@ -21,7 +21,19 @@ public sealed record OrderingBusinessContextDto(
     DateOnly ReferenceBusinessDate,
     DateTimeOffset ReferenceStartsAt,
     DateTimeOffset ReferenceEndsAt,
-    bool OrderingOpen);
+    bool OrderingOpen,
+    bool IsTestOverride = false,
+    DateTimeOffset? TestOverrideExpiresAt = null);
+
+public sealed record OrderingBusinessDayOverrideDto(
+    bool Enabled,
+    DateOnly BusinessDate,
+    DateTimeOffset StartsAt,
+    DateTimeOffset EndsAt,
+    DateTimeOffset ExpiresAt,
+    string? Reason,
+    string? UpdatedBy,
+    DateTimeOffset UpdatedAt);
 
 public sealed record OrderSessionDto(
     string Id,
@@ -290,6 +302,24 @@ public sealed class UpdateAdminOrderRequest
     // Kept temporarily so older clients receive an explicit business error instead of a silent no-op.
     [StringLength(32)]
     public string? Status { get; init; }
+}
+
+public sealed class UpdateOrderingBusinessDayOverrideRequest
+{
+    [Required]
+    public DateOnly BusinessDate { get; init; }
+
+    [Required]
+    public DateTime StartsAt { get; init; }
+
+    [Required]
+    public DateTime EndsAt { get; init; }
+
+    [Range(1, 1440)]
+    public int DurationMinutes { get; init; } = 60;
+
+    [StringLength(500)]
+    public string? Reason { get; init; }
 }
 
 public sealed class SubmitAddonRequest

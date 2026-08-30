@@ -26,6 +26,19 @@ public sealed class BusinessPeriodRow
     public DateTime EndsAt { get; set; }
 }
 
+public sealed class BusinessDayOverrideRow
+{
+    public string Id { get; set; } = "default";
+    public DateTime BusinessDate { get; set; }
+    public DateTime StartsAt { get; set; }
+    public DateTime EndsAt { get; set; }
+    public DateTime ExpiresAt { get; set; }
+    public bool Enabled { get; set; }
+    public string? Reason { get; set; }
+    public string? UpdatedBy { get; set; }
+    public DateTime UpdatedAt { get; set; }
+}
+
 public class OrderSessionRow
 {
     public string Id { get; set; } = string.Empty;

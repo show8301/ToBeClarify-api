@@ -56,6 +56,29 @@ public sealed class OrdersController : ControllerBase
         => Ok(ApiResponse<OrderingBusinessContextDto>.Ok(
             await _service.GetBusinessContextAsync(cancellationToken)));
 
+    [HttpGet("ordering-settings/business-day-override")]
+    [Authorize(Policy = "AdminManager")]
+    public async Task<ActionResult<ApiResponse<OrderingBusinessDayOverrideDto?>>> BusinessDayOverride(
+        CancellationToken cancellationToken)
+        => Ok(ApiResponse<OrderingBusinessDayOverrideDto?>.Ok(
+            await _service.GetBusinessDayOverrideAsync(cancellationToken)));
+
+    [HttpPut("ordering-settings/business-day-override")]
+    [Authorize(Policy = "AdminManager")]
+    public async Task<ActionResult<ApiResponse<OrderingBusinessDayOverrideDto>>> SaveBusinessDayOverride(
+        UpdateOrderingBusinessDayOverrideRequest request, CancellationToken cancellationToken)
+        => Ok(ApiResponse<OrderingBusinessDayOverrideDto>.Ok(
+            await _service.SaveBusinessDayOverrideAsync(request, User, cancellationToken)));
+
+    [HttpPost("ordering-settings/business-day-override/disable")]
+    [Authorize(Policy = "AdminManager")]
+    public async Task<ActionResult<ApiResponse<bool>>> DisableBusinessDayOverride(
+        CancellationToken cancellationToken)
+    {
+        await _service.DisableBusinessDayOverrideAsync(User, cancellationToken);
+        return Ok(ApiResponse<bool>.Ok(true));
+    }
+
     [HttpPut("ordering-settings")]
     [Authorize(Policy = "AdminManager")]
     public async Task<ActionResult<ApiResponse<OrderingSettingsDto>>> SaveSettings(

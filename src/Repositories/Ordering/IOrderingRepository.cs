@@ -8,6 +8,12 @@ public interface IOrderingRepository
     Task SaveSettingsAsync(OrderingSettingsRow settings, string actorId, DateTime now, CancellationToken cancellationToken);
     Task<BusinessPeriodRow?> GetActiveBusinessPeriodAsync(DateTime now, CancellationToken cancellationToken);
     Task<BusinessPeriodRow> GetOrCreateBusinessPeriodAsync(BusinessPeriodRow period, CancellationToken cancellationToken);
+    Task<BusinessDayOverrideRow?> GetActiveBusinessDayOverrideAsync(DateTime now, CancellationToken cancellationToken);
+    Task<BusinessDayOverrideRow?> GetBusinessDayOverrideAsync(CancellationToken cancellationToken);
+    Task SaveBusinessDayOverrideAsync(BusinessDayOverrideRow overrideRow, string actorId, string actorRole,
+        DateTime now, CancellationToken cancellationToken);
+    Task DisableBusinessDayOverrideAsync(string actorId, string actorRole, DateTime now,
+        CancellationToken cancellationToken);
     Task SetNominationPauseAsync(DateTime? pausedUntil, string actorId, DateTime now, CancellationToken cancellationToken);
     Task<OrderSessionRow?> GetSessionByIdAsync(string id, CancellationToken cancellationToken);
     Task<OrderSessionRow?> GetSessionByGameIdAsync(string gameId, DateOnly businessDate, CancellationToken cancellationToken);
