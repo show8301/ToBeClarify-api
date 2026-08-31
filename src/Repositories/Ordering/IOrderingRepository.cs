@@ -45,7 +45,8 @@ public interface IOrderingRepository
     Task<IReadOnlyList<AdminOrderSessionRow>> GetAdminSessionsAsync(DateOnly businessDate, string? search,
         CancellationToken cancellationToken);
     Task<int> ExpireWaitingOrdersAsync(DateTime cutoff, DateTime now, CancellationToken cancellationToken);
-    Task<string> ConfirmNomineeAsync(string orderId, string staffId, string actorId, DateTime now,
+    Task<string> ConfirmNomineeAsync(string orderId, string? staffId, string actorId, bool privileged,
+        DateTime now,
         CancellationToken cancellationToken);
     Task DecideStoreConfirmationAsync(string orderId, string decision, string? reason, string actorId,
         string actorRole, DateTime now, CancellationToken cancellationToken);
