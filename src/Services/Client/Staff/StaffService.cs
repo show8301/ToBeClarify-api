@@ -37,7 +37,7 @@ public sealed class StaffService : IStaffService
         var services = await servicesTask;
         var gallery = await galleryTask;
         return new StaffDetailDto(row.Id, row.DisplayName, row.Nickname,
-            _mediaUrls.BuildUrl(row.AvatarMediaId, "card"), row.RoleTitle,
+            _mediaUrls.BuildUrl(row.AvatarMediaId, "card"), _mediaUrls.BuildUrl(row.SignatureMediaId, "card"), row.RoleTitle,
             row.ShortBio, row.ProfileBio, row.IsWorkingToday, row.CurrentStatus, row.StatusText, row.TodayShift,
             row.IsNominatable,
             gallery.Select(item => new StaffGalleryItemDto(item.Id,

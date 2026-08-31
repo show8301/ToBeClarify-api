@@ -163,7 +163,8 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
     public Task<AdminStaffMemberRow?> GetStaffMemberAsync(string id, CancellationToken cancellationToken)
         => QuerySingleOrDefaultAsync<AdminStaffMemberRow>("""
             SELECT M.`ID` AS Id, M.`DISPLAY_NAME` AS DisplayName, M.`NICKNAME` AS Nickname,
-                   M.`AVATAR_MEDIA_ID` AS AvatarMediaId, M.`ROLE_TITLE` AS RoleTitle,
+                   M.`AVATAR_MEDIA_ID` AS AvatarMediaId, M.`SIGNATURE_MEDIA_ID` AS SignatureMediaId,
+                   M.`ROLE_TITLE` AS RoleTitle,
                    M.`SHORT_BIO` AS ShortBio, M.`PROFILE_BIO` AS ProfileBio,
                    COALESCE(S.`IS_WORKING`, TRUE) AS IsWorkingToday,
                    CASE WHEN COALESCE(S.`IS_WORKING`, TRUE) = FALSE THEN 'off'
@@ -209,13 +210,13 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
         await connection.ExecuteAsync(new CommandDefinition("""
             UPDATE `STAFF_MEMBERS`
             SET `DISPLAY_NAME` = @DisplayName, `NICKNAME` = @Nickname,
-                `AVATAR_MEDIA_ID` = @AvatarMediaId,
+                `AVATAR_MEDIA_ID` = @AvatarMediaId, `SIGNATURE_MEDIA_ID` = @SignatureMediaId,
                 `ROLE_TITLE` = @RoleTitle, `SHORT_BIO` = @ShortBio, `PROFILE_BIO` = @ProfileBio,
                 `BUFFER_MINUTES` = @BufferMinutes, `IS_NOMINATABLE` = @IsNominatable,
                 `SORT_ORDER` = @SortOrder,
                 `IS_ACTIVE` = @IsActive, `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId
             WHERE `ID` = @Id;
-            """, new { Id = id, request.DisplayName, request.Nickname, request.AvatarMediaId,
+            """, new { Id = id, request.DisplayName, request.Nickname, request.AvatarMediaId, request.SignatureMediaId,
                 request.RoleTitle, request.ShortBio, request.ProfileBio, request.BufferMinutes, request.IsNominatable,
                 request.SortOrder, request.IsActive, Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
 
