@@ -1,7 +1,7 @@
 name: API CI/CD
 
-# API currently has no separate test host. The dev branch remains build-only;
-# production files are deployed only from main after the release is merged.
+# API currently has no separate test host. The dev branch remains build-only and
+# must not run E2E tests; production files deploy only from main after release.
 on:
   push:
     branches:
