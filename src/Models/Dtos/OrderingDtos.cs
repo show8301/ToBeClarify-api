@@ -23,7 +23,20 @@ public sealed record OrderingBusinessContextDto(
     DateTimeOffset ReferenceEndsAt,
     bool OrderingOpen,
     bool IsTestOverride = false,
-    DateTimeOffset? TestOverrideExpiresAt = null);
+    DateTimeOffset? TestOverrideExpiresAt = null,
+    string PeriodStatus = "scheduled",
+    string IntakeMode = "staff_only",
+    DateTimeOffset? ActualOpenedAt = null,
+    DateTimeOffset? ProjectedCloseAt = null,
+    DateTimeOffset? ActualClosedAt = null,
+    DateTimeOffset? SettledAt = null,
+    bool CanCustomerSubmit = false,
+    bool RequiresStoreConfirmation = false,
+    bool PastProjectedClose = false,
+    int OpenSessionCount = 0,
+    int WaitingOrderCount = 0,
+    int UnfinishedOrderCount = 0,
+    DateTimeOffset? LatestCommittedBusyUntil = null);
 
 public sealed record OrderingBusinessDayOverrideDto(
     bool Enabled,
@@ -53,7 +66,8 @@ public sealed record OrderSessionIssuedDto(
 
 public sealed record OrderSessionAccessDto(
     OrderSessionDto Session,
-    OrderingSettingsDto Settings);
+    OrderingSettingsDto Settings,
+    OrderingBusinessContextDto BusinessContext);
 
 public sealed record OrderCatalogDto(
     OrderingSettingsDto Settings,
@@ -128,6 +142,8 @@ public sealed record OrderDto(
     string OrderKind,
     string? ParentNomineeId,
     string Status,
+    string IntakeModeSnapshot,
+    string StoreConfirmationStatus,
     string QueueStage,
     int QueueMinutes,
     DateTimeOffset SubmittedAt,
@@ -184,6 +200,9 @@ public sealed class UpdateOrderSessionRequest
 
     [Range(0, int.MaxValue)]
     public int? RemainingMealCredit { get; init; }
+
+    [RegularExpression("^(active|readonly)$")]
+    public string? Status { get; init; }
 }
 
 public sealed class AccessOrderSessionRequest
@@ -317,6 +336,40 @@ public sealed class UpdateOrderingBusinessDayOverrideRequest
 
     [Range(1, 1440)]
     public int DurationMinutes { get; init; } = 60;
+
+    [StringLength(500)]
+    public string? Reason { get; init; }
+}
+
+public sealed class OpenBusinessPeriodRequest
+{
+    [Required]
+    public DateOnly BusinessDate { get; init; }
+
+    public DateTime? ProjectedCloseAt { get; init; }
+
+    [StringLength(500)]
+    public string? Reason { get; init; }
+}
+
+public sealed class BusinessPeriodActionRequest
+{
+    [Required, RegularExpression("^(set_projected_close|set_intake_mode|close|reopen|settle)$")]
+    public string Action { get; init; } = string.Empty;
+
+    public DateTime? ProjectedCloseAt { get; init; }
+
+    [RegularExpression("^(normal|coordination|staff_only)$")]
+    public string? IntakeMode { get; init; }
+
+    [StringLength(500)]
+    public string? Reason { get; init; }
+}
+
+public sealed class StoreOrderDecisionRequest
+{
+    [Required, RegularExpression("^(approved|rejected)$")]
+    public string Decision { get; init; } = string.Empty;
 
     [StringLength(500)]
     public string? Reason { get; init; }

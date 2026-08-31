@@ -151,13 +151,15 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
     }
 
     public async Task UpdateSessionAsync(string sessionId, string? customerName, int? maxNominatedStaff,
-        int? remainingMealCredit, string actorId, string actorRole, DateTime now, CancellationToken cancellationToken)
+        int? remainingMealCredit, string? status, string actorId, string actorRole, DateTime now,
+        CancellationToken cancellationToken)
     {
         const string sql = """
             UPDATE `CUSTOMER_ORDER_SESSIONS`
             SET `CUSTOMER_NAME` = COALESCE(@CustomerName, `CUSTOMER_NAME`),
                 `MAX_NOMINATED_STAFF` = COALESCE(@MaxNominatedStaff, `MAX_NOMINATED_STAFF`),
                 `REMAINING_MEAL_CREDIT` = COALESCE(@RemainingMealCredit, `REMAINING_MEAL_CREDIT`),
+                `SESSION_STATUS` = COALESCE(@Status, `SESSION_STATUS`),
                 `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId
             WHERE `ID` = @SessionId;
             INSERT INTO `ORDER_AUDIT_LOG`
@@ -168,8 +170,8 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
         await connection.ExecuteAsync(new CommandDefinition(sql, new
         {
             SessionId = sessionId, CustomerName = customerName, MaxNominatedStaff = maxNominatedStaff,
-            RemainingMealCredit = remainingMealCredit, Now = now, ActorId = actorId, ActorRole = actorRole,
-            AuditId = NewId(), AfterJson = JsonSerializer.Serialize(new { customerName, maxNominatedStaff, remainingMealCredit })
+            RemainingMealCredit = remainingMealCredit, Status = status, Now = now, ActorId = actorId, ActorRole = actorRole,
+            AuditId = NewId(), AfterJson = JsonSerializer.Serialize(new { customerName, maxNominatedStaff, remainingMealCredit, status })
         }, cancellationToken: cancellationToken));
     }
 
@@ -227,13 +229,47 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
     public async Task<BusinessPeriodRow?> GetActiveBusinessPeriodAsync(DateTime now,
         CancellationToken cancellationToken)
     {
-        const string sql = """
-            SELECT `ID` AS Id, `BUSINESS_DATE` AS BusinessDate, `STARTS_AT` AS StartsAt, `ENDS_AT` AS EndsAt
+        var sql = $"""
+            SELECT {BusinessPeriodColumns}
             FROM `BUSINESS_PERIODS`
-            WHERE `PERIOD_STATUS` = 'open' AND `STARTS_AT` <= @Now AND `ENDS_AT` > @Now
-            ORDER BY `STARTS_AT` DESC LIMIT 1;
+            WHERE `PERIOD_STATUS` IN ('open', 'closed') AND `SETTLED_AT` IS NULL
+            ORDER BY CASE WHEN `PERIOD_STATUS` = 'open' THEN 0 ELSE 1 END,
+                     COALESCE(`ACTUAL_OPENED_AT`, `STARTS_AT`) DESC LIMIT 1;
             """;
-        return await QuerySingleOrDefaultAsync<BusinessPeriodRow>(sql, new { Now = now }, cancellationToken);
+        return await QuerySingleOrDefaultAsync<BusinessPeriodRow>(sql, null, cancellationToken);
+    }
+
+    public async Task<BusinessPeriodRow?> GetBusinessPeriodByDateAsync(DateOnly businessDate,
+        CancellationToken cancellationToken)
+    {
+        var sql = $"""
+            SELECT {BusinessPeriodColumns}
+            FROM `BUSINESS_PERIODS` WHERE `BUSINESS_DATE` = @BusinessDate LIMIT 1;
+            """;
+        return await QuerySingleOrDefaultAsync<BusinessPeriodRow>(sql,
+            new { BusinessDate = businessDate.ToDateTime(TimeOnly.MinValue) }, cancellationToken);
+    }
+
+    public async Task<BusinessPeriodMetricsRow> GetBusinessPeriodMetricsAsync(DateOnly businessDate,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT COUNT(DISTINCT CASE WHEN S.`SESSION_STATUS` = 'active' THEN S.`ID` END) AS OpenSessionCount,
+                   COUNT(DISTINCT CASE WHEN O.`ORDER_STATUS` IN ('submitted', 'partially_confirmed', 'needs_reschedule')
+                                      THEN O.`ID` END) AS WaitingOrderCount,
+                   COUNT(DISTINCT CASE WHEN O.`ORDER_STATUS` IN
+                       ('submitted', 'partially_confirmed', 'needs_reschedule', 'confirmed', 'in_service')
+                                      THEN O.`ID` END) AS UnfinishedOrderCount,
+                   MAX(CASE WHEN O.`ORDER_STATUS` IN ('confirmed', 'in_service')
+                            THEN N.`REQUESTED_BUSY_UNTIL` END) AS LatestCommittedBusyUntil
+            FROM `CUSTOMER_ORDER_SESSIONS` S
+            LEFT JOIN `ORDERS` O ON O.`SESSION_ID` = S.`ID`
+            LEFT JOIN `ORDER_NOMINEES` N ON N.`ORDER_ID` = O.`ID`
+            WHERE S.`BUSINESS_DATE` = @BusinessDate;
+            """;
+        return await QuerySingleOrDefaultAsync<BusinessPeriodMetricsRow>(sql,
+            new { BusinessDate = businessDate.ToDateTime(TimeOnly.MinValue) }, cancellationToken)
+            ?? new BusinessPeriodMetricsRow();
     }
 
     public async Task<BusinessPeriodRow> GetOrCreateBusinessPeriodAsync(BusinessPeriodRow period,
@@ -241,11 +277,13 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
     {
         const string insertSql = """
             INSERT IGNORE INTO `BUSINESS_PERIODS`
-                (`ID`, `BUSINESS_DATE`, `STARTS_AT`, `ENDS_AT`, `TIMEZONE`, `PERIOD_STATUS`, `CREATED_AT`, `UPDATED_AT`)
-            VALUES (@Id, @BusinessDate, @StartsAt, @EndsAt, 'Asia/Taipei', 'open', @StartsAt, @StartsAt);
+                (`ID`, `BUSINESS_DATE`, `STARTS_AT`, `ENDS_AT`, `ACTUAL_OPENED_AT`, `PROJECTED_CLOSE_AT`,
+                 `TIMEZONE`, `PERIOD_STATUS`, `INTAKE_MODE`, `CREATED_AT`, `UPDATED_AT`, `UPDATED_BY`)
+            VALUES (@Id, @BusinessDate, @StartsAt, @EndsAt, @ActualOpenedAt, @ProjectedCloseAt,
+                    'Asia/Taipei', 'open', 'normal', @ActualOpenedAt, @ActualOpenedAt, @UpdatedBy);
             """;
-        const string selectSql = """
-            SELECT `ID` AS Id, `BUSINESS_DATE` AS BusinessDate, `STARTS_AT` AS StartsAt, `ENDS_AT` AS EndsAt
+        var selectSql = $"""
+            SELECT {BusinessPeriodColumns}
             FROM `BUSINESS_PERIODS` WHERE `BUSINESS_DATE` = @BusinessDate LIMIT 1;
             """;
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
@@ -254,10 +292,64 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             period.Id,
             BusinessDate = period.BusinessDate.Date,
             period.StartsAt,
-            period.EndsAt
+            period.EndsAt,
+            period.ActualOpenedAt,
+            period.ProjectedCloseAt,
+            period.UpdatedBy
         };
         await connection.ExecuteAsync(new CommandDefinition(insertSql, parameters, cancellationToken: cancellationToken));
         return await connection.QuerySingleAsync<BusinessPeriodRow>(new CommandDefinition(selectSql, parameters,
+            cancellationToken: cancellationToken));
+    }
+
+    public async Task ApplyBusinessPeriodActionAsync(string periodId, string action, DateTime? projectedCloseAt,
+        string? intakeMode, string? reason, string actorId, string actorRole, DateTime now,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var before = await connection.QuerySingleOrDefaultAsync<BusinessPeriodRow>(new CommandDefinition(
+            $"SELECT {BusinessPeriodColumns} FROM `BUSINESS_PERIODS` WHERE `ID` = @PeriodId FOR UPDATE;",
+            new { PeriodId = periodId }, transaction, cancellationToken: cancellationToken))
+            ?? throw new BusinessException("找不到目前營業期。", "BUSINESS_PERIOD_NOT_FOUND");
+
+        var (status, mode, closedAt, settledAt) = action switch
+        {
+            "open" => (before.PeriodStatus, before.IntakeMode, before.ActualClosedAt, before.SettledAt),
+            "set_projected_close" => (before.PeriodStatus, before.IntakeMode, before.ActualClosedAt, before.SettledAt),
+            "set_intake_mode" => (before.PeriodStatus, intakeMode!, before.ActualClosedAt, before.SettledAt),
+            "close" => ("closed", "staff_only", (DateTime?)now, before.SettledAt),
+            "reopen" => ("open", "coordination", (DateTime?)null, (DateTime?)null),
+            "settle" => ("settled", "staff_only", before.ActualClosedAt ?? now, (DateTime?)now),
+            _ => throw new BusinessException("不支援的營業期操作。", "BUSINESS_PERIOD_ACTION_INVALID")
+        };
+        var nextProjectedClose = action == "set_projected_close" ? projectedCloseAt : before.ProjectedCloseAt;
+        await connection.ExecuteAsync(new CommandDefinition("""
+            UPDATE `BUSINESS_PERIODS`
+            SET `PERIOD_STATUS` = @Status, `INTAKE_MODE` = @Mode,
+                `PROJECTED_CLOSE_AT` = @ProjectedCloseAt, `ACTUAL_CLOSED_AT` = @ClosedAt,
+                `SETTLED_AT` = @SettledAt, `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId
+            WHERE `ID` = @PeriodId;
+            """, new { PeriodId = periodId, Status = status, Mode = mode,
+                ProjectedCloseAt = nextProjectedClose, ClosedAt = closedAt, SettledAt = settledAt,
+                Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
+        await InsertAuditAsync(connection, transaction, null, null, $"business_period.{action}",
+            JsonSerializer.Serialize(before), JsonSerializer.Serialize(new { status, mode, projectedCloseAt = nextProjectedClose,
+                closedAt, settledAt, reason }), actorId, actorRole, now, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task<int> EnterCoordinationAtProjectedCloseAsync(DateTime now,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            UPDATE `BUSINESS_PERIODS`
+            SET `INTAKE_MODE` = 'coordination', `UPDATED_AT` = @Now, `UPDATED_BY` = 'system'
+            WHERE `PERIOD_STATUS` = 'open' AND `INTAKE_MODE` = 'normal'
+              AND `PROJECTED_CLOSE_AT` IS NOT NULL AND `PROJECTED_CLOSE_AT` <= @Now;
+            """;
+        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        return await connection.ExecuteAsync(new CommandDefinition(sql, new { Now = now },
             cancellationToken: cancellationToken));
     }
 
@@ -379,9 +471,11 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             const string insertOrder = """
                 INSERT INTO `ORDERS`
                     (`ID`, `SESSION_ID`, `ORDER_NUMBER`, `ORDER_KIND`, `PARENT_NOMINEE_ID`,
-                     `ORDER_STATUS`, `QUEUE_ENTERED_AT`, `SUBMITTED_AT`,
+                     `ORDER_STATUS`, `INTAKE_MODE_SNAPSHOT`, `STORE_CONFIRMATION_STATUS`,
+                     `QUEUE_ENTERED_AT`, `SUBMITTED_AT`,
                      `CONFIRMED_AT`, `SUBTOTAL`, `MEAL_CREDIT_APPLIED`, `TOTAL_AMOUNT`, `CUSTOMER_NOTE`, `CREATED_AT`, `UPDATED_AT`)
-                VALUES (@Id, @SessionId, @OrderNumber, @OrderKind, @ParentNomineeId, @Status, @QueueEnteredAt, @SubmittedAt,
+                VALUES (@Id, @SessionId, @OrderNumber, @OrderKind, @ParentNomineeId, @Status,
+                        @IntakeModeSnapshot, @StoreConfirmationStatus, @QueueEnteredAt, @SubmittedAt,
                         CASE WHEN @Status = 'confirmed' THEN @SubmittedAt ELSE NULL END,
                         @Subtotal, @MealCreditApplied, @TotalAmount, @CustomerNote, @SubmittedAt, @SubmittedAt);
                 UPDATE `CUSTOMER_ORDER_SESSIONS`
@@ -464,7 +558,10 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
         var sql = $"""
             SELECT O.`ID` AS Id, O.`SESSION_ID` AS SessionId, O.`ORDER_NUMBER` AS OrderNumber,
                    O.`ORDER_KIND` AS OrderKind, O.`PARENT_NOMINEE_ID` AS ParentNomineeId,
-                   O.`ORDER_STATUS` AS OrderStatus, O.`QUEUE_ENTERED_AT` AS QueueEnteredAt,
+                   O.`ORDER_STATUS` AS OrderStatus, O.`INTAKE_MODE_SNAPSHOT` AS IntakeModeSnapshot,
+                   O.`STORE_CONFIRMATION_STATUS` AS StoreConfirmationStatus,
+                   O.`STORE_CONFIRMED_AT` AS StoreConfirmedAt, O.`STORE_CONFIRMED_BY` AS StoreConfirmedBy,
+                   O.`QUEUE_ENTERED_AT` AS QueueEnteredAt,
                    O.`SUBMITTED_AT` AS SubmittedAt, O.`CONFIRMED_AT` AS ConfirmedAt,
                    O.`STARTED_AT` AS StartedAt, O.`COMPLETED_AT` AS CompletedAt,
                    O.`CANCELLED_AT` AS CancelledAt, O.`SUBTOTAL` AS Subtotal,
@@ -586,11 +683,14 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
         try
         {
             var order = await connection.QuerySingleOrDefaultAsync<OrderRow>(new CommandDefinition(
-                "SELECT `ID` AS Id, `ORDER_STATUS` AS OrderStatus FROM `ORDERS` WHERE `ID` = @OrderId FOR UPDATE;",
+                "SELECT `ID` AS Id, `ORDER_STATUS` AS OrderStatus, `STORE_CONFIRMATION_STATUS` AS StoreConfirmationStatus FROM `ORDERS` WHERE `ID` = @OrderId FOR UPDATE;",
                 new { OrderId = orderId }, transaction, cancellationToken: cancellationToken));
             if (order is null) throw new BusinessException("找不到訂單。", "ORDER_NOT_FOUND");
             if (order.OrderStatus is not ("submitted" or "partially_confirmed"))
                 throw new BusinessException("此訂單目前不可確認。", "ORDER_NOT_CONFIRMABLE");
+            if (order.StoreConfirmationStatus == "pending")
+                throw new BusinessException("此協調單需先由店員接受，再由被指名店員確認。",
+                    "STORE_CONFIRMATION_REQUIRED");
 
             var nominees = (await connection.QueryAsync<OrderNomineeRow>(new CommandDefinition("""
                 SELECT `ID` AS Id, `ORDER_ID` AS OrderId, `STAFF_ID` AS StaffId,
@@ -677,6 +777,74 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             await transaction.RollbackAsync(cancellationToken);
             throw;
         }
+    }
+
+    public async Task DecideStoreConfirmationAsync(string orderId, string decision, string? reason,
+        string actorId, string actorRole, DateTime now, CancellationToken cancellationToken)
+    {
+        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var order = await connection.QuerySingleOrDefaultAsync<OrderRow>(new CommandDefinition("""
+            SELECT `ID` AS Id, `SESSION_ID` AS SessionId, `ORDER_KIND` AS OrderKind,
+                   `ORDER_STATUS` AS OrderStatus, `STORE_CONFIRMATION_STATUS` AS StoreConfirmationStatus,
+                   `MEAL_CREDIT_APPLIED` AS MealCreditApplied
+            FROM `ORDERS` WHERE `ID` = @OrderId FOR UPDATE;
+            """, new { OrderId = orderId }, transaction, cancellationToken: cancellationToken))
+            ?? throw new BusinessException("找不到訂單。", "ORDER_NOT_FOUND");
+        if (order.StoreConfirmationStatus != "pending" ||
+            order.OrderStatus is not ("submitted" or "partially_confirmed"))
+            throw new BusinessException("此訂單目前不需要店員協調確認。", "STORE_CONFIRMATION_NOT_PENDING");
+        if (decision == "rejected" && string.IsNullOrWhiteSpace(reason))
+            throw new BusinessException("拒絕協調單時必須填寫原因。", "STORE_CONFIRMATION_REASON_REQUIRED");
+
+        if (decision == "rejected")
+        {
+            await connection.ExecuteAsync(new CommandDefinition("""
+                UPDATE `ORDERS`
+                SET `STORE_CONFIRMATION_STATUS` = 'rejected', `STORE_CONFIRMED_AT` = @Now,
+                    `STORE_CONFIRMED_BY` = @ActorId, `ORDER_STATUS` = 'rejected',
+                    `CANCELLED_AT` = @Now, `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId
+                WHERE `ID` = @OrderId;
+                UPDATE `ORDER_NOMINEES` SET `CONFIRMATION_STATUS` = 'rejected', `UPDATED_AT` = @Now
+                WHERE `ORDER_ID` = @OrderId;
+                UPDATE `ORDER_SERVICE_ADDONS` SET `ADDON_STATUS` = 'rejected', `UPDATED_AT` = @Now
+                WHERE `ORDER_ID` = @OrderId;
+                UPDATE `CUSTOMER_ORDER_SESSIONS`
+                SET `REMAINING_MEAL_CREDIT` = `REMAINING_MEAL_CREDIT` + @Credit, `UPDATED_AT` = @Now
+                WHERE `ID` = @SessionId;
+                """, new { Now = now, ActorId = actorId, OrderId = orderId,
+                    Credit = order.MealCreditApplied, order.SessionId }, transaction,
+                cancellationToken: cancellationToken));
+            await InsertHistoryAsync(connection, transaction, orderId, order.OrderStatus, "rejected",
+                reason!.Trim(), "staff", actorId, now, cancellationToken);
+        }
+        else
+        {
+            var requiresNomineeConfirmation = order.OrderKind == "service_addon" ||
+                await connection.ExecuteScalarAsync<int>(new CommandDefinition(
+                    "SELECT COUNT(*) FROM `ORDER_NOMINEES` WHERE `ORDER_ID` = @OrderId;",
+                    new { OrderId = orderId }, transaction, cancellationToken: cancellationToken)) > 0;
+            var nextStatus = requiresNomineeConfirmation ? order.OrderStatus : "confirmed";
+            await connection.ExecuteAsync(new CommandDefinition("""
+                UPDATE `ORDERS`
+                SET `STORE_CONFIRMATION_STATUS` = 'approved', `STORE_CONFIRMED_AT` = @Now,
+                    `STORE_CONFIRMED_BY` = @ActorId, `ORDER_STATUS` = @NextStatus,
+                    `CONFIRMED_AT` = CASE WHEN @NextStatus = 'confirmed' THEN @Now ELSE `CONFIRMED_AT` END,
+                    `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId
+                WHERE `ID` = @OrderId;
+                """, new { Now = now, ActorId = actorId, OrderId = orderId, NextStatus = nextStatus },
+                transaction, cancellationToken: cancellationToken));
+            await InsertHistoryAsync(connection, transaction, orderId, order.OrderStatus, nextStatus,
+                requiresNomineeConfirmation
+                    ? "店員已接受協調單，等待被指名店員確認。"
+                    : "店員已接受協調單，訂單成立。",
+                "staff", actorId, now, cancellationToken);
+        }
+
+        await InsertAuditAsync(connection, transaction, orderId, order.SessionId,
+            $"order.store_confirmation.{decision}", null,
+            JsonSerializer.Serialize(new { decision, reason }), actorId, actorRole, now, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
     }
 
     public async Task RescheduleOrderAsync(string orderId, DateTime startsAt, string actorId, string actorRole,
@@ -1059,10 +1227,12 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             const string sql = """
                 INSERT INTO `ORDERS`
                     (`ID`, `SESSION_ID`, `ORDER_NUMBER`, `ORDER_KIND`, `PARENT_NOMINEE_ID`, `ORDER_STATUS`,
-                     `QUEUE_ENTERED_AT`, `SUBMITTED_AT`, `CONFIRMED_AT`, `SUBTOTAL`, `MEAL_CREDIT_APPLIED`,
+                     `INTAKE_MODE_SNAPSHOT`, `STORE_CONFIRMATION_STATUS`, `QUEUE_ENTERED_AT`,
+                     `SUBMITTED_AT`, `CONFIRMED_AT`, `SUBTOTAL`, `MEAL_CREDIT_APPLIED`,
                      `TOTAL_AMOUNT`, `CREATED_AT`, `UPDATED_AT`)
                 VALUES (@Id, @SessionId, @OrderNumber, 'service_addon', @ParentNomineeId, @Status,
-                        @QueueEnteredAt, @SubmittedAt, CASE WHEN @Status = 'confirmed' THEN @SubmittedAt ELSE NULL END,
+                        @IntakeModeSnapshot, @StoreConfirmationStatus, @QueueEnteredAt, @SubmittedAt,
+                        CASE WHEN @Status = 'confirmed' THEN @SubmittedAt ELSE NULL END,
                         @TotalAmount, 0, @TotalAmount, @SubmittedAt, @SubmittedAt);
                 INSERT INTO `ORDER_ITEMS`
                     (`ID`, `ORDER_ID`, `ITEM_TYPE`, `REFERENCE_ID`, `NAME_SNAPSHOT`, `UNIT_PRICE`, `QUANTITY`,
@@ -1085,6 +1255,8 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
                 addon.OrderNumber,
                 addon.ParentNomineeId,
                 addon.Status,
+                addon.IntakeModeSnapshot,
+                addon.StoreConfirmationStatus,
                 addon.QueueEnteredAt,
                 addon.SubmittedAt,
                 addon.TotalAmount,
@@ -1131,7 +1303,9 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
         {
             var addon = await connection.QuerySingleOrDefaultAsync<OrderAddonRow>(new CommandDefinition("""
                 SELECT A.`ID` AS Id, A.`ORDER_ID` AS OrderId, A.`STAFF_ID` AS StaffId,
-                       A.`ADDON_STATUS` AS AddonStatus, PO.`ORDER_STATUS` AS ParentOrderStatus,
+                       A.`ADDON_STATUS` AS AddonStatus,
+                       O.`STORE_CONFIRMATION_STATUS` AS StoreConfirmationStatus,
+                       PO.`ORDER_STATUS` AS ParentOrderStatus,
                        N.`REQUESTED_SERVICE_ENDS_AT` AS ParentServiceEndsAt
                 FROM `ORDER_SERVICE_ADDONS` A
                 JOIN `ORDERS` O ON O.`ID` = A.`ORDER_ID`
@@ -1142,6 +1316,9 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             if (addon is null) throw new BusinessException("找不到等待確認的加購服務。", "ADDON_NOT_CONFIRMABLE");
             if (addon.StaffId != staffId)
                 throw new BusinessException("只有被指名店員本人可以確認此加購服務。", "ADDON_SCOPE_FORBIDDEN");
+            if (addon.StoreConfirmationStatus == "pending")
+                throw new BusinessException("此協調加購單需先由店員接受，再由被指名店員確認。",
+                    "STORE_CONFIRMATION_REQUIRED");
             if (addon.ParentOrderStatus is not ("confirmed" or "in_service") || addon.ParentServiceEndsAt <= now)
                 throw new BusinessException("原指名已結束或失效，無法再確認此加購服務。", "ADDON_PARENT_INACTIVE");
             await connection.ExecuteAsync(new CommandDefinition("""
@@ -1545,6 +1722,14 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
         S.`RECOVERY_CODE_HASH` AS RecoveryCodeHash, S.`MAX_NOMINATED_STAFF` AS MaxNominatedStaff,
         S.`PREPAID_MEAL_CREDIT` AS PrepaidMealCredit, S.`REMAINING_MEAL_CREDIT` AS RemainingMealCredit,
         S.`SESSION_STATUS` AS SessionStatus, S.`LAST_ACCESSED_AT` AS LastAccessedAt, S.`CREATED_AT` AS CreatedAt
+        """;
+
+    private const string BusinessPeriodColumns = """
+        `ID` AS Id, `BUSINESS_DATE` AS BusinessDate, `STARTS_AT` AS StartsAt, `ENDS_AT` AS EndsAt,
+        `ACTUAL_OPENED_AT` AS ActualOpenedAt, `PROJECTED_CLOSE_AT` AS ProjectedCloseAt,
+        `ACTUAL_CLOSED_AT` AS ActualClosedAt, `SETTLED_AT` AS SettledAt,
+        `PERIOD_STATUS` AS PeriodStatus, `INTAKE_MODE` AS IntakeMode,
+        `UPDATED_BY` AS UpdatedBy, `UPDATED_AT` AS UpdatedAt
         """;
 
     private static string NewId() => Guid.NewGuid().ToString("D");

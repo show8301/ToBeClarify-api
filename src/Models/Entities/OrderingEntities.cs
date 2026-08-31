@@ -24,6 +24,22 @@ public sealed class BusinessPeriodRow
     public DateTime BusinessDate { get; set; }
     public DateTime StartsAt { get; set; }
     public DateTime EndsAt { get; set; }
+    public DateTime? ActualOpenedAt { get; set; }
+    public DateTime? ProjectedCloseAt { get; set; }
+    public DateTime? ActualClosedAt { get; set; }
+    public DateTime? SettledAt { get; set; }
+    public string PeriodStatus { get; set; } = "scheduled";
+    public string IntakeMode { get; set; } = "staff_only";
+    public string? UpdatedBy { get; set; }
+    public DateTime UpdatedAt { get; set; }
+}
+
+public sealed class BusinessPeriodMetricsRow
+{
+    public int OpenSessionCount { get; set; }
+    public int WaitingOrderCount { get; set; }
+    public int UnfinishedOrderCount { get; set; }
+    public DateTime? LatestCommittedBusyUntil { get; set; }
 }
 
 public sealed class BusinessDayOverrideRow
@@ -96,6 +112,10 @@ public sealed class OrderRow
     public string OrderKind { get; set; } = "standard";
     public string? ParentNomineeId { get; set; }
     public string OrderStatus { get; set; } = string.Empty;
+    public string IntakeModeSnapshot { get; set; } = "normal";
+    public string StoreConfirmationStatus { get; set; } = "not_required";
+    public DateTime? StoreConfirmedAt { get; set; }
+    public string? StoreConfirmedBy { get; set; }
     public DateTime? QueueEnteredAt { get; set; }
     public DateTime SubmittedAt { get; set; }
     public DateTime? ConfirmedAt { get; set; }
@@ -184,6 +204,7 @@ public sealed class OrderAddonRow
     public int ServiceDurationMinutes { get; set; }
     public int ParticipantCount { get; set; }
     public string AddonStatus { get; set; } = string.Empty;
+    public string StoreConfirmationStatus { get; set; } = "not_required";
     public DateTime? ConfirmedAt { get; set; }
     public string ParentOrderStatus { get; set; } = string.Empty;
     public DateTime ParentServiceEndsAt { get; set; }
@@ -229,7 +250,7 @@ public sealed record NewOrderTip(
 
 public sealed record NewOrderAggregate(
     string Id, string SessionId, string OrderNumber, string OrderKind, string? ParentNomineeId,
-    string Status, DateTime? QueueEnteredAt,
+    string Status, string IntakeModeSnapshot, string StoreConfirmationStatus, DateTime? QueueEnteredAt,
     DateTime SubmittedAt, int Subtotal, int MealCreditApplied, int TotalAmount,
     string? CustomerNote, IReadOnlyList<NewOrderItem> Items,
     IReadOnlyList<NewOrderNominee> Nominees, IReadOnlyList<NewOrderTip> Tips);
@@ -244,7 +265,8 @@ public sealed record OrderBundle(
 
 public sealed record NewAddonAggregate(
     string Id, string SessionId, string OrderNumber, string ParentNomineeId, string Status,
-    DateTime? QueueEnteredAt, DateTime SubmittedAt, int TotalAmount, NewOrderItem Item,
+    string IntakeModeSnapshot, string StoreConfirmationStatus, DateTime? QueueEnteredAt,
+    DateTime SubmittedAt, int TotalAmount, NewOrderItem Item,
     string AddonId, string StaffId, string StaffName, string ServiceId, string ServiceName,
     int SegmentCount, int ServiceDurationMinutes, int ParticipantCount, string AddonStatus,
     string ActorType, string? ActorId, string? ActorRole);

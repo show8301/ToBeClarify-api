@@ -4,8 +4,8 @@
 
 ## Deployment order
 
-1. Apply `db/migrations/20260830_01_ordering_system.sql`, then `db/migrations/20260830_02_business_hours_and_order_transitions.sql`, `db/migrations/20260830_03_tip_presets.sql`, and finally `db/migrations/20260831_01_business_day_override.sql` to the target MySQL/MariaDB database. The later migrations add cross-day business windows, immutable nomination snapshots, pure-companionship mode, attached service add-on orders, four configurable tip presets, and the audited business-day override used by management testing.
-2. Set `OrderingToken__Secret` to a random secret of at least 32 characters. Keep it stable across deployments; changing it invalidates all current-day customer links.
+1. Apply `db/migrations/20260830_01_ordering_system.sql`, then `20260830_02_business_hours_and_order_transitions.sql`, `20260830_03_tip_presets.sql`, `20260831_01_business_day_override.sql`, and finally `20260831_02_operational_business_periods.sql` to the target MySQL/MariaDB database. The last migration is additive: it introduces the explicit operational business-period state, intake modes and store-confirmation snapshot without `DELETE` or `DROP`.
+2. Set `OrderingToken__Secret` to a random secret of at least 32 characters. Keep it stable across deployments; changing it invalidates every active customer link.
 3. Set `OrderingToken__PublicWebBaseUrl` to the customer order page, for example `https://www-dev.marchgroup.net/order` while the Web is in the test environment.
 4. Merge the release into `main`. The API workflow may build `dev` and pull requests for verification, but it deploys only from `main` to the single production IIS environment using `API_DEPLOY_PATH` and `API_HEALTHCHECK_URL`. There is currently no API test-environment deployment.
 
@@ -17,7 +17,7 @@ The migration is deliberately not applied by application startup. This repositor
 
 All responses use the normal `ApiResponse<T>` envelope.
 
-- `POST /api/client/ordering/access` validates a current-day encrypted order token.
+- `POST /api/client/ordering/access` validates an encrypted order token against its session. The token proves that the customer was admitted; wall-clock schedule boundaries no longer revoke it.
 - `POST /api/client/ordering/recover` rotates a token after game ID plus the six-digit staff assistance code are verified.
 - `GET /api/client/ordering/catalog` returns the menu, staff-first service catalog and current operating settings.
 - `GET /api/client/ordering/orders` returns all orders for the token's session.
@@ -29,7 +29,11 @@ All admin roles may read customer sessions and orders, create/reissue sessions, 
 
 - `/api/admin/order-sessions` creates and searches today's customer sessions.
 - `/api/admin/order-sessions/{id}/reissue` rotates the URL and six-digit assistance code.
+- `PUT /api/admin/order-sessions/{id}` may switch the session between `active` and `readonly`. Customer departure should use `readonly`: the link keeps order-history access but cannot submit more items until staff reopens it.
 - `/api/admin/order-sessions/{id}/orders` lists one customer's orders.
+- `POST /api/admin/business-period/open` performs the explicit “open now” action for a business date and records the projected close. Scheduled hours are used only as the initial suggestion.
+- `POST /api/admin/business-period/action` changes the projected close, intake mode, actual close, reopen or final settlement. Manager/developer authorization is required and every action is audited.
+- `POST /api/admin/orders/{id}/store-confirmation` accepts or rejects a coordination order. Every staff account may make this store-level decision; nominated staff confirmation remains a separate second step.
 - `/api/admin/orders/{id}/confirm-nominee` only confirms the staff member linked to the signed-in account; every nominee must confirm before the order is established.
 - `/api/admin/orders/{id}/reschedule` moves an expired/conflicting start time back into the queue. It remains future-only and is intended for orders that have not yet been served. For an expired order this is the backend emergency reactivation path: the original meal-credit deduction is restored before the order returns to `submitted`; it fails safely if the session no longer has enough credit. Existing nominations cannot have their segment quantity extended.
 - `/api/admin/orders/{id}/backfill-served` handles an expired order that was actually served before staff confirmation was recorded. It supports `in_service` (the original reservation must still have time remaining) and `completed` (actual start/end may be in the past). The nominated staff member may backfill a single-staff order; manager/developer accounts may backfill multi-staff orders. Completed backfills create historical, non-blocking busy records; all operations require a reason, reverse the expired meal-credit refund transactionally, and write history/audit records.
@@ -48,5 +52,10 @@ All admin roles may read customer sessions and orders, create/reissue sessions, 
 - An existing nomination cannot increase its segment quantity. Additional time is a new order.
 - Tips snapshot staff/store percentages and amounts. Omitting a staff member forces a 0/100 allocation.
 - Final multi-staff confirmation checks every staff member again in one transaction. A past start or a conflict returns the order to `needs_reschedule` instead of silently starting in the past.
+- Fixed weekly hours are defaults and reminder thresholds, never an automatic lock. A real `BUSINESS_PERIODS` row moves through `open → closed → settled`; a mistaken close may be reopened before settlement.
+- While open, `INTAKE_MODE` is `normal`, `coordination` or `staff_only`. Reaching `PROJECTED_CLOSE_AT` automatically changes `normal` to `coordination`; it does not close the day and does not revoke customer links.
+- A coordination submission snapshots `STORE_CONFIRMATION_STATUS = pending`. Meals/tips become established after store acceptance; nominations and customer-created add-ons then continue through the nominated staff member's normal confirmation step. Rejection requires a reason and transactionally restores meal credit.
+- `staff_only` blocks customer submission without clearing the cart. Staff may still assist through admin workflows. Actual close is allowed only after unfinished orders are resolved; closed sessions remain readable. Settlement is the immutable operational boundary.
+- A nomination whose reserved window crosses projected close is accepted as a coordination order rather than being rejected by schedule. An already confirmed service also prevents the manager from moving projected close before its committed busy-until time.
 - The business-day override changes the business-date context returned to customer/admin flows and order validation while it is enabled. It does not rewrite existing `BUSINESS_PERIODS` snapshots or simulate the wall clock; the short TTL and audit trail are the safety boundary for production management tests.
 - 訂單明細刪除端點屬 API 業務流程；呼叫前須確認 API 連線帳號與權限設定。若直接以受限 SQL 帳號維護資料，則不得執行相同的 `DELETE` 語句。

@@ -56,6 +56,20 @@ public sealed class OrdersController : ControllerBase
         => Ok(ApiResponse<OrderingBusinessContextDto>.Ok(
             await _service.GetBusinessContextAsync(cancellationToken)));
 
+    [HttpPost("business-period/open")]
+    [Authorize(Policy = "AdminManager")]
+    public async Task<ActionResult<ApiResponse<OrderingBusinessContextDto>>> OpenBusinessPeriod(
+        OpenBusinessPeriodRequest request, CancellationToken cancellationToken)
+        => Ok(ApiResponse<OrderingBusinessContextDto>.Ok(
+            await _service.OpenBusinessPeriodAsync(request, User, cancellationToken)));
+
+    [HttpPost("business-period/action")]
+    [Authorize(Policy = "AdminManager")]
+    public async Task<ActionResult<ApiResponse<OrderingBusinessContextDto>>> BusinessPeriodAction(
+        BusinessPeriodActionRequest request, CancellationToken cancellationToken)
+        => Ok(ApiResponse<OrderingBusinessContextDto>.Ok(
+            await _service.ApplyBusinessPeriodActionAsync(request, User, cancellationToken)));
+
     [HttpGet("ordering-settings/business-day-override")]
     [Authorize(Policy = "AdminManager")]
     public async Task<ActionResult<ApiResponse<OrderingBusinessDayOverrideDto?>>> BusinessDayOverride(
@@ -97,6 +111,12 @@ public sealed class OrdersController : ControllerBase
     public async Task<ActionResult<ApiResponse<OrderDto>>> ConfirmNominee(
         string orderId, CancellationToken cancellationToken)
         => Ok(ApiResponse<OrderDto>.Ok(await _service.ConfirmNomineeAsync(orderId, User, cancellationToken)));
+
+    [HttpPost("orders/{orderId}/store-confirmation")]
+    public async Task<ActionResult<ApiResponse<OrderDto>>> StoreConfirmation(
+        string orderId, StoreOrderDecisionRequest request, CancellationToken cancellationToken)
+        => Ok(ApiResponse<OrderDto>.Ok(
+            await _service.DecideStoreConfirmationAsync(orderId, request, User, cancellationToken)));
 
     [HttpGet("order-nominees/{nomineeId}/addon-options")]
     public async Task<ActionResult<ApiResponse<IReadOnlyList<StaffServiceDto>>>> AddonOptions(

@@ -17,6 +17,10 @@ public interface IOrderingService
     Task<IReadOnlyList<AdminOrderSessionDto>> GetAdminSessionsAsync(DateOnly? businessDate, string? search, CancellationToken cancellationToken);
     Task<IReadOnlyList<OrderDto>> GetAdminOrdersAsync(string sessionId, CancellationToken cancellationToken);
     Task<OrderingBusinessContextDto> GetBusinessContextAsync(CancellationToken cancellationToken);
+    Task<OrderingBusinessContextDto> OpenBusinessPeriodAsync(OpenBusinessPeriodRequest request,
+        ClaimsPrincipal actor, CancellationToken cancellationToken);
+    Task<OrderingBusinessContextDto> ApplyBusinessPeriodActionAsync(BusinessPeriodActionRequest request,
+        ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<OrderingBusinessDayOverrideDto?> GetBusinessDayOverrideAsync(CancellationToken cancellationToken);
     Task<OrderingBusinessDayOverrideDto> SaveBusinessDayOverrideAsync(
         UpdateOrderingBusinessDayOverrideRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);
@@ -25,6 +29,8 @@ public interface IOrderingService
     Task<OrderingSettingsDto> SaveSettingsAsync(UpdateOrderingSettingsRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<OrderingSettingsDto> PauseNominationAsync(PauseNominationRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<OrderDto> ConfirmNomineeAsync(string orderId, ClaimsPrincipal actor, CancellationToken cancellationToken);
+    Task<OrderDto> DecideStoreConfirmationAsync(string orderId, StoreOrderDecisionRequest request,
+        ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<IReadOnlyList<StaffServiceDto>> GetAddonOptionsAsync(string nomineeId, ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<OrderDto> SubmitAdminAddonAsync(string nomineeId, SubmitAddonRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<OrderDto> ConfirmAddonAsync(string orderId, ClaimsPrincipal actor, CancellationToken cancellationToken);

@@ -7,7 +7,13 @@ public interface IOrderingRepository
     Task<OrderingSettingsRow> GetSettingsAsync(CancellationToken cancellationToken);
     Task SaveSettingsAsync(OrderingSettingsRow settings, string actorId, DateTime now, CancellationToken cancellationToken);
     Task<BusinessPeriodRow?> GetActiveBusinessPeriodAsync(DateTime now, CancellationToken cancellationToken);
+    Task<BusinessPeriodRow?> GetBusinessPeriodByDateAsync(DateOnly businessDate, CancellationToken cancellationToken);
+    Task<BusinessPeriodMetricsRow> GetBusinessPeriodMetricsAsync(DateOnly businessDate, CancellationToken cancellationToken);
     Task<BusinessPeriodRow> GetOrCreateBusinessPeriodAsync(BusinessPeriodRow period, CancellationToken cancellationToken);
+    Task ApplyBusinessPeriodActionAsync(string periodId, string action, DateTime? projectedCloseAt,
+        string? intakeMode, string? reason, string actorId, string actorRole, DateTime now,
+        CancellationToken cancellationToken);
+    Task<int> EnterCoordinationAtProjectedCloseAsync(DateTime now, CancellationToken cancellationToken);
     Task<BusinessDayOverrideRow?> GetActiveBusinessDayOverrideAsync(DateTime now, CancellationToken cancellationToken);
     Task<BusinessDayOverrideRow?> GetBusinessDayOverrideAsync(CancellationToken cancellationToken);
     Task SaveBusinessDayOverrideAsync(BusinessDayOverrideRow overrideRow, string actorId, string actorRole,
@@ -21,7 +27,7 @@ public interface IOrderingRepository
     Task CreateSessionAsync(OrderSessionRow session, string actorId, CancellationToken cancellationToken);
     Task RotateSessionCredentialsAsync(string sessionId, string tokenHash, string? recoveryCodeHash, DateTime now, CancellationToken cancellationToken);
     Task UpdateSessionAsync(string sessionId, string? customerName, int? maxNominatedStaff, int? remainingMealCredit,
-        string actorId, string actorRole, DateTime now, CancellationToken cancellationToken);
+        string? status, string actorId, string actorRole, DateTime now, CancellationToken cancellationToken);
     Task<MenuProductRow?> GetMenuProductAsync(string referenceId, string kind, CancellationToken cancellationToken);
     Task<StaffOfferRow?> GetStaffOfferAsync(string staffId, string serviceId, DateOnly businessDate,
         CancellationToken cancellationToken);
@@ -41,6 +47,8 @@ public interface IOrderingRepository
     Task<int> ExpireWaitingOrdersAsync(DateTime cutoff, DateTime now, CancellationToken cancellationToken);
     Task<string> ConfirmNomineeAsync(string orderId, string staffId, string actorId, DateTime now,
         CancellationToken cancellationToken);
+    Task DecideStoreConfirmationAsync(string orderId, string decision, string? reason, string actorId,
+        string actorRole, DateTime now, CancellationToken cancellationToken);
     Task RescheduleOrderAsync(string orderId, DateTime startsAt, string actorId, string actorRole, DateTime now,
         CancellationToken cancellationToken);
     Task BackfillServedOrderAsync(string orderId, string status, DateTime actualStartsAt, DateTime? actualEndsAt,
