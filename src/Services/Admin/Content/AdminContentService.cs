@@ -323,7 +323,8 @@ public sealed class AdminContentService : IAdminContentService
         var galleryTask = _repository.GetStaffGalleryAsync(row.Id, cancellationToken);
         await Task.WhenAll(servicesTask, galleryTask);
         return new AdminStaffMemberDto(row.Id, row.DisplayName, row.Nickname, row.AvatarMediaId,
-            _mediaUrls.BuildUrl(row.AvatarMediaId, "card"), row.RoleTitle, row.ShortBio,
+            _mediaUrls.BuildUrl(row.AvatarMediaId, "card"), row.SignatureMediaId,
+            _mediaUrls.BuildUrl(row.SignatureMediaId, "card"), row.RoleTitle, row.ShortBio,
             row.ProfileBio, row.IsWorkingToday, row.CurrentStatus, row.StatusText, row.TodayShift,
             row.BufferMinutes, row.IsNominatable, row.SortOrder, row.IsActive,
             (await servicesTask).Select(Map).ToArray(), (await galleryTask).Select(item => new AdminStaffGalleryItemDto(

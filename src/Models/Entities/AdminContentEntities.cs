@@ -58,6 +58,7 @@ public sealed class AdminStaffMemberRow
     public string DisplayName { get; set; } = string.Empty;
     public string? Nickname { get; set; }
     public string? AvatarMediaId { get; set; }
+    public string? SignatureMediaId { get; set; }
     public string? RoleTitle { get; set; }
     public string? ShortBio { get; set; }
     public string? ProfileBio { get; set; }

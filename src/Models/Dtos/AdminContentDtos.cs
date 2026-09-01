@@ -172,6 +172,8 @@ public sealed record AdminStaffMemberDto(
     string? Nickname,
     string? AvatarMediaId,
     string? AvatarUrl,
+    string? SignatureMediaId,
+    string? SignatureUrl,
     string? RoleTitle,
     string? ShortBio,
     string? ProfileBio,
@@ -211,6 +213,12 @@ public sealed class SaveStaffMemberRequest
 
     [StringLength(500)]
     public string? AvatarUrl { get; init; }
+
+    [StringLength(40)]
+    public string? SignatureMediaId { get; init; }
+
+    [StringLength(500)]
+    public string? SignatureUrl { get; init; }
 
     [StringLength(80)]
     public string? RoleTitle { get; init; }
