@@ -14,7 +14,7 @@ public sealed class StaffRepository : DapperRepositoryBase, IStaffRepository
     {
         const string sql = """
             SELECT M.`ID` AS Id, M.`DISPLAY_NAME` AS DisplayName, M.`NICKNAME` AS Nickname,
-                   M.`AVATAR_MEDIA_ID` AS AvatarMediaId,
+                   M.`AVATAR_MEDIA_ID` AS AvatarMediaId, M.`SIGNATURE_MEDIA_ID` AS SignatureMediaId,
                    M.`ROLE_TITLE` AS RoleTitle, M.`SHORT_BIO` AS ShortBio, M.`PROFILE_BIO` AS ProfileBio,
                    M.`IS_NOMINATABLE` AS IsNominatable,
                    COALESCE(S.`IS_WORKING`, TRUE) AS IsWorkingToday,
@@ -40,7 +40,7 @@ public sealed class StaffRepository : DapperRepositoryBase, IStaffRepository
     {
         const string sql = """
             SELECT M.`ID` AS Id, M.`DISPLAY_NAME` AS DisplayName, M.`NICKNAME` AS Nickname,
-                   M.`AVATAR_MEDIA_ID` AS AvatarMediaId,
+                   M.`AVATAR_MEDIA_ID` AS AvatarMediaId, M.`SIGNATURE_MEDIA_ID` AS SignatureMediaId,
                    M.`ROLE_TITLE` AS RoleTitle, M.`SHORT_BIO` AS ShortBio, M.`PROFILE_BIO` AS ProfileBio,
                    M.`IS_NOMINATABLE` AS IsNominatable,
                    COALESCE(S.`IS_WORKING`, TRUE) AS IsWorkingToday,
