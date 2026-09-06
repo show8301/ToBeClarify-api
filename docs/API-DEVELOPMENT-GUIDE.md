@@ -434,7 +434,7 @@ Cookie 特性：
 | POST | `/api/admin/media/upload` | 所有後台角色 | multipart 上傳，單檔上限 10 MB |
 | POST | `/api/admin/media/cleanup` | 所有後台角色 | 清理指定或過期且未被參照的媒體 |
 
-支援 MIME type：JPEG、PNG、WebP、GIF。允許 category：`site`、`home`、`staff`、`event`、`menu`、`gallery`、`admin`；clerk 只可使用 `staff` 或 `gallery`。
+支援 MIME type：JPEG、PNG、WebP、GIF。允許 category：`site`、`home`、`staff`、`event`、`menu`、`gallery`、`admin`、`room`；clerk 只可使用 `staff`、`gallery` 或 `room`。
 
 上傳流程只驗證圖片與記錄原始尺寸，原始檔會保留。公開讀取非 original variant 時才以 ImageSharp 延遲產生 WebP：
 
@@ -452,7 +452,24 @@ resize 使用 `ResizeMode.Max`，會維持比例，不會強制裁成指定長�
 - 將舊的 `category/yyyyMM/file` 路徑整理為 `category/file`。
 - 清除建立超過 24 小時、由後台上傳且未被任何已知資料表參照的媒體。
 
-### 8.5 占位端點
+### 8.5 包廂管理、服務訂單與分潤
+
+包廂公開資料與後台管理使用獨立資源。`ownerStaffId` 為空代表「店內共用」，有值代表「店員專屬」。一節分鐘數沿用 `ORDERING_SETTINGS.SEGMENT_MINUTES`；包廂價格為每節 Gil。
+
+| Method | Path | 權限 | 功能 |
+| --- | --- | --- | --- |
+| GET | `/api/client/rooms` | Anonymous | 取得啟用中的包廂、共用／專屬標籤、每節價格、簡介、詳細說明與照片 |
+| GET | `/api/client/rooms/status?from=...&to=...` | Anonymous | 取得啟用包廂在指定時間範圍的 `available`、`reserved` 或 `occupied` 狀態 |
+| GET | `/api/admin/rooms` | 所有後台角色 | 取得包廂完整管理資料與目前節數設定 |
+| POST/PUT | `/api/admin/rooms[/{id}]` | 所有後台角色 | 新增／更新包廂、簡介、詳細說明、照片與啟用排序；clerk 不能修改價格或歸屬 |
+| GET/PUT | `/api/admin/payroll/room-profit-sharing` | developer / manager | 讀取／設定店內共用與店員專屬包廂的店員分潤百分比 |
+| GET | `/api/admin/room-orders?businessDate=...&status=...` | 所有後台角色 | 查詢包廂服務訂單；此服務只提供後台店員操作 |
+| POST | `/api/admin/room-orders` | 所有後台角色 | 依包廂、營業日、開始時間與節數建立服務訂單；價格與結束時間由 API 計算，重疊時段會回傳 409 `ROOM_ORDER_CONFLICT` |
+| PUT | `/api/admin/room-orders/{id}/status` | 所有後台角色 | 更新 `scheduled`、`in_service`、`completed` 或 `cancelled` |
+
+本功能由 `db/migrations/20260906_01_room_service.sql` 增量建立 `ROOMS`、`ROOM_PHOTO_ITEMS`、`ROOM_SERVICE_ORDERS` 與 `ROOM_PROFIT_SHARING_SETTINGS`。包廂照片先以 `POST /api/admin/media/upload`、category `room` 上傳，再將回傳的 `mediaId` 儲存至包廂。
+
+### 8.6 占位端點
 
 以下端點只有固定字串 response，尚無實際資料存取：
 
@@ -479,6 +496,7 @@ resize 使用 `ResizeMode.Max`，會維持比例，不會強制裁成指定長�
 | 排行榜 | 公開唯讀 | 無 | 只讀已發布資料 |
 | 活動 events | 無 | 無 | DB 設計稿有規劃；程式僅在媒體清理查參照 |
 | 媒體 | 公開讀取 | 上傳、清理 | 本機磁碟儲存、延遲產生 variants |
+| 包廂 | 公開讀取、狀態 | 包廂 CRUD、照片、店員服務訂單、分潤設定 | 初版已完成；尚未接入薪資報表的實際結算流水 |
 | Products / Orders | 無 | 占位 | 尚未實作 |
 
 ## 10. 資料表與關聯
@@ -503,6 +521,9 @@ resize 使用 `ResizeMode.Max`，會維持比例，不會強制裁成指定長�
 | 菜單 | `MENU_SETS`、`MENU_SET_ITEMS` | 套餐一對多明細，明細參照 menu item |
 | 排行 | `RANKINGS` | staff / monetary 共表，以 period 分期 |
 | 媒體 | `MEDIA_ASSETS` | 磁碟路徑、MIME、尺寸、版本與建立者 |
+| 包廂 | `ROOMS`、`ROOM_PHOTO_ITEMS` | 包廂資料、共用／店員專屬歸屬、每節價格與照片關聯 |
+| 包廂服務 | `ROOM_SERVICE_ORDERS` | 後台建立的包廂服務時段、價格快照與狀態 |
+| 薪資 | `ROOM_PROFIT_SHARING_SETTINGS` | 店內共用／店員專屬包廂的店員分潤百分比 |
 | 帳號 | `ADMIN_USERS` | 登入帳號、password hash、角色與 staff 一對一綁定；`STAFF_MEMBER_ID` 為 NOT NULL、UNIQUE、RESTRICT FK，顯示名稱統一取自 `STAFF_MEMBERS` |
 | 系統 | `API_LOGS` | request audit / performance log |
 | 活動 | `EVENTS` | 目前只有媒體清理時檢查 cover media 參照 |
