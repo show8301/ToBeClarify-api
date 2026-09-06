@@ -371,7 +371,7 @@ public sealed class AdminContentService : IAdminContentService
             throw new BusinessException("Site visibility must be a JSON object.", "SITE_VISIBILITY_INVALID");
         var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "home", "staff", "gallery", "menu", "guestbook", "liveUpdate", "staffRanking", "monetaryRanking", "menuHidden"
+            "home", "staff", "gallery", "menu", "rooms", "guestbook", "liveUpdate", "staffRanking", "monetaryRanking", "menuHidden"
         };
         foreach (var property in value.EnumerateObject())
         {

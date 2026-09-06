@@ -64,6 +64,7 @@ public sealed class HomeService : IHomeService
             ReadBoolean(value, "staff", true),
             ReadBoolean(value, "gallery", true),
             value.TryGetProperty("menu", out _) ? ReadBoolean(value, "menu", true) : !legacyMenuHidden,
+            ReadBoolean(value, "rooms", true),
             ReadBoolean(value, "guestbook", true),
             ReadBoolean(value, "liveUpdate", true),
             ReadBoolean(value, "staffRanking", true),

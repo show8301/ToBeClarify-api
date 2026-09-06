@@ -373,7 +373,7 @@ Cookie 特性：
 | 資源 | 端點 | 權限 | 現況 |
 | --- | --- | --- | --- |
 | Site settings | `GET /api/admin/site-settings` | 管理者 | 取得全部含未啟用資料 |
-| Site settings | `PUT /api/admin/site-settings/{settingKey}` | 管理者；`siteVisibility` 僅 developer | 依 key upsert JSON 設定；`siteVisibility` 使用 `home`、`staff`、`gallery`、`menu`、`guestbook`、`liveUpdate`、`staffRanking`、`monetaryRanking` 布林頁面旗標 |
+| Site settings | `PUT /api/admin/site-settings/{settingKey}` | 管理者；`siteVisibility` 僅 developer | 依 key upsert JSON 設定；`siteVisibility` 使用 `home`、`staff`、`gallery`、`menu`、`rooms`、`guestbook`、`liveUpdate`、`staffRanking`、`monetaryRanking` 布林頁面旗標 |
 | Navigation | `GET/POST /api/admin/navigation-items` | 管理者 | 列表 / 新增 |
 | Navigation | `PUT/DELETE /api/admin/navigation-items/{id}` | 管理者 | 更新 / 刪除；刪父項會一併刪子項 |
 | Home carousel | `GET/POST /api/admin/home-event-carousels` | 管理者 | 輪播必須參照存在的 gallery album |

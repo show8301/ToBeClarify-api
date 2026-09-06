@@ -33,6 +33,7 @@ public sealed record HomePageVisibilityDto(
     bool Staff = true,
     bool Gallery = true,
     bool Menu = true,
+    bool Rooms = true,
     bool Guestbook = true,
     bool LiveUpdate = true,
     bool StaffRanking = true,
