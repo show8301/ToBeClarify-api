@@ -39,6 +39,8 @@ using ToBeClarify.Api.Services.Logging;
 using ToBeClarify.Api.Services.Media;
 using ToBeClarify.Api.Repositories.Admin.Rooms;
 using ToBeClarify.Api.Services.Admin.Rooms;
+using ToBeClarify.Api.Repositories.Admin.Settlement;
+using ToBeClarify.Api.Services.Admin.Settlement;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -85,6 +87,8 @@ builder.Services.AddScoped<IOrderingRepository, OrderingRepository>();
 builder.Services.AddScoped<IOrderingService, OrderingService>();
 builder.Services.AddScoped<IRoomAdminRepository, RoomAdminRepository>();
 builder.Services.AddScoped<IAdminRoomService, AdminRoomService>();
+builder.Services.AddScoped<ISettlementRepository, SettlementRepository>();
+builder.Services.AddScoped<ISettlementService, SettlementService>();
 builder.Services.AddScoped<ToBeClarify.Api.Repositories.Admin.Content.IAdminContentRepository,
     ToBeClarify.Api.Repositories.Admin.Content.AdminContentRepository>();
 builder.Services.AddScoped<ToBeClarify.Api.Services.Admin.Content.IAdminContentService,
