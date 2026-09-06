@@ -471,9 +471,12 @@ public sealed class OrderingService : IOrderingService
     public async Task<OrderDto> ConfirmNomineeAsync(string orderId, ClaimsPrincipal actor,
         CancellationToken cancellationToken)
     {
+        var role = ActorRole(actor);
+        var privileged = role is AdminRole.Manager or AdminRole.Developer;
         var staffId = actor.FindFirstValue(AdminAuthConstants.StaffMemberIdClaimType)
-            ?? throw new ForbiddenException("此帳號尚未連結店員，無法確認指名。", "STAFF_ACCOUNT_NOT_LINKED");
-        await _repository.ConfirmNomineeAsync(orderId, staffId, ActorId(actor), _clock.LocalDateTime, cancellationToken);
+            ?? (privileged ? null : throw new ForbiddenException("此帳號尚未連結店員，無法確認指名。", "STAFF_ACCOUNT_NOT_LINKED"));
+        await _repository.ConfirmNomineeAsync(orderId, staffId, ActorId(actor), privileged,
+            _clock.LocalDateTime, cancellationToken);
         return (await MapOrdersAsync(await _repository.GetOrderAsync(orderId, cancellationToken), cancellationToken)).Single();
     }
 

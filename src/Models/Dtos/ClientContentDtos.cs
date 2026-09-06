@@ -193,7 +193,8 @@ public sealed record MenuSetDto(
 public sealed record MenuDto(
     IReadOnlyList<PricingRuleDto> PricingRules,
     IReadOnlyList<MenuCategoryDto> Categories,
-    IReadOnlyList<MenuSetDto> Sets);
+    IReadOnlyList<MenuSetDto> Sets,
+    bool ShowSets);
 
 public sealed record StaffReservationDto(
     string Id,

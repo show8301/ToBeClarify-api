@@ -675,8 +675,8 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
         return await connection.ExecuteAsync(command);
     }
 
-    public async Task<string> ConfirmNomineeAsync(string orderId, string staffId, string actorId, DateTime now,
-        CancellationToken cancellationToken)
+    public async Task<string> ConfirmNomineeAsync(string orderId, string? staffId, string actorId, bool privileged,
+        DateTime now, CancellationToken cancellationToken)
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
@@ -702,40 +702,53 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
                 FROM `ORDER_NOMINEES` WHERE `ORDER_ID` = @OrderId FOR UPDATE;
                 """, new { OrderId = orderId }, transaction, cancellationToken: cancellationToken))).AsList();
             await LockStaffRowsAsync(connection, transaction, nominees.Select(item => item.StaffId), cancellationToken);
-            var nominee = nominees.SingleOrDefault(item => item.StaffId == staffId);
-            if (nominee is null) throw new BusinessException("你不是此訂單的被指名店員。", "NOMINEE_SCOPE_FORBIDDEN");
-            if (nominee.ConfirmationStatus == "confirmed") return order.OrderStatus;
-            if (nominee.RequestedStartsAt < now)
+            List<OrderNomineeRow> targets;
+            if (privileged)
+            {
+                targets = nominees.Where(item => item.ConfirmationStatus != "confirmed").ToList();
+            }
+            else
+            {
+                var nominee = nominees.SingleOrDefault(item => item.StaffId == staffId)
+                    ?? throw new BusinessException("你不是此訂單的被指名店員。", "NOMINEE_SCOPE_FORBIDDEN");
+                targets = [nominee];
+            }
+            if (targets.Count == 0) return order.OrderStatus;
+            var actorType = privileged ? "admin" : "staff";
+            if (targets.Any(item => item.RequestedStartsAt < now))
             {
                 await ReturnToRescheduleAsync(connection, transaction, orderId, order.OrderStatus,
-                    "預定開始時間已過，請重新安排時段。", actorId, now, cancellationToken);
+                    "預定開始時間已過，請重新安排時段。", actorType, actorId, now, cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
                 return "needs_reschedule";
             }
 
-            if (await HasConflictAsync(connection, transaction, staffId, nominee.RequestedStartsAt,
-                    nominee.RequestedBusyUntil, cancellationToken))
+            foreach (var target in targets)
             {
-                await ReturnToRescheduleAsync(connection, transaction, orderId, order.OrderStatus,
-                    "店員時段已被其他成立訂單占用。", actorId, now, cancellationToken);
-                await transaction.CommitAsync(cancellationToken);
-                return "needs_reschedule";
+                if (await HasConflictAsync(connection, transaction, target.StaffId, target.RequestedStartsAt,
+                        target.RequestedBusyUntil, cancellationToken))
+                {
+                    await ReturnToRescheduleAsync(connection, transaction, orderId, order.OrderStatus,
+                        "店員時段已被其他成立訂單占用。", actorType, actorId, now, cancellationToken);
+                    await transaction.CommitAsync(cancellationToken);
+                    return "needs_reschedule";
+                }
             }
 
             await connection.ExecuteAsync(new CommandDefinition("""
                 UPDATE `ORDER_NOMINEES` SET `CONFIRMATION_STATUS` = 'confirmed', `CONFIRMED_AT` = @Now,
-                       `CONFIRMED_BY` = @ActorId, `UPDATED_AT` = @Now WHERE `ID` = @NomineeId;
-                """, new { Now = now, ActorId = actorId, NomineeId = nominee.Id }, transaction,
+                       `CONFIRMED_BY` = @ActorId, `UPDATED_AT` = @Now WHERE `ID` IN @NomineeIds;
+                """, new { Now = now, ActorId = actorId, NomineeIds = targets.Select(item => item.Id).ToArray() }, transaction,
                 cancellationToken: cancellationToken));
 
-            nominee.ConfirmationStatus = "confirmed";
+            foreach (var target in targets) target.ConfirmationStatus = "confirmed";
             if (nominees.Any(item => item.ConfirmationStatus != "confirmed"))
             {
                 await connection.ExecuteAsync(new CommandDefinition(
                     "UPDATE `ORDERS` SET `ORDER_STATUS` = 'partially_confirmed', `UPDATED_AT` = @Now WHERE `ID` = @OrderId;",
                     new { Now = now, OrderId = orderId }, transaction, cancellationToken: cancellationToken));
                 await InsertHistoryAsync(connection, transaction, orderId, order.OrderStatus, "partially_confirmed",
-                    "部分被指名店員已確認", "staff", actorId, now, cancellationToken);
+                    "部分被指名店員已確認", actorType, actorId, now, cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
                 return "partially_confirmed";
             }
@@ -746,7 +759,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
                         item.RequestedBusyUntil, cancellationToken))
                 {
                     await ReturnToRescheduleAsync(connection, transaction, orderId, order.OrderStatus,
-                        "最終確認時發現店員時段衝突，已退回等待重新安排。", actorId, now, cancellationToken);
+                        "最終確認時發現店員時段衝突，已退回等待重新安排。", actorType, actorId, now, cancellationToken);
                     await transaction.CommitAsync(cancellationToken);
                     return "needs_reschedule";
                 }
@@ -768,7 +781,8 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
                 WHERE `ID` = @OrderId;
                 """, new { Now = now, OrderId = orderId }, transaction, cancellationToken: cancellationToken));
             await InsertHistoryAsync(connection, transaction, orderId, order.OrderStatus, "confirmed",
-                "所有被指名店員已確認，訂單成立。", "staff", actorId, now, cancellationToken);
+                privileged ? "店經理／開發者代為確認所有指名，訂單成立。" : "所有被指名店員已確認，訂單成立。",
+                actorType, actorId, now, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return "confirmed";
         }
@@ -1676,7 +1690,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
     }
 
     private static async Task ReturnToRescheduleAsync(MySqlConnection connection, MySqlTransaction transaction,
-        string orderId, string fromStatus, string reason, string actorId, DateTime now,
+        string orderId, string fromStatus, string reason, string actorType, string actorId, DateTime now,
         CancellationToken cancellationToken)
     {
         await connection.ExecuteAsync(new CommandDefinition("""
@@ -1690,7 +1704,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
                    `CONFIRMED_BY` = NULL, `UPDATED_AT` = @Now WHERE `ORDER_ID` = @OrderId;
             """, new { Now = now, OrderId = orderId }, transaction, cancellationToken: cancellationToken));
         await InsertHistoryAsync(connection, transaction, orderId, fromStatus, "needs_reschedule", reason,
-            "staff", actorId, now, cancellationToken);
+            actorType, actorId, now, cancellationToken);
     }
 
     private static async Task InsertHistoryAsync(MySqlConnection connection, MySqlTransaction transaction,
