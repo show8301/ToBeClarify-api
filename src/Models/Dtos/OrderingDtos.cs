@@ -72,7 +72,8 @@ public sealed record OrderSessionAccessDto(
 public sealed record OrderCatalogDto(
     OrderingSettingsDto Settings,
     MenuDto Menu,
-    IReadOnlyList<StaffListItemDto> Staff);
+    IReadOnlyList<StaffListItemDto> Staff,
+    IReadOnlyList<RoomDto> Rooms);
 
 public sealed record OrderItemDto(
     string Id,
@@ -129,6 +130,18 @@ public sealed record OrderAddonDto(
     string Status,
     DateTimeOffset? ConfirmedAt);
 
+public sealed record OrderRoomBookingDto(
+    string Id,
+    string RoomId,
+    string RoomName,
+    int SegmentCount,
+    int SegmentMinutes,
+    int UnitPrice,
+    int TotalAmount,
+    DateTimeOffset StartsAt,
+    DateTimeOffset EndsAt,
+    string Status);
+
 public sealed record OrderStatusHistoryDto(
     string FromStatus,
     string ToStatus,
@@ -159,7 +172,8 @@ public sealed record OrderDto(
     IReadOnlyList<OrderNomineeDto> Nominees,
     IReadOnlyList<OrderTipDto> Tips,
     IReadOnlyList<OrderAddonDto> Addons,
-    IReadOnlyList<OrderStatusHistoryDto> History);
+    IReadOnlyList<OrderStatusHistoryDto> History,
+    IReadOnlyList<OrderRoomBookingDto> RoomBookings);
 
 public sealed record AdminOrderSessionDto(
     OrderSessionDto Session,
@@ -251,6 +265,17 @@ public sealed class NominationOrderLineRequest
     public DateTimeOffset RequestedStartsAt { get; init; }
 }
 
+public sealed class RoomOrderLineRequest
+{
+    [Required]
+    public string RoomId { get; init; } = string.Empty;
+
+    [Range(1, 72)]
+    public int SegmentCount { get; init; } = 1;
+
+    public DateTimeOffset RequestedStartsAt { get; init; }
+}
+
 public sealed class TipOrderLineRequest
 {
     public string? StaffId { get; init; }
@@ -266,6 +291,7 @@ public sealed class SubmitOrderRequest
 {
     public IReadOnlyList<MealOrderLineRequest> Meals { get; init; } = [];
     public IReadOnlyList<NominationOrderLineRequest> Nominations { get; init; } = [];
+    public IReadOnlyList<RoomOrderLineRequest> Rooms { get; init; } = [];
     public IReadOnlyList<TipOrderLineRequest> Tips { get; init; } = [];
 
     [StringLength(500)]

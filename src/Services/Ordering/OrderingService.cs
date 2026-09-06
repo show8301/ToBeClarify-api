@@ -7,6 +7,7 @@ using ToBeClarify.Api.Models.Dtos;
 using ToBeClarify.Api.Models.Entities;
 using ToBeClarify.Api.Repositories.Ordering;
 using ToBeClarify.Api.Services.Client.Menu;
+using ToBeClarify.Api.Services.Client.Rooms;
 using ToBeClarify.Api.Services.Client.Shared;
 using ToBeClarify.Api.Services.Client.Staff;
 
@@ -19,15 +20,17 @@ public sealed class OrderingService : IOrderingService
     private readonly IOrderingRepository _repository;
     private readonly IOrderingTokenService _tokens;
     private readonly IMenuService _menuService;
+    private readonly IRoomService _roomService;
     private readonly IStaffService _staffService;
     private readonly IAppClock _clock;
 
     public OrderingService(IOrderingRepository repository, IOrderingTokenService tokens,
-        IMenuService menuService, IStaffService staffService, IAppClock clock)
+        IMenuService menuService, IRoomService roomService, IStaffService staffService, IAppClock clock)
     {
         _repository = repository;
         _tokens = tokens;
         _menuService = menuService;
+        _roomService = roomService;
         _staffService = staffService;
         _clock = clock;
     }
@@ -127,15 +130,17 @@ public sealed class OrderingService : IOrderingService
         var settingsTask = _repository.GetSettingsAsync(cancellationToken);
         var menuTask = _menuService.GetMenuAsync(cancellationToken);
         var staffTask = _staffService.GetStaffAsync(null, cancellationToken);
-        await Task.WhenAll(settingsTask, menuTask, staffTask);
-        return new OrderCatalogDto(MapSettings(await settingsTask), await menuTask, await staffTask);
+        var roomsTask = _roomService.GetRoomsAsync(cancellationToken);
+        await Task.WhenAll(settingsTask, menuTask, staffTask, roomsTask);
+        return new OrderCatalogDto(MapSettings(await settingsTask), await menuTask, await staffTask,
+            (await roomsTask).Rooms);
     }
 
     public async Task<OrderDto> SubmitOrderAsync(string token, SubmitOrderRequest request,
         CancellationToken cancellationToken)
     {
         var session = await ValidateTokenAsync(token, cancellationToken);
-        if (request.Meals.Count + request.Nominations.Count + request.Tips.Count == 0)
+        if (request.Meals.Count + request.Nominations.Count + request.Rooms.Count + request.Tips.Count == 0)
             throw new BusinessException("本次點餐尚未加入任何項目。", "ORDER_EMPTY");
         if (request.Nominations.Select(item => item.StaffId).Distinct(StringComparer.Ordinal).Count() > session.MaxNominatedStaff)
             throw new BusinessException($"本次最多可同時指名 {session.MaxNominatedStaff} 位店員。", "NOMINATION_LIMIT_EXCEEDED");
@@ -155,6 +160,7 @@ public sealed class OrderingService : IOrderingService
         var orderId = NewId();
         var items = new List<NewOrderItem>();
         var nominees = new List<NewOrderNominee>();
+        var rooms = new List<NewOrderRoom>();
         var tips = new List<NewOrderTip>();
         var sort = 0;
         var mealSubtotal = 0;
@@ -228,6 +234,29 @@ public sealed class OrderingService : IOrderingService
                 coveredMinutes, Math.Max(0, staff.BufferMinutes), startsAt, serviceEnds, busyUntil));
         }
 
+        foreach (var line in request.Rooms)
+        {
+            var roomId = Required(line.RoomId, "ROOM_ID_REQUIRED");
+            var room = await _repository.GetActiveRoomAsync(roomId, cancellationToken);
+            if (room is null || room.SegmentPrice <= 0)
+                throw new BusinessException("此包廂目前無法訂購。", "ROOM_UNAVAILABLE");
+
+            var startsAt = ToTaiwanDateTime(line.RequestedStartsAt);
+            if (startsAt < now)
+                throw new BusinessException("包廂開始時間不可早於目前時間。", "ROOM_START_IN_PAST");
+            var coveredMinutes = checked(line.SegmentCount * settings.SegmentMinutes);
+            var endsAt = startsAt.AddMinutes(coveredMinutes);
+
+            var itemId = NewId();
+            var total = checked(room.SegmentPrice * line.SegmentCount);
+            items.Add(new NewOrderItem(itemId, "room_service", room.Id, null,
+                $"{room.RoomName}｜包廂", room.SegmentPrice, 1, line.SegmentCount,
+                coveredMinutes, total, "per_segment", sort++));
+            rooms.Add(new NewOrderRoom(NewId(), itemId, room.Id, room.RoomName,
+                session.BusinessDate.Date, startsAt, endsAt, line.SegmentCount,
+                settings.SegmentMinutes, room.SegmentPrice, total, "scheduled"));
+        }
+
         foreach (var line in request.Tips)
         {
             string? staffName = null;
@@ -257,7 +286,7 @@ public sealed class OrderingService : IOrderingService
             initialStatus, intakeMode, storeConfirmationStatus,
             initialStatus == "submitted" ? now : null, now,
             subtotal, creditApplied, subtotal - creditApplied,
-            string.IsNullOrWhiteSpace(request.CustomerNote) ? null : request.CustomerNote.Trim(), items, nominees, tips);
+            string.IsNullOrWhiteSpace(request.CustomerNote) ? null : request.CustomerNote.Trim(), items, nominees, rooms, tips);
         await _repository.CreateOrderAsync(aggregate, cancellationToken);
         return (await MapOrdersAsync(await _repository.GetOrderAsync(orderId, cancellationToken), cancellationToken)).Single();
     }
@@ -696,7 +725,11 @@ public sealed class OrderingService : IOrderingService
                         item.ParticipantCount, item.AddonStatus, ToOffset(item.ConfirmedAt))).ToArray(),
                 bundle.History.Where(item => item.OrderId == order.Id).Select(item =>
                     new OrderStatusHistoryDto(item.FromStatus ?? string.Empty, item.ToStatus, item.Reason,
-                        item.ActorType, ToOffset(item.CreatedAt)!.Value)).ToArray());
+                        item.ActorType, ToOffset(item.CreatedAt)!.Value)).ToArray(),
+                bundle.RoomBookings.Where(item => item.OrderId == order.Id).Select(item =>
+                    new OrderRoomBookingDto(item.Id, item.RoomId, item.RoomNameSnapshot,
+                        item.SegmentCount, item.SegmentMinutesSnapshot, item.UnitPrice, item.TotalAmount,
+                        ToOffset(item.StartsAt)!.Value, ToOffset(item.EndsAt)!.Value, item.OrderStatus)).ToArray());
         }).ToArray();
     }
 

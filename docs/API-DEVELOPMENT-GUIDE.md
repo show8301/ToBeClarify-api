@@ -464,10 +464,13 @@ resize 使用 `ResizeMode.Max`，會維持比例，不會強制裁成指定長�
 | POST/PUT | `/api/admin/rooms[/{id}]` | 所有後台角色 | 新增／更新包廂、簡介、詳細說明、照片與啟用排序；clerk 不能修改價格或歸屬 |
 | GET/PUT | `/api/admin/payroll/room-profit-sharing` | developer / manager | 讀取／設定店內共用與店員專屬包廂的店員分潤百分比 |
 | GET | `/api/admin/room-orders?businessDate=...&status=...` | 所有後台角色 | 查詢包廂服務訂單；此服務只提供後台店員操作 |
-| POST | `/api/admin/room-orders` | 所有後台角色 | 依包廂、營業日、開始時間與節數建立服務訂單；價格與結束時間由 API 計算，重疊時段會回傳 409 `ROOM_ORDER_CONFLICT` |
+| POST | `/api/admin/room-orders` | 所有後台角色 | 依包廂、營業日、開始時間與節數建立店員／後台服務訂單；價格與結束時間由 API 計算，重疊時段會回傳 409 `ROOM_ORDER_CONFLICT` |
 | PUT | `/api/admin/room-orders/{id}/status` | 所有後台角色 | 更新 `scheduled`、`in_service`、`completed` 或 `cancelled` |
 
-本功能由 `db/migrations/20260906_01_room_service.sql` 增量建立 `ROOMS`、`ROOM_PHOTO_ITEMS`、`ROOM_SERVICE_ORDERS` 與 `ROOM_PROFIT_SHARING_SETTINGS`。包廂照片先以 `POST /api/admin/media/upload`、category `room` 上傳，再將回傳的 `mediaId` 儲存至包廂。
+| GET | `/api/client/ordering/catalog` | 持有有效點餐信物 | 同時回傳可直接訂購的啟用包廂與每節價格 |
+| POST | `/api/client/ordering/orders` | 持有有效點餐信物 | 可送出包廂訂購明細；流程不受指名暫停、指名上限或店員條件限制，只檢查包廂啟用、價格與時段占用 |
+
+本功能由 `db/migrations/20260906_01_room_service.sql` 增量建立 `ROOMS`、`ROOM_PHOTO_ITEMS`、`ROOM_SERVICE_ORDERS` 與 `ROOM_PROFIT_SHARING_SETTINGS`，再由 `db/migrations/20260906_02_customer_room_ordering.sql` 為 `ROOM_SERVICE_ORDERS` 增加可空的 `ORDER_ID`、`ORDER_ITEM_ID` 與查詢索引，讓客戶訂單與包廂占用台帳保持關聯。套用 `_02` 前必須先套用 `_01`。包廂照片先以 `POST /api/admin/media/upload`、category `room` 上傳，再將回傳的 `mediaId` 儲存至包廂。
 
 ### 8.6 占位端點
 
@@ -522,7 +525,7 @@ resize 使用 `ResizeMode.Max`，會維持比例，不會強制裁成指定長�
 | 排行 | `RANKINGS` | staff / monetary 共表，以 period 分期 |
 | 媒體 | `MEDIA_ASSETS` | 磁碟路徑、MIME、尺寸、版本與建立者 |
 | 包廂 | `ROOMS`、`ROOM_PHOTO_ITEMS` | 包廂資料、共用／店員專屬歸屬、每節價格與照片關聯 |
-| 包廂服務 | `ROOM_SERVICE_ORDERS` | 後台建立的包廂服務時段、價格快照與狀態 |
+| 包廂服務 | `ROOM_SERVICE_ORDERS` | 後台或客戶訂購的包廂服務時段、價格快照、狀態，以及與 `ORDERS`／`ORDER_ITEMS` 的可空關聯 |
 | 薪資 | `ROOM_PROFIT_SHARING_SETTINGS` | 店內共用／店員專屬包廂的店員分潤百分比 |
 | 帳號 | `ADMIN_USERS` | 登入帳號、password hash、角色與 staff 一對一綁定；`STAFF_MEMBER_ID` 為 NOT NULL、UNIQUE、RESTRICT FK，顯示名稱統一取自 `STAFF_MEMBERS` |
 | 系統 | `API_LOGS` | request audit / performance log |

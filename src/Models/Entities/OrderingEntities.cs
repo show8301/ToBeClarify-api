@@ -244,6 +244,11 @@ public sealed record NewOrderNominee(
     int ReservedMinutes, int BufferMinutesSnapshot, DateTime StartsAt,
     DateTime ServiceEndsAt, DateTime BusyUntil);
 
+public sealed record NewOrderRoom(
+    string Id, string OrderItemId, string RoomId, string RoomName, DateTime BusinessDate,
+    DateTime StartsAt, DateTime EndsAt, int SegmentCount, int SegmentMinutesSnapshot,
+    int UnitPrice, int TotalAmount, string OrderStatus);
+
 public sealed record NewOrderTip(
     string Id, string OrderItemId, string? StaffId, string? StaffName,
     int Amount, int StaffPercentage, int StorePercentage, int StaffAmount, int StoreAmount);
@@ -253,7 +258,8 @@ public sealed record NewOrderAggregate(
     string Status, string IntakeModeSnapshot, string StoreConfirmationStatus, DateTime? QueueEnteredAt,
     DateTime SubmittedAt, int Subtotal, int MealCreditApplied, int TotalAmount,
     string? CustomerNote, IReadOnlyList<NewOrderItem> Items,
-    IReadOnlyList<NewOrderNominee> Nominees, IReadOnlyList<NewOrderTip> Tips);
+    IReadOnlyList<NewOrderNominee> Nominees, IReadOnlyList<NewOrderRoom> Rooms,
+    IReadOnlyList<NewOrderTip> Tips);
 
 public sealed record OrderBundle(
     IReadOnlyList<OrderRow> Orders,
@@ -261,7 +267,8 @@ public sealed record OrderBundle(
     IReadOnlyList<OrderNomineeRow> Nominees,
     IReadOnlyList<OrderTipRow> Tips,
     IReadOnlyList<OrderHistoryRow> History,
-    IReadOnlyList<OrderAddonRow> Addons);
+    IReadOnlyList<OrderAddonRow> Addons,
+    IReadOnlyList<RoomServiceOrderRow> RoomBookings);
 
 public sealed record NewAddonAggregate(
     string Id, string SessionId, string OrderNumber, string ParentNomineeId, string Status,

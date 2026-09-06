@@ -125,7 +125,8 @@ public sealed class RoomAdminRepository : DapperRepositoryBase, IRoomAdminReposi
     public Task<IReadOnlyList<RoomServiceOrderRow>> GetRoomServiceOrdersAsync(DateOnly? businessDate, string? status,
         CancellationToken cancellationToken)
         => QueryAsync<RoomServiceOrderRow>("""
-            SELECT `ID` AS Id, `ROOM_ID` AS RoomId, `ROOM_NAME_SNAPSHOT` AS RoomNameSnapshot,
+            SELECT `ID` AS Id, `ORDER_ID` AS OrderId, `ORDER_ITEM_ID` AS OrderItemId,
+                   `ROOM_ID` AS RoomId, `ROOM_NAME_SNAPSHOT` AS RoomNameSnapshot,
                    `BUSINESS_DATE` AS BusinessDate, `STARTS_AT` AS StartsAt, `ENDS_AT` AS EndsAt,
                    `SEGMENT_COUNT` AS SegmentCount, `SEGMENT_MINUTES_SNAPSHOT` AS SegmentMinutesSnapshot,
                    `UNIT_PRICE` AS UnitPrice, `TOTAL_AMOUNT` AS TotalAmount,

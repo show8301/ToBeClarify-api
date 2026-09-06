@@ -41,6 +41,8 @@ public sealed class RoomProfitSharingSettingsRow
 public sealed class RoomServiceOrderRow
 {
     public string Id { get; set; } = string.Empty;
+    public string? OrderId { get; set; }
+    public string? OrderItemId { get; set; }
     public string RoomId { get; set; } = string.Empty;
     public string RoomNameSnapshot { get; set; } = string.Empty;
     public DateTime BusinessDate { get; set; }

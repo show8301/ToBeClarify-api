@@ -226,6 +226,18 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
         }, cancellationToken);
     }
 
+    public Task<RoomRow?> GetActiveRoomAsync(string roomId, CancellationToken cancellationToken)
+        => QuerySingleOrDefaultAsync<RoomRow>("""
+            SELECT R.`ID` AS Id, R.`ROOM_NAME` AS RoomName, R.`SHORT_DESCRIPTION` AS ShortDescription,
+                   R.`DETAIL_CONTENT` AS DetailContent, R.`OWNER_STAFF_ID` AS OwnerStaffId,
+                   S.`DISPLAY_NAME` AS OwnerStaffName, R.`SEGMENT_PRICE` AS SegmentPrice,
+                   R.`IS_ACTIVE` AS IsActive, R.`SORT_ORDER` AS SortOrder
+            FROM `ROOMS` R
+            LEFT JOIN `STAFF_MEMBERS` S ON S.`ID` = R.`OWNER_STAFF_ID`
+            WHERE R.`ID` = @RoomId AND R.`IS_ACTIVE` = TRUE
+            LIMIT 1;
+            """, new { RoomId = roomId }, cancellationToken);
+
     public async Task<BusinessPeriodRow?> GetActiveBusinessPeriodAsync(DateTime now,
         CancellationToken cancellationToken)
     {
@@ -498,6 +510,63 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
                     item.DurationMinutes, item.LineTotal, item.PriceRule, item.SortOrder, Now = order.SubmittedAt }),
                 transaction, cancellationToken: cancellationToken));
 
+            foreach (var room in order.Rooms)
+            {
+                var activeRoom = await connection.ExecuteScalarAsync<string?>(new CommandDefinition("""
+                    SELECT `ID` FROM `ROOMS`
+                    WHERE `ID` = @RoomId AND `IS_ACTIVE` = TRUE
+                    FOR UPDATE;
+                    """, new { room.RoomId }, transaction, cancellationToken: cancellationToken));
+                if (activeRoom is null)
+                    throw new BusinessException("此包廂目前無法訂購。", "ROOM_UNAVAILABLE");
+
+                var occupied = await connection.ExecuteScalarAsync<bool>(new CommandDefinition("""
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM `ROOM_SERVICE_ORDERS` R
+                        LEFT JOIN `ORDERS` O ON O.`ID` = R.`ORDER_ID`
+                        WHERE R.`ROOM_ID` = @RoomId
+                          AND R.`ORDER_STATUS` IN ('scheduled', 'in_service')
+                          AND (R.`ORDER_ID` IS NULL OR O.`ORDER_STATUS` IN
+                               ('submitted', 'partially_confirmed', 'needs_reschedule', 'confirmed', 'in_service'))
+                          AND R.`STARTS_AT` < @EndsAt
+                          AND R.`ENDS_AT` > @StartsAt
+                    );
+                    """, new { room.RoomId, room.StartsAt, room.EndsAt }, transaction,
+                    cancellationToken: cancellationToken));
+                if (occupied)
+                    throw new ConflictException($"{room.RoomName} 在所選時段已被訂購，請改選時段。", "ROOM_TIME_CONFLICT");
+            }
+
+            if (order.Rooms.Count > 0)
+            {
+                await connection.ExecuteAsync(new CommandDefinition("""
+                    INSERT INTO `ROOM_SERVICE_ORDERS`
+                        (`ID`, `ORDER_ID`, `ORDER_ITEM_ID`, `ROOM_ID`, `ROOM_NAME_SNAPSHOT`, `BUSINESS_DATE`,
+                         `STARTS_AT`, `ENDS_AT`, `SEGMENT_COUNT`, `SEGMENT_MINUTES_SNAPSHOT`, `UNIT_PRICE`,
+                         `TOTAL_AMOUNT`, `ORDER_STATUS`, `CREATED_AT`, `UPDATED_AT`)
+                    VALUES (@Id, @OrderId, @OrderItemId, @RoomId, @RoomName, @BusinessDate,
+                            @StartsAt, @EndsAt, @SegmentCount, @SegmentMinutesSnapshot, @UnitPrice,
+                            @TotalAmount, @OrderStatus, @Now, @Now);
+                    """, order.Rooms.Select(room => new
+                {
+                    room.Id,
+                    OrderId = order.Id,
+                    room.OrderItemId,
+                    room.RoomId,
+                    room.RoomName,
+                    room.BusinessDate,
+                    room.StartsAt,
+                    room.EndsAt,
+                    room.SegmentCount,
+                    room.SegmentMinutesSnapshot,
+                    room.UnitPrice,
+                    room.TotalAmount,
+                    room.OrderStatus,
+                    Now = order.SubmittedAt
+                }), transaction, cancellationToken: cancellationToken));
+            }
+
             if (order.Nominees.Count > 0)
             {
                 const string insertNominee = """
@@ -607,6 +676,14 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
                    A.`PARTICIPANT_COUNT` AS ParticipantCount, A.`ADDON_STATUS` AS AddonStatus,
                    A.`CONFIRMED_AT` AS ConfirmedAt
             FROM `ORDER_SERVICE_ADDONS` A JOIN `ORDERS` O ON O.`ID` = A.`ORDER_ID` WHERE {where};
+            SELECT R.`ID` AS Id, R.`ORDER_ID` AS OrderId, R.`ORDER_ITEM_ID` AS OrderItemId,
+                   R.`ROOM_ID` AS RoomId, R.`ROOM_NAME_SNAPSHOT` AS RoomNameSnapshot,
+                   R.`BUSINESS_DATE` AS BusinessDate, R.`STARTS_AT` AS StartsAt,
+                   R.`ENDS_AT` AS EndsAt, R.`SEGMENT_COUNT` AS SegmentCount,
+                   R.`SEGMENT_MINUTES_SNAPSHOT` AS SegmentMinutesSnapshot,
+                   R.`UNIT_PRICE` AS UnitPrice, R.`TOTAL_AMOUNT` AS TotalAmount,
+                   R.`ORDER_STATUS` AS OrderStatus, R.`CREATED_AT` AS CreatedAt
+            FROM `ROOM_SERVICE_ORDERS` R JOIN `ORDERS` O ON O.`ID` = R.`ORDER_ID` WHERE {where};
             """;
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         using var grid = await connection.QueryMultipleAsync(new CommandDefinition(sql, new { Value = value }, cancellationToken: cancellationToken));
@@ -616,7 +693,8 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             (await grid.ReadAsync<OrderNomineeRow>()).AsList(),
             (await grid.ReadAsync<OrderTipRow>()).AsList(),
             (await grid.ReadAsync<OrderHistoryRow>()).AsList(),
-            (await grid.ReadAsync<OrderAddonRow>()).AsList());
+            (await grid.ReadAsync<OrderAddonRow>()).AsList(),
+            (await grid.ReadAsync<RoomServiceOrderRow>()).AsList());
     }
 
     public async Task<IReadOnlyList<AdminOrderSessionRow>> GetAdminSessionsAsync(DateOnly businessDate, string? search,
@@ -663,6 +741,9 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             UPDATE `ORDERS` O
             SET O.`ORDER_STATUS` = 'expired', O.`CANCELLED_AT` = @Now, O.`UPDATED_AT` = @Now
             WHERE O.`ORDER_STATUS` IN ('submitted', 'partially_confirmed', 'needs_reschedule') AND O.`QUEUE_ENTERED_AT` <= @Cutoff;
+            UPDATE `ROOM_SERVICE_ORDERS` R JOIN `ORDERS` O ON O.`ID` = R.`ORDER_ID`
+            SET R.`ORDER_STATUS` = 'cancelled', R.`UPDATED_AT` = @Now
+            WHERE O.`ORDER_STATUS` = 'expired' AND R.`ORDER_STATUS` IN ('scheduled', 'in_service');
             UPDATE `ORDER_NOMINEES` N JOIN `ORDERS` O ON O.`ID` = N.`ORDER_ID`
             SET N.`CONFIRMATION_STATUS` = 'expired', N.`UPDATED_AT` = @Now
             WHERE O.`ORDER_STATUS` = 'expired' AND N.`CONFIRMATION_STATUS` IN ('waiting', 'confirmed');
@@ -823,6 +904,8 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
                 WHERE `ORDER_ID` = @OrderId;
                 UPDATE `ORDER_SERVICE_ADDONS` SET `ADDON_STATUS` = 'rejected', `UPDATED_AT` = @Now
                 WHERE `ORDER_ID` = @OrderId;
+                UPDATE `ROOM_SERVICE_ORDERS` SET `ORDER_STATUS` = 'cancelled', `UPDATED_AT` = @Now
+                WHERE `ORDER_ID` = @OrderId AND `ORDER_STATUS` IN ('scheduled', 'in_service');
                 UPDATE `CUSTOMER_ORDER_SESSIONS`
                 SET `REMAINING_MEAL_CREDIT` = `REMAINING_MEAL_CREDIT` + @Credit, `UPDATED_AT` = @Now
                 WHERE `ID` = @SessionId;
@@ -908,6 +991,9 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
                    `CONFIRMED_AT` = NULL,
                    `CANCELLED_AT` = CASE WHEN @WasExpired = 1 THEN NULL ELSE `CANCELLED_AT` END,
                    `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId WHERE `ID` = @OrderId;
+            UPDATE `ROOM_SERVICE_ORDERS`
+            SET `ORDER_STATUS` = 'scheduled', `UPDATED_AT` = @Now
+            WHERE `ORDER_ID` = @OrderId;
             """, new { Now = now, ActorId = actorId, OrderId = orderId, WasExpired = status == "expired" }, transaction,
             cancellationToken: cancellationToken));
         var historyReason = status == "expired" ? "已失效訂單由後台強制啟動並重新排程" : "重新安排指名時段";
@@ -1000,6 +1086,9 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
                     `COMPLETED_AT` = @ActualEndsAt, `CANCELLED_AT` = NULL,
                     `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId
                 WHERE `ID` = @OrderId;
+                UPDATE `ROOM_SERVICE_ORDERS`
+                SET `ORDER_STATUS` = @NextStatus, `UPDATED_AT` = @Now
+                WHERE `ORDER_ID` = @OrderId;
                 """, new
                 {
                     OrderId = orderId,
@@ -1420,6 +1509,19 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
                     cancellationToken: cancellationToken));
             }
 
+            await connection.ExecuteAsync(new CommandDefinition("""
+                UPDATE `ROOM_SERVICE_ORDERS`
+                SET `ORDER_STATUS` = CASE
+                        WHEN @Action IN ('cancel', 'reject') THEN 'cancelled'
+                        WHEN @Action = 'start' THEN 'in_service'
+                        WHEN @Action = 'complete' THEN 'completed'
+                        ELSE 'scheduled'
+                    END,
+                    `UPDATED_AT` = @Now
+                WHERE `ORDER_ID` = @OrderId;
+                """, new { Action = action, Now = now, OrderId = orderId }, transaction,
+                cancellationToken: cancellationToken));
+
             if (action is "cancel" or "reject")
             {
                 await connection.ExecuteAsync(new CommandDefinition("""
@@ -1541,6 +1643,13 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
         if (item.ItemType == "tip")
             await connection.ExecuteAsync(new CommandDefinition("DELETE FROM `ORDER_TIPS` WHERE `ORDER_ITEM_ID` = @ItemId;",
                 new { ItemId = itemId }, transaction, cancellationToken: cancellationToken));
+        if (item.ItemType == "room_service")
+            await connection.ExecuteAsync(new CommandDefinition("""
+                UPDATE `ROOM_SERVICE_ORDERS`
+                SET `ORDER_STATUS` = 'cancelled', `UPDATED_AT` = @Now
+                WHERE `ORDER_ID` = @OrderId AND `ORDER_ITEM_ID` = @ItemId;
+                """, new { OrderId = orderId, ItemId = itemId, Now = now }, transaction,
+                cancellationToken: cancellationToken));
         await connection.ExecuteAsync(new CommandDefinition("DELETE FROM `ORDER_ITEMS` WHERE `ID` = @ItemId;",
             new { ItemId = itemId }, transaction, cancellationToken: cancellationToken));
         await RecalculateOrderAsync(connection, transaction, orderId, now, actorId, cancellationToken);
@@ -1586,6 +1695,8 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             WHERE `ORDER_ID` = @OrderId;
             UPDATE `ORDER_SERVICE_ADDONS` SET `ADDON_STATUS` = 'cancelled', `UPDATED_AT` = @Now
             WHERE `ORDER_ID` = @OrderId;
+            UPDATE `ROOM_SERVICE_ORDERS` SET `ORDER_STATUS` = 'cancelled', `UPDATED_AT` = @Now
+            WHERE `ORDER_ID` = @OrderId AND `ORDER_STATUS` IN ('scheduled', 'in_service');
             UPDATE `CUSTOMER_ORDER_SESSIONS`
             SET `REMAINING_MEAL_CREDIT` = `REMAINING_MEAL_CREDIT` + @Credit, `UPDATED_AT` = @Now
             WHERE `ID` = @SessionId;

@@ -33,6 +33,7 @@ public interface IOrderingRepository
         CancellationToken cancellationToken);
     Task<StaffNominationRow?> GetStaffNominationAsync(string staffId, DateOnly businessDate,
         CancellationToken cancellationToken);
+    Task<RoomRow?> GetActiveRoomAsync(string roomId, CancellationToken cancellationToken);
     Task<string?> GetStaffNameAsync(string staffId, CancellationToken cancellationToken);
     Task<bool> IsStaffBusyAsync(string staffId, DateTime startsAt, DateTime endsAt, CancellationToken cancellationToken);
     Task CreateOrderAsync(NewOrderAggregate order, CancellationToken cancellationToken);

@@ -4,7 +4,7 @@
 
 ## Deployment order
 
-1. Apply `db/migrations/20260830_01_ordering_system.sql`, then `20260830_02_business_hours_and_order_transitions.sql`, `20260830_03_tip_presets.sql`, `20260831_01_business_day_override.sql`, and finally `20260831_02_operational_business_periods.sql` to the target MySQL/MariaDB database. The last migration is additive: it introduces the explicit operational business-period state, intake modes and store-confirmation snapshot without `DELETE` or `DROP`.
+1. Apply `db/migrations/20260830_01_ordering_system.sql`, then `20260830_02_business_hours_and_order_transitions.sql`, `20260830_03_tip_presets.sql`, `20260831_01_business_day_override.sql`, `20260831_02_operational_business_periods.sql`, `20260906_01_room_service.sql`, and finally `20260906_02_customer_room_ordering.sql` to the target MySQL/MariaDB database. The room migrations are additive: the first creates the room catalogue and availability ledger, while the second links customer order items to that ledger with nullable order identifiers and lookup indexes. They do not use `DELETE`, `DROP`, or `TRUNCATE`.
 2. Set `OrderingToken__Secret` to a random secret of at least 32 characters. Keep it stable across deployments; changing it invalidates every active customer link.
 3. Set `OrderingToken__PublicWebBaseUrl` to the customer order page, for example `https://www-dev.marchgroup.net/order` while the Web is in the test environment.
 4. Merge the release into `main`. The API workflow may build `dev` and pull requests for verification, but it deploys only from `main` to the single production IIS environment using `API_DEPLOY_PATH` and `API_HEALTHCHECK_URL`. There is currently no API test-environment deployment.
