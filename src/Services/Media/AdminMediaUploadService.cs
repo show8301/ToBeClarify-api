@@ -55,8 +55,8 @@ public sealed class AdminMediaUploadService
 
         var normalizedCategory = NormalizeCategory(category);
         if (actor.FindFirstValue(AdminAuthConstants.RoleClaimType) == AdminRole.Clerk &&
-            normalizedCategory is not ("staff" or "gallery"))
-            throw new ForbiddenException("Clerk accounts can only upload staff images.", "MEDIA_SCOPE_FORBIDDEN");
+            normalizedCategory is not ("staff" or "gallery" or "room"))
+            throw new ForbiddenException("Clerk accounts can only upload staff, gallery, or room images.", "MEDIA_SCOPE_FORBIDDEN");
         var id = Guid.NewGuid().ToString("D");
         var relativeDirectory = normalizedCategory;
         var rootPath = Path.GetFullPath(string.IsNullOrWhiteSpace(_options.RootPath) ? "media" : _options.RootPath, _environment.ContentRootPath);
@@ -274,6 +274,7 @@ public sealed class AdminMediaUploadService
         AND NOT EXISTS (SELECT 1 FROM `GALLERY_ITEMS` GI WHERE GI.`MEDIA_ID` = {alias}.`ID`)
         AND NOT EXISTS (SELECT 1 FROM `MENU_ITEMS` MI WHERE MI.`MEDIA_ID` = {alias}.`ID`)
         AND NOT EXISTS (SELECT 1 FROM `MENU_SETS` MS WHERE MS.`MEDIA_ID` = {alias}.`ID`)
+        AND NOT EXISTS (SELECT 1 FROM `ROOM_PHOTO_ITEMS` RP WHERE RP.`MEDIA_ID` = {alias}.`ID`)
         AND NOT EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` SR WHERE SR.`STAFF_AVATAR_MEDIA_ID` = {alias}.`ID`)
         AND NOT EXISTS (SELECT 1 FROM `RANKINGS` R WHERE R.`AVATAR_MEDIA_ID` = {alias}.`ID`)
         """;
@@ -308,7 +309,7 @@ public sealed class AdminMediaUploadService
     private static string NormalizeCategory(string? category)
     {
         var value = string.IsNullOrWhiteSpace(category) ? "admin" : category.Trim().ToLowerInvariant();
-        return value is "site" or "home" or "staff" or "event" or "menu" or "gallery" or "admin"
+        return value is "site" or "home" or "staff" or "event" or "menu" or "gallery" or "room" or "admin"
             ? value
             : throw new BusinessException("Invalid media category.", "MEDIA_CATEGORY_INVALID");
     }

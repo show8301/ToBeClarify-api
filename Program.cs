@@ -20,6 +20,7 @@ using ToBeClarify.Api.Repositories.Client.Menu;
 using ToBeClarify.Api.Repositories.Client.Media;
 using ToBeClarify.Api.Repositories.Client.Rankings;
 using ToBeClarify.Api.Repositories.Client.Reservations;
+using ToBeClarify.Api.Repositories.Client.Rooms;
 using ToBeClarify.Api.Repositories.Client.Site;
 using ToBeClarify.Api.Repositories.Client.Staff;
 using ToBeClarify.Api.Repositories.Ordering;
@@ -29,12 +30,15 @@ using ToBeClarify.Api.Services.Client.Home;
 using ToBeClarify.Api.Services.Client.Menu;
 using ToBeClarify.Api.Services.Client.Rankings;
 using ToBeClarify.Api.Services.Client.Reservations;
+using ToBeClarify.Api.Services.Client.Rooms;
 using ToBeClarify.Api.Services.Client.Site;
 using ToBeClarify.Api.Services.Client.Staff;
 using ToBeClarify.Api.Services.Ordering;
 using ToBeClarify.Api.Services.Admin.Auth;
 using ToBeClarify.Api.Services.Logging;
 using ToBeClarify.Api.Services.Media;
+using ToBeClarify.Api.Repositories.Admin.Rooms;
+using ToBeClarify.Api.Services.Admin.Rooms;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -79,6 +83,8 @@ builder.Services.AddSingleton<IOneTimeTokenService, OneTimeTokenService>();
 builder.Services.AddSingleton<IOrderingTokenService, OrderingTokenService>();
 builder.Services.AddScoped<IOrderingRepository, OrderingRepository>();
 builder.Services.AddScoped<IOrderingService, OrderingService>();
+builder.Services.AddScoped<IRoomAdminRepository, RoomAdminRepository>();
+builder.Services.AddScoped<IAdminRoomService, AdminRoomService>();
 builder.Services.AddScoped<ToBeClarify.Api.Repositories.Admin.Content.IAdminContentRepository,
     ToBeClarify.Api.Repositories.Admin.Content.AdminContentRepository>();
 builder.Services.AddScoped<ToBeClarify.Api.Services.Admin.Content.IAdminContentService,
@@ -93,6 +99,7 @@ builder.Services.AddScoped<IStaffRepository, StaffRepository>();
 builder.Services.AddScoped<IGalleryRepository, GalleryRepository>();
 builder.Services.AddScoped<IGuestbookRepository, GuestbookRepository>();
 builder.Services.AddScoped<IReservationRepository, ReservationRepository>();
+builder.Services.AddScoped<IRoomRepository, RoomRepository>();
 builder.Services.AddScoped<IRankingRepository, RankingRepository>();
 builder.Services.AddScoped<IMediaRepository, MediaRepository>();
 builder.Services.AddScoped<IHomeService, HomeService>();
@@ -102,6 +109,7 @@ builder.Services.AddScoped<IStaffService, StaffService>();
 builder.Services.AddScoped<IGalleryService, GalleryService>();
 builder.Services.AddScoped<IGuestbookService, GuestbookService>();
 builder.Services.AddScoped<IReservationService, ReservationService>();
+builder.Services.AddScoped<IRoomService, RoomService>();
 builder.Services.AddScoped<IRankingService, RankingService>();
 builder.Services.AddSingleton<MediaUrlService>();
 builder.Services.AddScoped<MediaFileService>();
