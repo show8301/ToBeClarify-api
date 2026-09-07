@@ -17,18 +17,21 @@ public sealed class StaffRepository : DapperRepositoryBase, IStaffRepository
                    M.`AVATAR_MEDIA_ID` AS AvatarMediaId, M.`SIGNATURE_MEDIA_ID` AS SignatureMediaId,
                    M.`ROLE_TITLE` AS RoleTitle, M.`SHORT_BIO` AS ShortBio, M.`PROFILE_BIO` AS ProfileBio,
                    M.`IS_NOMINATABLE` AS IsNominatable,
-                   COALESCE(S.`IS_WORKING`, TRUE) AS IsWorkingToday,
-                   CASE WHEN COALESCE(S.`IS_WORKING`, TRUE) = FALSE THEN 'off'
+                   COALESCE(P.`IS_WORKING`, COALESCE(S.`IS_WORKING`, TRUE)) AS IsWorkingToday,
+                   CASE WHEN COALESCE(P.`IS_WORKING`, COALESCE(S.`IS_WORKING`, TRUE)) = FALSE THEN 'off'
                         WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= NOW() AND R.`ENDS_AT` > NOW())
                           OR EXISTS (SELECT 1 FROM `STAFF_BUSY_BLOCKS` B WHERE B.`STAFF_ID` = M.`ID` AND B.`BLOCK_STATUS` = 'active' AND B.`STARTS_AT` <= NOW() AND B.`ENDS_AT` > NOW()) THEN 'busy'
                         ELSE 'available' END AS CurrentStatus,
-                   CASE WHEN COALESCE(S.`IS_WORKING`, TRUE) = FALSE THEN '未上班'
+                   CASE WHEN COALESCE(P.`IS_WORKING`, COALESCE(S.`IS_WORKING`, TRUE)) = FALSE THEN '未上班'
                         WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= NOW() AND R.`ENDS_AT` > NOW())
                           OR EXISTS (SELECT 1 FROM `STAFF_BUSY_BLOCKS` B WHERE B.`STAFF_ID` = M.`ID` AND B.`BLOCK_STATUS` = 'active' AND B.`STARTS_AT` <= NOW() AND B.`ENDS_AT` > NOW()) THEN '指名中'
                         ELSE '待命中' END AS StatusText,
-                   NULL AS TodayShift
+                   CASE WHEN P.`START_TIME` IS NULL OR P.`END_TIME` IS NULL THEN NULL
+                        ELSE CONCAT(DATE_FORMAT(P.`START_TIME`, '%H:%i'), ' - ', DATE_FORMAT(P.`END_TIME`, '%H:%i')) END AS TodayShift
             FROM `STAFF_MEMBERS` M
             LEFT JOIN `STAFF_SCHEDULES` S ON S.`STAFF_ID` = M.`ID` AND S.`WORK_DATE` = CURRENT_DATE()
+            LEFT JOIN `STAFF_DUTY_PLANS` P ON P.`STAFF_MEMBER_ID` = M.`ID`
+                AND P.`BUSINESS_DATE` = CURRENT_DATE() AND P.`APPROVAL_STATUS` = 'approved'
             WHERE M.`IS_ACTIVE` = TRUE
             ORDER BY M.`SORT_ORDER`, M.`DISPLAY_NAME`
             LIMIT @Limit;
@@ -43,18 +46,21 @@ public sealed class StaffRepository : DapperRepositoryBase, IStaffRepository
                    M.`AVATAR_MEDIA_ID` AS AvatarMediaId, M.`SIGNATURE_MEDIA_ID` AS SignatureMediaId,
                    M.`ROLE_TITLE` AS RoleTitle, M.`SHORT_BIO` AS ShortBio, M.`PROFILE_BIO` AS ProfileBio,
                    M.`IS_NOMINATABLE` AS IsNominatable,
-                   COALESCE(S.`IS_WORKING`, TRUE) AS IsWorkingToday,
-                   CASE WHEN COALESCE(S.`IS_WORKING`, TRUE) = FALSE THEN 'off'
+                   COALESCE(P.`IS_WORKING`, COALESCE(S.`IS_WORKING`, TRUE)) AS IsWorkingToday,
+                   CASE WHEN COALESCE(P.`IS_WORKING`, COALESCE(S.`IS_WORKING`, TRUE)) = FALSE THEN 'off'
                         WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= NOW() AND R.`ENDS_AT` > NOW())
                           OR EXISTS (SELECT 1 FROM `STAFF_BUSY_BLOCKS` B WHERE B.`STAFF_ID` = M.`ID` AND B.`BLOCK_STATUS` = 'active' AND B.`STARTS_AT` <= NOW() AND B.`ENDS_AT` > NOW()) THEN 'busy'
                         ELSE 'available' END AS CurrentStatus,
-                   CASE WHEN COALESCE(S.`IS_WORKING`, TRUE) = FALSE THEN '未上班'
+                   CASE WHEN COALESCE(P.`IS_WORKING`, COALESCE(S.`IS_WORKING`, TRUE)) = FALSE THEN '未上班'
                         WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= NOW() AND R.`ENDS_AT` > NOW())
                           OR EXISTS (SELECT 1 FROM `STAFF_BUSY_BLOCKS` B WHERE B.`STAFF_ID` = M.`ID` AND B.`BLOCK_STATUS` = 'active' AND B.`STARTS_AT` <= NOW() AND B.`ENDS_AT` > NOW()) THEN '指名中'
                         ELSE '待命中' END AS StatusText,
-                   NULL AS TodayShift
+                   CASE WHEN P.`START_TIME` IS NULL OR P.`END_TIME` IS NULL THEN NULL
+                        ELSE CONCAT(DATE_FORMAT(P.`START_TIME`, '%H:%i'), ' - ', DATE_FORMAT(P.`END_TIME`, '%H:%i')) END AS TodayShift
             FROM `STAFF_MEMBERS` M
             LEFT JOIN `STAFF_SCHEDULES` S ON S.`STAFF_ID` = M.`ID` AND S.`WORK_DATE` = CURRENT_DATE()
+            LEFT JOIN `STAFF_DUTY_PLANS` P ON P.`STAFF_MEMBER_ID` = M.`ID`
+                AND P.`BUSINESS_DATE` = CURRENT_DATE() AND P.`APPROVAL_STATUS` = 'approved'
             WHERE M.`ID` = @Id AND M.`IS_ACTIVE` = TRUE LIMIT 1;
             """;
         return await QuerySingleOrDefaultAsync<StaffRow>(sql, new { Id = id }, cancellationToken);

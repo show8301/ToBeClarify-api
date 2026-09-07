@@ -33,6 +33,10 @@ public interface IAdminContentRepository
     Task SaveStaffMemberAsync(string id, SaveStaffMemberRequest request, string actorId, DateTime now, CancellationToken cancellationToken);
     Task UpdateStaffMemberStatusAsync(string id, bool? isWorkingToday, bool? isActive, string actorId, DateTime now, CancellationToken cancellationToken);
     Task UpdateStaffDailyWorkModeAsync(string id, UpdateStaffDailyWorkModeRequest request, string actorId, DateTime now, CancellationToken cancellationToken);
+    Task<IReadOnlyList<AdminDutyPlanRow>> GetDutyPlansAsync(DateOnly from, DateOnly to, string? staffId, CancellationToken cancellationToken);
+    Task<AdminDutyPlanRow?> GetDutyPlanAsync(string id, CancellationToken cancellationToken);
+    Task UpsertDutyPlanAsync(string id, SaveDutyPlanRequest request, string approvalStatus, string actorId, DateTime now, CancellationToken cancellationToken);
+    Task ReviewDutyPlanAsync(string id, string action, string? note, string actorId, DateTime now, CancellationToken cancellationToken);
     Task ReorderStaffMembersAsync(IReadOnlyList<ReorderStaffMemberItem> items, string actorId, DateTime now, CancellationToken cancellationToken);
     Task<bool> StaffMemberHasAdminAccountAsync(string id, CancellationToken cancellationToken);
     Task DeleteStaffMemberAsync(string id, string actorId, DateTime now, CancellationToken cancellationToken);

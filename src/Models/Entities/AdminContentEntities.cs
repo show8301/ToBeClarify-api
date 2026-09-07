@@ -91,6 +91,24 @@ public sealed class AdminStaffMemberListRow
     public string? ActiveRolesJson { get; set; }
 }
 
+public sealed class AdminDutyPlanRow
+{
+    public string Id { get; set; } = string.Empty;
+    public string StaffId { get; set; } = string.Empty;
+    public string StaffName { get; set; } = string.Empty;
+    public string BusinessDate { get; set; } = string.Empty;
+    public bool IsWorking { get; set; }
+    public string? StartTime { get; set; }
+    public string? EndTime { get; set; }
+    public string ScheduledRolesJson { get; set; } = "[]";
+    public string ApprovalStatus { get; set; } = "pending";
+    public DateTime SubmittedAt { get; set; }
+    public string? SubmittedBy { get; set; }
+    public DateTime? ApprovedAt { get; set; }
+    public string? ApprovedBy { get; set; }
+    public string? ApprovalNote { get; set; }
+}
+
 public sealed class AdminGalleryAlbumRow
 {
     public string Id { get; set; } = string.Empty;

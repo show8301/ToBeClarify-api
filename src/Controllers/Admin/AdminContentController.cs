@@ -151,6 +151,31 @@ public sealed class AdminContentController : ControllerBase
     public async Task<ActionResult<ApiResponse<AdminStaffMemberDto>>> UpdateStaffDailyWorkMode(string id, UpdateStaffDailyWorkModeRequest request, CancellationToken cancellationToken)
         => Ok(ApiResponse<AdminStaffMemberDto>.Ok(await _service.UpdateStaffDailyWorkModeAsync(id, request, User, cancellationToken)));
 
+    [HttpGet("duty-plans")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<AdminDutyPlanDto>>>> GetDutyPlans(
+        [FromQuery] string? from, [FromQuery] string? to, CancellationToken cancellationToken)
+        => Ok(ApiResponse<IReadOnlyList<AdminDutyPlanDto>>.Ok(
+            await _service.GetDutyPlansAsync(from, to, User, cancellationToken)));
+
+    [HttpPost("duty-plans")]
+    public async Task<ActionResult<ApiResponse<AdminDutyPlanDto>>> CreateDutyPlan(
+        SaveDutyPlanRequest request, CancellationToken cancellationToken)
+        => Ok(ApiResponse<AdminDutyPlanDto>.Ok(
+            await _service.SaveDutyPlanAsync(null, request, User, cancellationToken)));
+
+    [HttpPut("duty-plans/{id}")]
+    public async Task<ActionResult<ApiResponse<AdminDutyPlanDto>>> UpdateDutyPlan(
+        string id, SaveDutyPlanRequest request, CancellationToken cancellationToken)
+        => Ok(ApiResponse<AdminDutyPlanDto>.Ok(
+            await _service.SaveDutyPlanAsync(id, request, User, cancellationToken)));
+
+    [HttpPost("duty-plans/{id}/review")]
+    [Authorize(Policy = "AdminManager")]
+    public async Task<ActionResult<ApiResponse<AdminDutyPlanDto>>> ReviewDutyPlan(
+        string id, ReviewDutyPlanRequest request, CancellationToken cancellationToken)
+        => Ok(ApiResponse<AdminDutyPlanDto>.Ok(
+            await _service.ReviewDutyPlanAsync(id, request, User, cancellationToken)));
+
     [HttpPut("staff-members/order")]
     [Authorize(Policy = "AdminManager")]
     public async Task<ActionResult<ApiResponse<bool>>> ReorderStaffMembers(ReorderStaffMembersRequest request, CancellationToken cancellationToken)

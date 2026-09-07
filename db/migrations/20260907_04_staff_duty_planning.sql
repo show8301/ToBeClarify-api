@@ -1,0 +1,49 @@
+-- Duty planning foundation: date-based shifts with time windows, operational roles,
+-- and manager approval. Existing daily work modes remain the source for temporary
+-- in-shift adjustments; approved plans seed the daily work mode for the business date.
+
+CREATE TABLE IF NOT EXISTS `STAFF_DUTY_PLANS` (
+    `ID` VARCHAR(36) NOT NULL,
+    `STAFF_MEMBER_ID` VARCHAR(36) NOT NULL,
+    `BUSINESS_DATE` DATE NOT NULL,
+    `IS_WORKING` TINYINT(1) NOT NULL DEFAULT 1,
+    `START_TIME` TIME NULL,
+    `END_TIME` TIME NULL,
+    `SCHEDULED_ROLES_JSON` LONGTEXT NOT NULL,
+    `APPROVAL_STATUS` VARCHAR(16) NOT NULL DEFAULT 'pending',
+    `SUBMITTED_AT` DATETIME NOT NULL,
+    `SUBMITTED_BY` VARCHAR(36) NULL,
+    `APPROVED_AT` DATETIME NULL,
+    `APPROVED_BY` VARCHAR(36) NULL,
+    `APPROVAL_NOTE` VARCHAR(500) NULL,
+    `CREATED_AT` DATETIME NOT NULL,
+    `CREATED_BY` VARCHAR(36) NULL,
+    `UPDATED_AT` DATETIME NOT NULL,
+    `UPDATED_BY` VARCHAR(36) NULL,
+    PRIMARY KEY (`ID`),
+    UNIQUE KEY `UX_STAFF_DUTY_PLANS_STAFF_DATE` (`STAFF_MEMBER_ID`, `BUSINESS_DATE`),
+    KEY `IX_STAFF_DUTY_PLANS_DATE_STATUS` (`BUSINESS_DATE`, `APPROVAL_STATUS`),
+    KEY `IX_STAFF_DUTY_PLANS_STAFF_DATE` (`STAFF_MEMBER_ID`, `BUSINESS_DATE`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Preserve the current operational state as already-approved plans. This prevents
+-- the new approval flow from taking today's public roster or dashboard offline.
+INSERT INTO `STAFF_DUTY_PLANS`
+    (`ID`, `STAFF_MEMBER_ID`, `BUSINESS_DATE`, `IS_WORKING`, `START_TIME`, `END_TIME`,
+     `SCHEDULED_ROLES_JSON`, `APPROVAL_STATUS`, `SUBMITTED_AT`, `APPROVED_AT`,
+     `CREATED_AT`, `UPDATED_AT`)
+SELECT UUID(), M.`ID`, CURRENT_DATE(),
+       COALESCE(D.`IS_WORKING`, COALESCE(S.`IS_WORKING`, TRUE)),
+       NULL, NULL,
+       COALESCE(D.`SCHEDULED_ROLES_JSON`,
+           CASE WHEN M.`IS_NOMINATABLE` = TRUE THEN '["service","designated"]' ELSE '["service"]' END),
+       'approved', NOW(), NOW(), NOW(), NOW()
+FROM `STAFF_MEMBERS` M
+LEFT JOIN `STAFF_SCHEDULES` S
+    ON S.`STAFF_ID` = M.`ID` AND S.`WORK_DATE` = CURRENT_DATE()
+LEFT JOIN `STAFF_DAILY_WORK_MODES` D
+    ON D.`STAFF_MEMBER_ID` = M.`ID` AND D.`BUSINESS_DATE` = CURRENT_DATE()
+WHERE NOT EXISTS (
+    SELECT 1 FROM `STAFF_DUTY_PLANS` P
+    WHERE P.`STAFF_MEMBER_ID` = M.`ID` AND P.`BUSINESS_DATE` = CURRENT_DATE()
+);

@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using MySqlConnector;
@@ -195,6 +196,78 @@ public sealed class AdminContentService : IAdminContentService
         return await GetStaffMemberAsync(existing.Id, actor, cancellationToken);
     }
 
+    public async Task<IReadOnlyList<AdminDutyPlanDto>> GetDutyPlansAsync(string? from, string? to, ClaimsPrincipal actor, CancellationToken cancellationToken)
+    {
+        var fromDate = ParseDutyDate(from, "DUTY_PLAN_FROM_INVALID") ?? DateOnly.FromDateTime(_clock.LocalDateTime);
+        var toDate = ParseDutyDate(to, "DUTY_PLAN_TO_INVALID") ?? fromDate.AddDays(13);
+        if (toDate < fromDate)
+            throw new BusinessException("Duty plan end date must not be before the start date.", "DUTY_PLAN_DATE_RANGE_INVALID");
+        if (toDate.DayNumber - fromDate.DayNumber > 31)
+            throw new BusinessException("Duty plan date range cannot exceed 32 days.", "DUTY_PLAN_DATE_RANGE_TOO_LARGE");
+
+        var staffId = CanManageAll(actor) ? null : OwnStaffId(actor);
+        return (await _repository.GetDutyPlansAsync(fromDate, toDate, staffId, cancellationToken))
+            .Select(MapDutyPlan).ToArray();
+    }
+
+    public async Task<AdminDutyPlanDto> SaveDutyPlanAsync(string? id, SaveDutyPlanRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken)
+    {
+        var requestedStaffId = Required(request.StaffId, "DUTY_PLAN_STAFF_REQUIRED");
+        var staffId = CanManageAll(actor) ? requestedStaffId : ResolveStaffId(requestedStaffId, actor);
+        var businessDate = ParseDutyDate(request.BusinessDate, "DUTY_PLAN_DATE_INVALID")
+            ?? throw new BusinessException("Duty plan date is required.", "DUTY_PLAN_DATE_REQUIRED");
+        var today = DateOnly.FromDateTime(_clock.LocalDateTime);
+        if (businessDate < today)
+            throw new BusinessException("Past duty plans cannot be changed.", "DUTY_PLAN_DATE_PAST");
+        if (businessDate.DayNumber - today.DayNumber > 180)
+            throw new BusinessException("Duty plans can only be created within the next 180 days.", "DUTY_PLAN_DATE_TOO_FAR");
+
+        var staff = await _repository.GetStaffMemberAsync(staffId, cancellationToken)
+            ?? throw new NotFoundException("Staff member not found.", "STAFF_MEMBER_NOT_FOUND");
+        var roles = request.IsWorking ? NormalizeDailyRoles(request.ScheduledRoles, "DUTY_PLAN_ROLES_INVALID") : [];
+        var startTime = request.IsWorking ? NormalizeDutyTime(request.StartTime, "DUTY_PLAN_START_TIME_INVALID") : null;
+        var endTime = request.IsWorking ? NormalizeDutyTime(request.EndTime, "DUTY_PLAN_END_TIME_INVALID") : null;
+        if (request.IsWorking && (startTime is null || endTime is null))
+            throw new BusinessException("Working duty plans require both a start and end time.", "DUTY_PLAN_TIME_REQUIRED");
+        if (request.IsWorking && !IsValidDutyRange(startTime!, endTime!))
+            throw new BusinessException("Duty plan end time must be after its start time. Midnight can be entered as 00:00.", "DUTY_PLAN_TIME_RANGE_INVALID");
+
+        var normalized = new SaveDutyPlanRequest
+        {
+            StaffId = staff.Id,
+            BusinessDate = businessDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            IsWorking = request.IsWorking,
+            StartTime = startTime,
+            EndTime = endTime,
+            ScheduledRoles = roles.ToList(),
+        };
+        var approvalStatus = CanManageAll(actor) ? "approved" : "pending";
+        await _repository.UpsertDutyPlanAsync(id ?? NewId(), normalized, approvalStatus,
+            ActorId(actor), _clock.LocalDateTime, cancellationToken);
+        var saved = (await _repository.GetDutyPlansAsync(businessDate, businessDate, staff.Id, cancellationToken)).SingleOrDefault()
+            ?? throw new NotFoundException("Duty plan could not be loaded after saving.", "DUTY_PLAN_NOT_FOUND");
+        return MapDutyPlan(saved);
+    }
+
+    public async Task<AdminDutyPlanDto> ReviewDutyPlanAsync(string id, ReviewDutyPlanRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken)
+    {
+        EnsureManager(actor);
+        var planId = Required(id, "DUTY_PLAN_ID_REQUIRED");
+        var existing = await _repository.GetDutyPlanAsync(planId, cancellationToken)
+            ?? throw new NotFoundException("Duty plan not found.", "DUTY_PLAN_NOT_FOUND");
+        if (existing.ApprovalStatus is not ("pending" or "rejected"))
+            throw new BusinessException("Only pending or rejected duty plans can be reviewed.", "DUTY_PLAN_REVIEW_INVALID");
+        var action = request.Action.Trim().ToLowerInvariant();
+        if (action is not ("approve" or "reject"))
+            throw new BusinessException("Duty plan review action must be approve or reject.", "DUTY_PLAN_REVIEW_ACTION_INVALID");
+        if (action == "reject" && string.IsNullOrWhiteSpace(request.Note))
+            throw new BusinessException("A rejection note is required.", "DUTY_PLAN_REJECTION_NOTE_REQUIRED");
+
+        await _repository.ReviewDutyPlanAsync(planId, action, request.Note,
+            ActorId(actor), _clock.LocalDateTime, cancellationToken);
+        return MapDutyPlan((await _repository.GetDutyPlanAsync(planId, cancellationToken))!);
+    }
+
     public async Task ReorderStaffMembersAsync(ReorderStaffMembersRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
         EnsureManager(actor);
@@ -388,6 +461,47 @@ public sealed class AdminContentService : IAdminContentService
         if (roles.Any(role => role is not ("service" or "designated" or "backstage")))
             throw new BusinessException("Daily work roles must be service, designated or backstage.", errorCode);
         return roles;
+    }
+
+    private static AdminDutyPlanDto MapDutyPlan(AdminDutyPlanRow row)
+        => new(row.Id, row.StaffId, row.StaffName, row.BusinessDate, row.IsWorking,
+            row.StartTime, row.EndTime, ParseDailyRoles(row.ScheduledRolesJson), row.ApprovalStatus,
+            row.SubmittedAt, row.SubmittedBy, row.ApprovedAt, row.ApprovedBy, row.ApprovalNote);
+
+    private static DateOnly? ParseDutyDate(string? value, string errorCode)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        return DateOnly.TryParseExact(value.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture,
+            DateTimeStyles.None, out var date)
+            ? date
+            : throw new BusinessException("Duty plan dates must use yyyy-MM-dd format.", errorCode);
+    }
+
+    private static string? NormalizeDutyTime(string? value, string errorCode)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var parts = value.Trim().Split(':', StringSplitOptions.TrimEntries);
+        if (parts.Length != 2 || !int.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out var hour)
+            || !int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var minute)
+            || hour is < 0 or > 27 || minute is < 0 or > 59)
+            throw new BusinessException("Duty plan times must be between 00:00 and 27:59.", errorCode);
+        return $"{hour:00}:{minute:00}";
+    }
+
+    private static bool IsValidDutyRange(string start, string end)
+    {
+        var startMinutes = DutyMinutes(start);
+        var endMinutes = DutyMinutes(end);
+        if (endMinutes == 0) endMinutes = 1440;
+        if (endMinutes <= startMinutes) endMinutes += 1440;
+        return endMinutes > startMinutes && endMinutes - startMinutes <= 24 * 60;
+    }
+
+    private static int DutyMinutes(string value)
+    {
+        var parts = value.Split(':');
+        return int.Parse(parts[0], CultureInfo.InvariantCulture) * 60
+            + int.Parse(parts[1], CultureInfo.InvariantCulture);
     }
 
     private static void ValidateStaffRequest(SaveStaffMemberRequest request)

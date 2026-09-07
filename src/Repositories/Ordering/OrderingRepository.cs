@@ -188,7 +188,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
     {
         const string sql = """
             SELECT M.`ID` AS StaffId, M.`DISPLAY_NAME` AS StaffName,
-                   COALESCE(SC.`IS_WORKING`, TRUE) AS IsWorkingToday,
+                   COALESCE(P.`IS_WORKING`, COALESCE(SC.`IS_WORKING`, TRUE)) AS IsWorkingToday,
                    M.`IS_NOMINATABLE` AS StaffIsNominatable, M.`BUFFER_MINUTES` AS BufferMinutes,
                    SV.`ID` AS ServiceId, SV.`SERVICE_NAME` AS ServiceName, SV.`PRICE` AS Price,
                    SV.`DURATION_MINUTES` AS DurationMinutes, SV.`IS_NOMINATABLE` AS ServiceIsNominatable,
@@ -197,6 +197,9 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             JOIN `STAFF_SERVICES` SV ON SV.`STAFF_ID` = M.`ID`
             LEFT JOIN `STAFF_SCHEDULES` SC
                    ON SC.`STAFF_ID` = M.`ID` AND SC.`WORK_DATE` = @BusinessDate
+            LEFT JOIN `STAFF_DUTY_PLANS` P
+                   ON P.`STAFF_MEMBER_ID` = M.`ID` AND P.`BUSINESS_DATE` = @BusinessDate
+                  AND P.`APPROVAL_STATUS` = 'approved'
             WHERE M.`ID` = @StaffId AND SV.`ID` = @ServiceId AND M.`IS_ACTIVE` = TRUE LIMIT 1;
             """;
         return await QuerySingleOrDefaultAsync<StaffOfferRow>(sql, new
@@ -212,11 +215,14 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
     {
         const string sql = """
             SELECT M.`ID` AS StaffId, M.`DISPLAY_NAME` AS StaffName,
-                   COALESCE(SC.`IS_WORKING`, TRUE) AS IsWorkingToday,
+                   COALESCE(P.`IS_WORKING`, COALESCE(SC.`IS_WORKING`, TRUE)) AS IsWorkingToday,
                    M.`IS_NOMINATABLE` AS StaffIsNominatable, M.`BUFFER_MINUTES` AS BufferMinutes
             FROM `STAFF_MEMBERS` M
             LEFT JOIN `STAFF_SCHEDULES` SC
                    ON SC.`STAFF_ID` = M.`ID` AND SC.`WORK_DATE` = @BusinessDate
+            LEFT JOIN `STAFF_DUTY_PLANS` P
+                   ON P.`STAFF_MEMBER_ID` = M.`ID` AND P.`BUSINESS_DATE` = @BusinessDate
+                  AND P.`APPROVAL_STATUS` = 'approved'
             WHERE M.`ID` = @StaffId AND M.`IS_ACTIVE` = TRUE LIMIT 1;
             """;
         return await QuerySingleOrDefaultAsync<StaffNominationRow>(sql, new

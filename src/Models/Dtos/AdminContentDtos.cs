@@ -138,6 +138,51 @@ public sealed class UpdateStaffDailyWorkModeRequest
     public List<string> ActiveRoles { get; init; } = [];
 }
 
+public sealed record AdminDutyPlanDto(
+    string Id,
+    string StaffId,
+    string StaffName,
+    string BusinessDate,
+    bool IsWorking,
+    string? StartTime,
+    string? EndTime,
+    IReadOnlyList<string> ScheduledRoles,
+    string ApprovalStatus,
+    DateTime SubmittedAt,
+    string? SubmittedBy,
+    DateTime? ApprovedAt,
+    string? ApprovedBy,
+    string? ApprovalNote);
+
+public sealed class SaveDutyPlanRequest
+{
+    [Required, StringLength(40)]
+    public string StaffId { get; init; } = string.Empty;
+
+    [Required, RegularExpression("^\\d{4}-\\d{2}-\\d{2}$")]
+    public string BusinessDate { get; init; } = string.Empty;
+
+    public bool IsWorking { get; init; } = true;
+
+    [RegularExpression("^(?:[0-2]?\\d):[0-5]\\d$")]
+    public string? StartTime { get; init; }
+
+    [RegularExpression("^(?:[0-2]?\\d):[0-5]\\d$")]
+    public string? EndTime { get; init; }
+
+    [Required, MinLength(1)]
+    public List<string> ScheduledRoles { get; init; } = [];
+}
+
+public sealed class ReviewDutyPlanRequest
+{
+    [Required, RegularExpression("^(approve|reject)$")]
+    public string Action { get; init; } = string.Empty;
+
+    [StringLength(500)]
+    public string? Note { get; init; }
+}
+
 public sealed record AdminShopRuleDto(
     string Id,
     string RuleText,
