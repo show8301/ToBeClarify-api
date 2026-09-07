@@ -147,6 +147,10 @@ public sealed class AdminContentController : ControllerBase
     public async Task<ActionResult<ApiResponse<AdminStaffMemberDto>>> UpdateStaffMemberStatus(string id, UpdateStaffMemberStatusRequest request, CancellationToken cancellationToken)
         => Ok(ApiResponse<AdminStaffMemberDto>.Ok(await _service.UpdateStaffMemberStatusAsync(id, request, User, cancellationToken)));
 
+    [HttpPut("staff-members/{id}/today-work-mode")]
+    public async Task<ActionResult<ApiResponse<AdminStaffMemberDto>>> UpdateStaffDailyWorkMode(string id, UpdateStaffDailyWorkModeRequest request, CancellationToken cancellationToken)
+        => Ok(ApiResponse<AdminStaffMemberDto>.Ok(await _service.UpdateStaffDailyWorkModeAsync(id, request, User, cancellationToken)));
+
     [HttpPut("staff-members/order")]
     [Authorize(Policy = "AdminManager")]
     public async Task<ActionResult<ApiResponse<bool>>> ReorderStaffMembers(ReorderStaffMembersRequest request, CancellationToken cancellationToken)

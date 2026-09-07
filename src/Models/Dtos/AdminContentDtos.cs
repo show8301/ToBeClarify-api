@@ -123,6 +123,21 @@ public sealed class UpdateStaffMemberStatusRequest
     public bool? IsActive { get; init; }
 }
 
+public sealed record AdminStaffDailyWorkModeDto(
+    string BusinessDate,
+    bool IsWorking,
+    IReadOnlyList<string> ScheduledRoles,
+    IReadOnlyList<string> ActiveRoles);
+
+public sealed class UpdateStaffDailyWorkModeRequest
+{
+    public bool IsWorking { get; init; } = true;
+
+    public List<string> ScheduledRoles { get; init; } = [];
+
+    public List<string> ActiveRoles { get; init; } = [];
+}
+
 public sealed record AdminShopRuleDto(
     string Id,
     string RuleText,
@@ -186,7 +201,8 @@ public sealed record AdminStaffMemberDto(
     int SortOrder,
     bool IsActive,
     IReadOnlyList<AdminStaffServiceDto> Services,
-    IReadOnlyList<AdminStaffGalleryItemDto> Gallery);
+    IReadOnlyList<AdminStaffGalleryItemDto> Gallery,
+    AdminStaffDailyWorkModeDto? TodayWorkMode = null);
 
 public sealed record AdminStaffMemberListItemDto(
     string Id,
@@ -198,7 +214,8 @@ public sealed record AdminStaffMemberListItemDto(
     int? BufferMinutes,
     bool IsNominatable,
     int SortOrder,
-    bool IsActive);
+    bool IsActive,
+    AdminStaffDailyWorkModeDto? TodayWorkMode = null);
 
 public sealed class SaveStaffMemberRequest
 {

@@ -70,6 +70,9 @@ public sealed class AdminStaffMemberRow
     public bool IsNominatable { get; set; }
     public int SortOrder { get; set; }
     public bool IsActive { get; set; }
+    public string BusinessDate { get; set; } = string.Empty;
+    public string? ScheduledRolesJson { get; set; }
+    public string? ActiveRolesJson { get; set; }
 }
 
 public sealed class AdminStaffMemberListRow
@@ -83,6 +86,9 @@ public sealed class AdminStaffMemberListRow
     public bool IsNominatable { get; set; }
     public int SortOrder { get; set; }
     public bool IsActive { get; set; }
+    public string BusinessDate { get; set; } = string.Empty;
+    public string? ScheduledRolesJson { get; set; }
+    public string? ActiveRolesJson { get; set; }
 }
 
 public sealed class AdminGalleryAlbumRow

@@ -28,6 +28,7 @@ public interface IAdminContentService
     Task<AdminStaffMemberDto> GetStaffMemberAsync(string id, ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<AdminStaffMemberDto> SaveStaffMemberAsync(string id, SaveStaffMemberRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<AdminStaffMemberDto> UpdateStaffMemberStatusAsync(string id, UpdateStaffMemberStatusRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);
+    Task<AdminStaffMemberDto> UpdateStaffDailyWorkModeAsync(string id, UpdateStaffDailyWorkModeRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task ReorderStaffMembersAsync(ReorderStaffMembersRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task DeleteStaffMemberAsync(string id, ClaimsPrincipal actor, CancellationToken cancellationToken);
 

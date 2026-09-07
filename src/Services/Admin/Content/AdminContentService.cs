@@ -139,7 +139,7 @@ public sealed class AdminContentService : IAdminContentService
         return rows.Select(row => new AdminStaffMemberListItemDto(
             row.Id, row.DisplayName, row.AvatarMediaId, _mediaUrls.BuildUrl(row.AvatarMediaId, "card"),
             row.RoleTitle, row.IsWorkingToday, row.BufferMinutes, row.IsNominatable,
-            row.SortOrder, row.IsActive)).ToArray();
+            row.SortOrder, row.IsActive, MapDailyWorkMode(row))).ToArray();
     }
 
     public async Task<AdminStaffMemberDto> GetStaffMemberAsync(string id, ClaimsPrincipal actor, CancellationToken cancellationToken)
@@ -170,6 +170,27 @@ public sealed class AdminContentService : IAdminContentService
         var existing = await _repository.GetStaffMemberAsync(staffId, cancellationToken)
             ?? throw new NotFoundException("Staff member not found.", "STAFF_NOT_FOUND");
         await _repository.UpdateStaffMemberStatusAsync(staffId, request.IsWorkingToday, request.IsActive,
+            ActorId(actor), _clock.LocalDateTime, cancellationToken);
+        return await GetStaffMemberAsync(existing.Id, actor, cancellationToken);
+    }
+
+    public async Task<AdminStaffMemberDto> UpdateStaffDailyWorkModeAsync(string id, UpdateStaffDailyWorkModeRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken)
+    {
+        var staffId = ResolveStaffId(id, actor);
+        var existing = await _repository.GetStaffMemberAsync(staffId, cancellationToken)
+            ?? throw new NotFoundException("Staff member not found.", "STAFF_NOT_FOUND");
+        var scheduledRoles = NormalizeDailyRoles(request.ScheduledRoles, "STAFF_SCHEDULED_ROLES_INVALID");
+        var activeRoles = NormalizeDailyRoles(request.ActiveRoles, "STAFF_ACTIVE_ROLES_INVALID");
+        if (activeRoles.Any(role => !scheduledRoles.Contains(role, StringComparer.Ordinal)))
+            throw new BusinessException("Active work roles must be included in scheduled work roles.", "STAFF_ACTIVE_ROLES_NOT_SCHEDULED");
+
+        var normalizedRequest = new UpdateStaffDailyWorkModeRequest
+        {
+            IsWorking = request.IsWorking,
+            ScheduledRoles = scheduledRoles.ToList(),
+            ActiveRoles = request.IsWorking ? activeRoles.ToList() : [],
+        };
+        await _repository.UpdateStaffDailyWorkModeAsync(staffId, normalizedRequest,
             ActorId(actor), _clock.LocalDateTime, cancellationToken);
         return await GetStaffMemberAsync(existing.Id, actor, cancellationToken);
     }
@@ -329,7 +350,44 @@ public sealed class AdminContentService : IAdminContentService
             row.BufferMinutes, row.IsNominatable, row.SortOrder, row.IsActive,
             (await servicesTask).Select(Map).ToArray(), (await galleryTask).Select(item => new AdminStaffGalleryItemDto(
                 item.Id, item.StaffId, item.MediaId, _mediaUrls.BuildUrl(item.MediaId, "full"),
-                item.SortOrder, item.IsPublished)).ToArray());
+                item.SortOrder, item.IsPublished)).ToArray(), MapDailyWorkMode(row));
+    }
+
+    private static AdminStaffDailyWorkModeDto MapDailyWorkMode(AdminStaffMemberRow row)
+        => new(row.BusinessDate, row.IsWorkingToday,
+            ParseDailyRoles(row.ScheduledRolesJson), ParseDailyRoles(row.ActiveRolesJson));
+
+    private static AdminStaffDailyWorkModeDto MapDailyWorkMode(AdminStaffMemberListRow row)
+        => new(row.BusinessDate, row.IsWorkingToday,
+            ParseDailyRoles(row.ScheduledRolesJson), ParseDailyRoles(row.ActiveRolesJson));
+
+    private static IReadOnlyList<string> ParseDailyRoles(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return [];
+        try
+        {
+            return (JsonSerializer.Deserialize<string[]>(value) ?? [])
+                .Select(role => role.Trim().ToLowerInvariant())
+                .Where(role => role is "service" or "designated" or "backstage")
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static IReadOnlyList<string> NormalizeDailyRoles(IEnumerable<string>? values, string errorCode)
+    {
+        var roles = (values ?? [])
+            .Select(role => role?.Trim().ToLowerInvariant() ?? string.Empty)
+            .Where(role => !string.IsNullOrWhiteSpace(role))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (roles.Any(role => role is not ("service" or "designated" or "backstage")))
+            throw new BusinessException("Daily work roles must be service, designated or backstage.", errorCode);
+        return roles;
     }
 
     private static void ValidateStaffRequest(SaveStaffMemberRequest request)

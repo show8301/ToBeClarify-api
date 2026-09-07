@@ -152,11 +152,18 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
         => QueryAsync<AdminStaffMemberListRow>("""
             SELECT M.`ID` AS Id, M.`DISPLAY_NAME` AS DisplayName,
                    M.`AVATAR_MEDIA_ID` AS AvatarMediaId, M.`ROLE_TITLE` AS RoleTitle,
-                   COALESCE(S.`IS_WORKING`, TRUE) AS IsWorkingToday,
+                   COALESCE(D.`IS_WORKING`, COALESCE(S.`IS_WORKING`, TRUE)) AS IsWorkingToday,
                    M.`BUFFER_MINUTES` AS BufferMinutes, M.`IS_NOMINATABLE` AS IsNominatable,
-                   M.`SORT_ORDER` AS SortOrder, M.`IS_ACTIVE` AS IsActive
+                   M.`SORT_ORDER` AS SortOrder, M.`IS_ACTIVE` AS IsActive,
+                   DATE_FORMAT(CURRENT_DATE(), '%Y-%m-%d') AS BusinessDate,
+                   COALESCE(D.`SCHEDULED_ROLES_JSON`, '[\"service\"]') AS ScheduledRolesJson,
+                   COALESCE(D.`ACTIVE_ROLES_JSON`,
+                       CASE WHEN COALESCE(D.`IS_WORKING`, COALESCE(S.`IS_WORKING`, TRUE)) = TRUE
+                            THEN '[\"service\"]'
+                            ELSE '[]' END) AS ActiveRolesJson
             FROM `STAFF_MEMBERS` M
             LEFT JOIN `STAFF_SCHEDULES` S ON S.`STAFF_ID` = M.`ID` AND S.`WORK_DATE` = CURRENT_DATE()
+            LEFT JOIN `STAFF_DAILY_WORK_MODES` D ON D.`STAFF_MEMBER_ID` = M.`ID` AND D.`BUSINESS_DATE` = CURRENT_DATE()
             ORDER BY `SORT_ORDER`, `DISPLAY_NAME`;
             """, null, cancellationToken);
 
@@ -166,20 +173,27 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
                    M.`AVATAR_MEDIA_ID` AS AvatarMediaId, M.`SIGNATURE_MEDIA_ID` AS SignatureMediaId,
                    M.`ROLE_TITLE` AS RoleTitle,
                    M.`SHORT_BIO` AS ShortBio, M.`PROFILE_BIO` AS ProfileBio,
-                   COALESCE(S.`IS_WORKING`, TRUE) AS IsWorkingToday,
-                   CASE WHEN COALESCE(S.`IS_WORKING`, TRUE) = FALSE THEN 'off'
+                   COALESCE(D.`IS_WORKING`, COALESCE(S.`IS_WORKING`, TRUE)) AS IsWorkingToday,
+                   CASE WHEN COALESCE(D.`IS_WORKING`, COALESCE(S.`IS_WORKING`, TRUE)) = FALSE THEN 'off'
                         WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= NOW() AND R.`ENDS_AT` > NOW())
                           OR EXISTS (SELECT 1 FROM `STAFF_BUSY_BLOCKS` B WHERE B.`STAFF_ID` = M.`ID` AND B.`BLOCK_STATUS` = 'active' AND B.`STARTS_AT` <= NOW() AND B.`ENDS_AT` > NOW()) THEN 'busy'
                         ELSE 'available' END AS CurrentStatus,
-                   CASE WHEN COALESCE(S.`IS_WORKING`, TRUE) = FALSE THEN '未上班'
+                   CASE WHEN COALESCE(D.`IS_WORKING`, COALESCE(S.`IS_WORKING`, TRUE)) = FALSE THEN '未上班'
                         WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= NOW() AND R.`ENDS_AT` > NOW())
                           OR EXISTS (SELECT 1 FROM `STAFF_BUSY_BLOCKS` B WHERE B.`STAFF_ID` = M.`ID` AND B.`BLOCK_STATUS` = 'active' AND B.`STARTS_AT` <= NOW() AND B.`ENDS_AT` > NOW()) THEN '指名中'
                         ELSE '待命中' END AS StatusText,
                    NULL AS TodayShift, M.`BUFFER_MINUTES` AS BufferMinutes,
                    M.`IS_NOMINATABLE` AS IsNominatable,
-                   M.`SORT_ORDER` AS SortOrder, M.`IS_ACTIVE` AS IsActive
+                   M.`SORT_ORDER` AS SortOrder, M.`IS_ACTIVE` AS IsActive,
+                   DATE_FORMAT(CURRENT_DATE(), '%Y-%m-%d') AS BusinessDate,
+                   COALESCE(D.`SCHEDULED_ROLES_JSON`, '[\"service\"]') AS ScheduledRolesJson,
+                   COALESCE(D.`ACTIVE_ROLES_JSON`,
+                       CASE WHEN COALESCE(D.`IS_WORKING`, COALESCE(S.`IS_WORKING`, TRUE)) = TRUE
+                            THEN '[\"service\"]'
+                            ELSE '[]' END) AS ActiveRolesJson
             FROM `STAFF_MEMBERS` M
             LEFT JOIN `STAFF_SCHEDULES` S ON S.`STAFF_ID` = M.`ID` AND S.`WORK_DATE` = CURRENT_DATE()
+            LEFT JOIN `STAFF_DAILY_WORK_MODES` D ON D.`STAFF_MEMBER_ID` = M.`ID` AND D.`BUSINESS_DATE` = CURRENT_DATE()
             WHERE M.`ID` = @Id LIMIT 1;
             """, new { Id = id }, cancellationToken);
 
@@ -226,6 +240,22 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
             VALUES (@ScheduleId, @StaffId, DATE(@Now), @IsWorkingToday, @Now, @ActorId, @Now, @ActorId)
             ON DUPLICATE KEY UPDATE `IS_WORKING` = VALUES(`IS_WORKING`), `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId;
             """, new { ScheduleId = NewId(), StaffId = id, request.IsWorkingToday, Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
+
+        await connection.ExecuteAsync(new CommandDefinition("""
+            INSERT INTO `STAFF_DAILY_WORK_MODES`
+                (`ID`, `STAFF_MEMBER_ID`, `BUSINESS_DATE`, `IS_WORKING`, `SCHEDULED_ROLES_JSON`, `ACTIVE_ROLES_JSON`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
+            SELECT @ModeId, M.`ID`, DATE(@Now), @IsWorkingToday,
+                   '[\"service\"]',
+                   CASE WHEN @IsWorkingToday = TRUE THEN '[\"service\"]' ELSE '[]' END,
+                   @Now, @ActorId, @Now, @ActorId
+            FROM `STAFF_MEMBERS` M WHERE M.`ID` = @StaffId
+            ON DUPLICATE KEY UPDATE
+                `IS_WORKING` = VALUES(`IS_WORKING`),
+                `ACTIVE_ROLES_JSON` = CASE WHEN VALUES(`IS_WORKING`) = FALSE THEN '[]'
+                                           WHEN JSON_LENGTH(`ACTIVE_ROLES_JSON`) = 0 THEN `SCHEDULED_ROLES_JSON`
+                                           ELSE `ACTIVE_ROLES_JSON` END,
+                `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId;
+            """, new { ModeId = NewId(), StaffId = id, IsWorkingToday = request.IsWorkingToday, Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
 
         await connection.ExecuteAsync(new CommandDefinition("DELETE FROM `STAFF_SERVICES` WHERE `STAFF_ID` = @StaffId;", new { StaffId = id }, transaction, cancellationToken: cancellationToken));
         foreach (var service in request.Services ?? [])
@@ -276,9 +306,50 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
                 VALUES (@ScheduleId, @StaffId, DATE(@Now), @IsWorkingToday, @Now, @ActorId, @Now, @ActorId)
                 ON DUPLICATE KEY UPDATE `IS_WORKING` = VALUES(`IS_WORKING`), `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId;
                 """, new { ScheduleId = NewId(), StaffId = id, IsWorkingToday = isWorkingToday.Value, Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
+
+            await connection.ExecuteAsync(new CommandDefinition("""
+                INSERT INTO `STAFF_DAILY_WORK_MODES`
+                    (`ID`, `STAFF_MEMBER_ID`, `BUSINESS_DATE`, `IS_WORKING`, `SCHEDULED_ROLES_JSON`, `ACTIVE_ROLES_JSON`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
+                SELECT @ModeId, M.`ID`, DATE(@Now), @IsWorkingToday,
+                       '[\"service\"]',
+                       CASE WHEN @IsWorkingToday = TRUE THEN '[\"service\"]' ELSE '[]' END,
+                       @Now, @ActorId, @Now, @ActorId
+                FROM `STAFF_MEMBERS` M WHERE M.`ID` = @StaffId
+                ON DUPLICATE KEY UPDATE
+                    `IS_WORKING` = VALUES(`IS_WORKING`),
+                    `ACTIVE_ROLES_JSON` = CASE WHEN VALUES(`IS_WORKING`) = FALSE THEN '[]'
+                                               WHEN JSON_LENGTH(`ACTIVE_ROLES_JSON`) = 0 THEN `SCHEDULED_ROLES_JSON`
+                                               ELSE `ACTIVE_ROLES_JSON` END,
+                    `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId;
+                """, new { ModeId = NewId(), StaffId = id, IsWorkingToday = isWorkingToday.Value, Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
         }
 
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task UpdateStaffDailyWorkModeAsync(string id, UpdateStaffDailyWorkModeRequest request, string actorId, DateTime now, CancellationToken cancellationToken)
+    {
+        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition("""
+            INSERT INTO `STAFF_DAILY_WORK_MODES`
+                (`ID`, `STAFF_MEMBER_ID`, `BUSINESS_DATE`, `IS_WORKING`, `SCHEDULED_ROLES_JSON`, `ACTIVE_ROLES_JSON`, `STARTED_AT`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
+            VALUES (@Id, @StaffMemberId, DATE(@Now), @IsWorking, @ScheduledRolesJson, @ActiveRolesJson,
+                    CASE WHEN @IsWorking = TRUE AND JSON_LENGTH(@ActiveRolesJson) > 0 THEN @Now ELSE NULL END,
+                    @Now, @ActorId, @Now, @ActorId)
+            ON DUPLICATE KEY UPDATE
+                `IS_WORKING` = VALUES(`IS_WORKING`),
+                `SCHEDULED_ROLES_JSON` = VALUES(`SCHEDULED_ROLES_JSON`),
+                `ACTIVE_ROLES_JSON` = VALUES(`ACTIVE_ROLES_JSON`),
+                `STARTED_AT` = CASE WHEN VALUES(`IS_WORKING`) = TRUE AND JSON_LENGTH(VALUES(`ACTIVE_ROLES_JSON`)) > 0
+                                    THEN COALESCE(`STARTED_AT`, @Now) ELSE NULL END,
+                `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId;
+            """, new
+        {
+            Id = NewId(), StaffMemberId = id, request.IsWorking,
+            ScheduledRolesJson = JsonSerializer.Serialize(request.ScheduledRoles),
+            ActiveRolesJson = JsonSerializer.Serialize(request.ActiveRoles),
+            Now = now, ActorId = actorId
+        }, cancellationToken: cancellationToken));
     }
 
     public async Task ReorderStaffMembersAsync(IReadOnlyList<ReorderStaffMemberItem> items, string actorId, DateTime now, CancellationToken cancellationToken)
@@ -306,7 +377,7 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        await connection.ExecuteAsync(new CommandDefinition("DELETE FROM `STAFF_SERVICES` WHERE `STAFF_ID` = @Id; DELETE FROM `STAFF_GALLERY_ITEMS` WHERE `STAFF_ID` = @Id; DELETE FROM `STAFF_SCHEDULES` WHERE `STAFF_ID` = @Id; DELETE FROM `STAFF_MEMBERS` WHERE `ID` = @Id;", new { Id = id, ActorId = actorId, Now = now }, transaction, cancellationToken: cancellationToken));
+        await connection.ExecuteAsync(new CommandDefinition("DELETE FROM `STAFF_SERVICES` WHERE `STAFF_ID` = @Id; DELETE FROM `STAFF_GALLERY_ITEMS` WHERE `STAFF_ID` = @Id; DELETE FROM `STAFF_SCHEDULES` WHERE `STAFF_ID` = @Id; DELETE FROM `STAFF_DAILY_WORK_MODES` WHERE `STAFF_MEMBER_ID` = @Id; DELETE FROM `STAFF_MEMBERS` WHERE `ID` = @Id;", new { Id = id, ActorId = actorId, Now = now }, transaction, cancellationToken: cancellationToken));
         await transaction.CommitAsync(cancellationToken);
     }
 
