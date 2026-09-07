@@ -86,7 +86,27 @@ public sealed record SettlementStaffInputDto(
     decimal PayableHours,
     bool PublicTipEligible,
     bool IsBackstageParticipant,
-    string? Note);
+    string? Note,
+    string AttendanceSource,
+    string? AttendanceRequestId,
+    string? AttendanceBackfillStatus,
+    string? AttendanceBackfillReason,
+    string? AttendanceApprovedBy,
+    DateTime? AttendanceApprovedAt);
+
+public sealed record SettlementAttendanceBackfillDto(
+    string Id,
+    string StaffId,
+    string StaffName,
+    string Role,
+    int RequestedMinutes,
+    string Reason,
+    string Status,
+    string RequestedBy,
+    DateTime RequestedAt,
+    string? ReviewedBy,
+    DateTime? ReviewedAt,
+    string? ReviewNote);
 
 public sealed record SettlementResultLineDto(
     string? StaffId,
@@ -116,7 +136,8 @@ public sealed record SettlementOverviewDto(
     SettlementSummaryDto Summary,
     IReadOnlyList<SettlementStaffInputDto> StaffInputs,
     IReadOnlyList<SettlementResultLineDto> Results,
-    IReadOnlyList<SettlementAnomalyDto> Anomalies);
+    IReadOnlyList<SettlementAnomalyDto> Anomalies,
+    IReadOnlyList<SettlementAttendanceBackfillDto> AttendanceBackfillRequests = null!);
 
 public sealed class SaveSettlementInputsRequest
 {
@@ -139,7 +160,28 @@ public sealed class SaveSettlementStaffInputRequest
     [Range(0, 100000)] public decimal? ActivityHours { get; init; }
     public bool PublicTipEligible { get; init; } = true;
     public bool IsBackstageParticipant { get; init; }
+    [RegularExpression("^(manual|clock|backfill_approved)$")]
+    public string AttendanceSource { get; init; } = "manual";
     [StringLength(500)] public string? Note { get; init; }
+}
+
+public sealed class SettlementAttendanceBackfillRequest
+{
+    [Required] public DateOnly BusinessDate { get; init; }
+    [Range(1, int.MaxValue)] public int SessionNo { get; init; } = 1;
+    [RegularExpression("^(normal|event)$")] public string DayType { get; init; } = "event";
+    [Required, StringLength(36)] public string StaffId { get; init; } = string.Empty;
+    [Required, RegularExpression("^(designated|service|manager|backstage)$")] public string Role { get; init; } = "designated";
+    [Range(1, 1000000)] public int RequestedMinutes { get; init; }
+    [Required, StringLength(1000, MinimumLength = 1)] public string Reason { get; init; } = string.Empty;
+}
+
+public sealed class SettlementAttendanceReviewRequest
+{
+    [Required] public DateOnly BusinessDate { get; init; }
+    [Range(1, int.MaxValue)] public int SessionNo { get; init; } = 1;
+    public bool Approved { get; init; }
+    [StringLength(1000)] public string? Note { get; init; }
 }
 
 public class SettlementCalculateRequest

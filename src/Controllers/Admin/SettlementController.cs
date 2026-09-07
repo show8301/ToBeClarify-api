@@ -56,6 +56,19 @@ public sealed class SettlementController : ControllerBase
         SettlementReopenRequest request, CancellationToken cancellationToken)
         => Ok(ApiResponse<SettlementOverviewDto>.Ok(await _service.ReopenAsync(request, User, cancellationToken)));
 
+    [HttpPost("attendance/backfill")]
+    public async Task<ActionResult<ApiResponse<SettlementOverviewDto>>> SubmitAttendanceBackfill(
+        SettlementAttendanceBackfillRequest request, CancellationToken cancellationToken)
+        => Ok(ApiResponse<SettlementOverviewDto>.Ok(
+            await _service.SubmitAttendanceBackfillAsync(request, User, cancellationToken)));
+
+    [HttpPost("attendance/backfill/{requestId}/review")]
+    [Authorize(Policy = "AdminManager")]
+    public async Task<ActionResult<ApiResponse<SettlementOverviewDto>>> ReviewAttendanceBackfill(
+        string requestId, SettlementAttendanceReviewRequest request, CancellationToken cancellationToken)
+        => Ok(ApiResponse<SettlementOverviewDto>.Ok(await _service.ReviewAttendanceBackfillAsync(
+            requestId, request, User, cancellationToken)));
+
     [HttpPut("orders/{orderId}/amount")]
     [Authorize(Policy = "AdminManager")]
     public async Task<ActionResult<ApiResponse<SettlementOverviewDto>>> AdjustOrder(

@@ -169,6 +169,10 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
                    I.`ROLE` AS Role, M.`DISPLAY_NAME` AS DisplayName, M.`ROLE_TITLE` AS RoleTitle,
                    M.`IS_ACTIVE` AS IsActive, COALESCE(S.`IS_WORKING`, FALSE) AS IsWorking,
                    I.`ACTUAL_MINUTES` AS ActualMinutes, I.`ACTIVITY_HOURS` AS ActivityHours,
+                   I.`ATTENDANCE_SOURCE` AS AttendanceSource,
+                   I.`ATTENDANCE_REQUEST_ID` AS AttendanceRequestId,
+                   I.`ATTENDANCE_APPROVED_BY` AS AttendanceApprovedBy,
+                   I.`ATTENDANCE_APPROVED_AT` AS AttendanceApprovedAt,
                    I.`PUBLIC_TIP_ELIGIBLE` AS PublicTipEligible,
                    I.`IS_BACKSTAGE_PARTICIPANT` AS IsBackstageParticipant, I.`NOTE` AS Note
             FROM `SETTLEMENT_STAFF_INPUTS` I
@@ -189,6 +193,17 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
             LEFT JOIN `STAFF_MEMBERS` M ON M.`ID` = R.`STAFF_ID`
             WHERE R.`SETTLEMENT_ID` = @SettlementId
             ORDER BY R.`ROLE`, M.`DISPLAY_NAME`;
+
+            SELECT B.`ID` AS Id, B.`SETTLEMENT_ID` AS SettlementId, B.`STAFF_ID` AS StaffId,
+                   M.`DISPLAY_NAME` AS StaffName, B.`ROLE` AS Role,
+                   B.`REQUESTED_MINUTES` AS RequestedMinutes, B.`REASON` AS Reason,
+                   B.`STATUS` AS Status, B.`REQUESTED_BY` AS RequestedBy,
+                   B.`REQUESTED_AT` AS RequestedAt, B.`REVIEWED_BY` AS ReviewedBy,
+                   B.`REVIEWED_AT` AS ReviewedAt, B.`REVIEW_NOTE` AS ReviewNote
+            FROM `SETTLEMENT_ATTENDANCE_BACKFILL_REQUESTS` B
+            LEFT JOIN `STAFF_MEMBERS` M ON M.`ID` = B.`STAFF_ID`
+            WHERE B.`SETTLEMENT_ID` = @SettlementId
+            ORDER BY B.`REQUESTED_AT` DESC;
             """;
 
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
@@ -204,8 +219,10 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
         var admissions = (await multi.ReadAsync<SettlementAdmissionRow>()).AsList();
         var staffInputs = (await multi.ReadAsync<SettlementStaffInputRow>()).AsList();
         var results = (await multi.ReadAsync<SettlementResultLineRow>()).AsList();
+        var attendanceBackfillRequests = (await multi.ReadAsync<SettlementAttendanceBackfillRow>()).AsList();
         return new SettlementSourceData { Orders = orders, Items = items, Nominees = nominees, Tips = tips,
-            Rooms = rooms, Addons = addons, Admissions = admissions, StaffInputs = staffInputs, Results = results };
+            Rooms = rooms, Addons = addons, Admissions = admissions, StaffInputs = staffInputs, Results = results,
+            AttendanceBackfillRequests = attendanceBackfillRequests };
     }
 
     public async Task SaveInputsAsync(string settlementId, SaveInputsData inputs, string actorId, DateTime now,
@@ -229,18 +246,19 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
             await connection.ExecuteAsync(new CommandDefinition("""
                 INSERT INTO `SETTLEMENT_STAFF_INPUTS`
                     (`ID`, `SETTLEMENT_ID`, `STAFF_ID`, `ROLE`, `ACTUAL_MINUTES`, `ACTIVITY_HOURS`,
-                     `PUBLIC_TIP_ELIGIBLE`, `IS_BACKSTAGE_PARTICIPANT`, `NOTE`, `CREATED_AT`, `CREATED_BY`,
+                     `ATTENDANCE_SOURCE`, `PUBLIC_TIP_ELIGIBLE`, `IS_BACKSTAGE_PARTICIPANT`, `NOTE`, `CREATED_AT`, `CREATED_BY`,
                      `UPDATED_AT`, `UPDATED_BY`)
                 VALUES (@Id, @SettlementId, @StaffId, @Role, @ActualMinutes, @ActivityHours,
-                        @PublicTipEligible, @IsBackstageParticipant, @Note, @Now, @ActorId, @Now, @ActorId)
+                        @AttendanceSource, @PublicTipEligible, @IsBackstageParticipant, @Note, @Now, @ActorId, @Now, @ActorId)
                 ON DUPLICATE KEY UPDATE `ACTUAL_MINUTES` = VALUES(`ACTUAL_MINUTES`),
                     `ACTIVITY_HOURS` = VALUES(`ACTIVITY_HOURS`),
+                    `ATTENDANCE_SOURCE` = VALUES(`ATTENDANCE_SOURCE`),
                     `PUBLIC_TIP_ELIGIBLE` = VALUES(`PUBLIC_TIP_ELIGIBLE`),
                     `IS_BACKSTAGE_PARTICIPANT` = VALUES(`IS_BACKSTAGE_PARTICIPANT`),
                     `NOTE` = VALUES(`NOTE`), `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId;
                 """, new { Id = Guid.NewGuid().ToString("D"), SettlementId = settlementId, input.StaffId,
                     input.Role, input.ActualMinutes, input.ActivityHours, input.PublicTipEligible,
-                    input.IsBackstageParticipant, input.Note, Now = now, ActorId = actorId },
+                    input.IsBackstageParticipant, input.AttendanceSource, input.Note, Now = now, ActorId = actorId },
                 transaction, cancellationToken: cancellationToken));
         }
 
@@ -325,8 +343,8 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
             cancellationToken: cancellationToken));
     }
 
-    public async Task<SettlementRunRow> ReopenAsync(DateOnly businessDate, int sessionNo, string reason,
-        string actorId, DateTime now, CancellationToken cancellationToken)
+    public async Task<SettlementRunRow> ReopenAsync(DateOnly businessDate, int sessionNo, SettlementRuleRow rule,
+        string reason, string actorId, DateTime now, CancellationToken cancellationToken)
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
@@ -342,14 +360,16 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
         var nextId = Guid.NewGuid().ToString("D");
         await connection.ExecuteAsync(new CommandDefinition("""
             INSERT INTO `SETTLEMENT_RUNS`
-                (`ID`, `BUSINESS_DATE`, `SESSION_NO`, `DAY_TYPE`, `STATUS`, `RULE_VERSION_ID`, `CREATED_AT`,
+                (`ID`, `BUSINESS_DATE`, `SESSION_NO`, `DAY_TYPE`, `STATUS`, `RULE_VERSION_ID`, `RULE_SNAPSHOT_JSON`, `CREATED_AT`,
                  `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
-            VALUES (@Id, @BusinessDate, @SessionNo, @DayType, 'draft', NULL, @Now, @ActorId, @Now, @ActorId);
+            VALUES (@Id, @BusinessDate, @SessionNo, @DayType, 'draft', @RuleVersionId, @RuleSnapshotJson,
+                    @Now, @ActorId, @Now, @ActorId);
             INSERT INTO `SETTLEMENT_AUDIT_LOG`
                 (`ID`, `SETTLEMENT_ID`, `ACTION_TYPE`, `BEFORE_JSON`, `AFTER_JSON`, `REASON`, `ACTOR_ID`, `CREATED_AT`)
             VALUES (@AuditId, @PreviousId, 'reopen', @BeforeJson, @AfterJson, @Reason, @ActorId, @Now);
             """, new { Id = nextId, BusinessDate = businessDate.ToDateTime(TimeOnly.MinValue), SessionNo = nextNo,
-                previous.DayType, Now = now, ActorId = actorId, AuditId = Guid.NewGuid().ToString("D"),
+                previous.DayType, RuleVersionId = rule.Id, RuleSnapshotJson = System.Text.Json.JsonSerializer.Serialize(rule),
+                Now = now, ActorId = actorId, AuditId = Guid.NewGuid().ToString("D"),
                 PreviousId = previous.Id, BeforeJson = $"{{\"status\":\"{previous.Status}\",\"sessionNo\":{previous.SessionNo}}}",
                 AfterJson = $"{{\"status\":\"draft\",\"sessionNo\":{nextNo}}}", Reason = reason }, transaction,
             cancellationToken: cancellationToken));
@@ -357,6 +377,97 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
         return await GetRunAsync(businessDate, nextNo, cancellationToken)
             ?? throw new InvalidOperationException("Reopened settlement could not be read.");
     }
+
+    public async Task<SettlementAttendanceBackfillRow> SubmitAttendanceBackfillAsync(string settlementId,
+        string staffId, string role, int requestedMinutes, string reason, string actorId, DateTime now,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        var id = Guid.NewGuid().ToString("D");
+        await connection.ExecuteAsync(new CommandDefinition("""
+            INSERT INTO `SETTLEMENT_ATTENDANCE_BACKFILL_REQUESTS`
+                (`ID`, `SETTLEMENT_ID`, `STAFF_ID`, `ROLE`, `REQUESTED_MINUTES`, `REASON`, `STATUS`,
+                 `REQUESTED_BY`, `REQUESTED_AT`)
+            VALUES (@Id, @SettlementId, @StaffId, @Role, @RequestedMinutes, @Reason, 'pending',
+                    @ActorId, @Now);
+            INSERT INTO `SETTLEMENT_AUDIT_LOG`
+                (`ID`, `SETTLEMENT_ID`, `ACTION_TYPE`, `AFTER_JSON`, `REASON`, `ACTOR_ID`, `CREATED_AT`)
+            VALUES (@AuditId, @SettlementId, 'attendance_backfill_requested', @AfterJson, @Reason, @ActorId, @Now);
+            """, new { Id = id, SettlementId = settlementId, StaffId = staffId, Role = role,
+                RequestedMinutes = requestedMinutes, Reason = reason, ActorId = actorId, Now = now,
+                AuditId = Guid.NewGuid().ToString("D"), AfterJson = $"{{\"staffId\":\"{staffId}\",\"role\":\"{role}\",\"minutes\":{requestedMinutes}}}" },
+            cancellationToken: cancellationToken));
+        return await GetAttendanceBackfillAsync(id, cancellationToken)
+            ?? throw new InvalidOperationException("Attendance backfill request could not be read.");
+    }
+
+    public async Task<SettlementAttendanceBackfillRow> ReviewAttendanceBackfillAsync(string requestId,
+        bool approved, string? note, string actorId, DateTime now, CancellationToken cancellationToken)
+    {
+        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var request = await connection.QuerySingleOrDefaultAsync<SettlementAttendanceBackfillRow>(new CommandDefinition("""
+            SELECT B.`ID` AS Id, B.`SETTLEMENT_ID` AS SettlementId, B.`STAFF_ID` AS StaffId,
+                   M.`DISPLAY_NAME` AS StaffName, B.`ROLE` AS Role, B.`REQUESTED_MINUTES` AS RequestedMinutes,
+                   B.`REASON` AS Reason, B.`STATUS` AS Status, B.`REQUESTED_BY` AS RequestedBy,
+                   B.`REQUESTED_AT` AS RequestedAt, B.`REVIEWED_BY` AS ReviewedBy,
+                   B.`REVIEWED_AT` AS ReviewedAt, B.`REVIEW_NOTE` AS ReviewNote
+            FROM `SETTLEMENT_ATTENDANCE_BACKFILL_REQUESTS` B
+            LEFT JOIN `STAFF_MEMBERS` M ON M.`ID` = B.`STAFF_ID`
+            WHERE B.`ID` = @RequestId LIMIT 1;
+            """, new { RequestId = requestId }, transaction, cancellationToken: cancellationToken));
+        if (request is null) throw new InvalidOperationException("Attendance backfill request not found.");
+        if (request.Status != "pending") throw new InvalidOperationException("Attendance backfill request is already reviewed.");
+        var status = approved ? "approved" : "rejected";
+        await connection.ExecuteAsync(new CommandDefinition("""
+            UPDATE `SETTLEMENT_ATTENDANCE_BACKFILL_REQUESTS`
+            SET `STATUS` = @Status, `REVIEWED_BY` = @ActorId, `REVIEWED_AT` = @Now, `REVIEW_NOTE` = @Note
+            WHERE `ID` = @RequestId AND `STATUS` = 'pending';
+            """, new { RequestId = requestId, Status = status, ActorId = actorId, Now = now, Note = note },
+            transaction, cancellationToken: cancellationToken));
+        if (approved)
+        {
+            await connection.ExecuteAsync(new CommandDefinition("""
+                INSERT INTO `SETTLEMENT_STAFF_INPUTS`
+                    (`ID`, `SETTLEMENT_ID`, `STAFF_ID`, `ROLE`, `ACTUAL_MINUTES`, `ATTENDANCE_SOURCE`,
+                     `ATTENDANCE_REQUEST_ID`, `ATTENDANCE_APPROVED_BY`, `ATTENDANCE_APPROVED_AT`,
+                     `PUBLIC_TIP_ELIGIBLE`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
+                VALUES (@InputId, @SettlementId, @StaffId, @Role, @RequestedMinutes, 'backfill_approved',
+                        @RequestId, @ActorId, @Now, TRUE, @Now, @ActorId, @Now, @ActorId)
+                ON DUPLICATE KEY UPDATE `ACTUAL_MINUTES` = VALUES(`ACTUAL_MINUTES`),
+                    `ATTENDANCE_SOURCE` = 'backfill_approved', `ATTENDANCE_REQUEST_ID` = @RequestId,
+                    `ATTENDANCE_APPROVED_BY` = @ActorId, `ATTENDANCE_APPROVED_AT` = @Now,
+                    `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId;
+                """, new { InputId = Guid.NewGuid().ToString("D"), request.SettlementId, request.StaffId,
+                    request.Role, request.RequestedMinutes, RequestId = request.Id, ActorId = actorId, Now = now },
+                transaction, cancellationToken: cancellationToken));
+        }
+        await connection.ExecuteAsync(new CommandDefinition("""
+            INSERT INTO `SETTLEMENT_AUDIT_LOG`
+                (`ID`, `SETTLEMENT_ID`, `ACTION_TYPE`, `BEFORE_JSON`, `AFTER_JSON`, `REASON`, `ACTOR_ID`, `CREATED_AT`)
+            VALUES (@AuditId, @SettlementId, 'attendance_backfill_reviewed', @BeforeJson, @AfterJson,
+                    @Reason, @ActorId, @Now);
+            """, new { AuditId = Guid.NewGuid().ToString("D"), request.SettlementId,
+                BeforeJson = $"{{\"status\":\"pending\",\"requestId\":\"{request.Id}\"}}",
+                AfterJson = $"{{\"status\":\"{status}\",\"approvedMinutes\":{(approved ? request.RequestedMinutes : 0)}}}",
+                Reason = note, ActorId = actorId, Now = now }, transaction, cancellationToken: cancellationToken));
+        await transaction.CommitAsync(cancellationToken);
+        return await GetAttendanceBackfillAsync(requestId, cancellationToken)
+            ?? throw new InvalidOperationException("Reviewed attendance backfill request could not be read.");
+    }
+
+    private async Task<SettlementAttendanceBackfillRow?> GetAttendanceBackfillAsync(string requestId,
+        CancellationToken cancellationToken)
+        => await QuerySingleOrDefaultAsync<SettlementAttendanceBackfillRow>("""
+            SELECT B.`ID` AS Id, B.`SETTLEMENT_ID` AS SettlementId, B.`STAFF_ID` AS StaffId,
+                   M.`DISPLAY_NAME` AS StaffName, B.`ROLE` AS Role, B.`REQUESTED_MINUTES` AS RequestedMinutes,
+                   B.`REASON` AS Reason, B.`STATUS` AS Status, B.`REQUESTED_BY` AS RequestedBy,
+                   B.`REQUESTED_AT` AS RequestedAt, B.`REVIEWED_BY` AS ReviewedBy,
+                   B.`REVIEWED_AT` AS ReviewedAt, B.`REVIEW_NOTE` AS ReviewNote
+            FROM `SETTLEMENT_ATTENDANCE_BACKFILL_REQUESTS` B
+            LEFT JOIN `STAFF_MEMBERS` M ON M.`ID` = B.`STAFF_ID`
+            WHERE B.`ID` = @RequestId LIMIT 1;
+            """, new { RequestId = requestId }, cancellationToken);
 
     public async Task SaveOrderAdjustmentAsync(string settlementId, string orderId, int adjustedAmount,
         string reason, string? note, string actorId, DateTime now, CancellationToken cancellationToken)

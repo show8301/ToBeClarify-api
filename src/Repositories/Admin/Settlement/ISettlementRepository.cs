@@ -13,6 +13,7 @@ public sealed class SettlementSourceData
     public IReadOnlyList<SettlementAdmissionRow> Admissions { get; init; } = [];
     public IReadOnlyList<SettlementStaffInputRow> StaffInputs { get; init; } = [];
     public IReadOnlyList<SettlementResultLineRow> Results { get; init; } = [];
+    public IReadOnlyList<SettlementAttendanceBackfillRow> AttendanceBackfillRequests { get; init; } = [];
     public IReadOnlyList<SettlementRunRow> Runs { get; init; } = [];
 }
 
@@ -31,8 +32,13 @@ public interface ISettlementRepository
     Task SaveCalculationAsync(string settlementId, SaveCalculationData calculation, string actorId, DateTime now,
         CancellationToken cancellationToken);
     Task FinalizeAsync(string settlementId, string actorId, DateTime now, CancellationToken cancellationToken);
-    Task<SettlementRunRow> ReopenAsync(DateOnly businessDate, int sessionNo, string reason, string actorId,
-        DateTime now, CancellationToken cancellationToken);
+    Task<SettlementRunRow> ReopenAsync(DateOnly businessDate, int sessionNo, SettlementRuleRow rule,
+        string reason, string actorId, DateTime now, CancellationToken cancellationToken);
+    Task<SettlementAttendanceBackfillRow> SubmitAttendanceBackfillAsync(string settlementId, string staffId,
+        string role, int requestedMinutes, string reason, string actorId, DateTime now,
+        CancellationToken cancellationToken);
+    Task<SettlementAttendanceBackfillRow> ReviewAttendanceBackfillAsync(string requestId, bool approved,
+        string? note, string actorId, DateTime now, CancellationToken cancellationToken);
     Task SaveOrderAdjustmentAsync(string settlementId, string orderId, int adjustedAmount, string reason,
         string? note, string actorId, DateTime now, CancellationToken cancellationToken);
     Task<int?> GetOrderTotalAsync(string orderId, CancellationToken cancellationToken);
@@ -58,6 +64,7 @@ public sealed class SaveStaffInputData
     public decimal? ActivityHours { get; init; }
     public bool PublicTipEligible { get; init; }
     public bool IsBackstageParticipant { get; init; }
+    public string AttendanceSource { get; init; } = "manual";
     public string? Note { get; init; }
 }
 

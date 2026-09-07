@@ -62,10 +62,31 @@ public sealed class SettlementStaffInputRow
     public bool IsActive { get; set; }
     public bool IsWorking { get; set; }
     public int ActualMinutes { get; set; }
+    public string AttendanceSource { get; set; } = "manual";
+    public string? AttendanceRequestId { get; set; }
+    public string? AttendanceApprovedBy { get; set; }
+    public DateTime? AttendanceApprovedAt { get; set; }
     public decimal? ActivityHours { get; set; }
     public bool PublicTipEligible { get; set; }
     public bool IsBackstageParticipant { get; set; }
     public string? Note { get; set; }
+}
+
+public sealed class SettlementAttendanceBackfillRow
+{
+    public string Id { get; set; } = string.Empty;
+    public string SettlementId { get; set; } = string.Empty;
+    public string StaffId { get; set; } = string.Empty;
+    public string StaffName { get; set; } = string.Empty;
+    public string Role { get; set; } = string.Empty;
+    public int RequestedMinutes { get; set; }
+    public string Reason { get; set; } = string.Empty;
+    public string Status { get; set; } = "pending";
+    public string RequestedBy { get; set; } = string.Empty;
+    public DateTime RequestedAt { get; set; }
+    public string? ReviewedBy { get; set; }
+    public DateTime? ReviewedAt { get; set; }
+    public string? ReviewNote { get; set; }
 }
 
 public sealed class SettlementResultLineRow

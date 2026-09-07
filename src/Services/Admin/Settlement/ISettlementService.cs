@@ -18,6 +18,10 @@ public interface ISettlementService
         CancellationToken cancellationToken);
     Task<SettlementOverviewDto> ReopenAsync(SettlementReopenRequest request, ClaimsPrincipal actor,
         CancellationToken cancellationToken);
+    Task<SettlementOverviewDto> SubmitAttendanceBackfillAsync(SettlementAttendanceBackfillRequest request,
+        ClaimsPrincipal actor, CancellationToken cancellationToken);
+    Task<SettlementOverviewDto> ReviewAttendanceBackfillAsync(string requestId,
+        SettlementAttendanceReviewRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<SettlementOverviewDto> SaveOrderAdjustmentAsync(string orderId, SettlementOrderAdjustmentRequest request,
         ClaimsPrincipal actor, CancellationToken cancellationToken);
 }

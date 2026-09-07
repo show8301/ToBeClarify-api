@@ -58,7 +58,7 @@ public sealed class SettlementService : ISettlementService
             BackstagePoolPercentage = request.BackstagePoolPercentage,
             CompanyPercentage = request.CompanyPercentage,
             TimeRoundMinutes = request.TimeRoundMinutes,
-            MoneyRoundUnit = request.MoneyRoundUnit,
+            MoneyRoundUnit = 1,
             PublicTipMode = request.PublicTipMode
         };
         try
@@ -77,18 +77,21 @@ public sealed class SettlementService : ISettlementService
     {
         ValidateDate(request.BusinessDate);
         var dayType = request.DayType is "event" ? "event" : "normal";
-        var rule = await _repository.GetEffectiveRuleAsync(dayType, request.BusinessDate, cancellationToken)
-            ?? throw new BusinessException("找不到該營業日生效的結算規則。", "SETTLEMENT_RULE_NOT_FOUND");
-        var run = await _repository.GetRunAsync(request.BusinessDate, request.SessionNo, cancellationToken)
-            ?? await _repository.GetOrCreateRunAsync(request.BusinessDate, request.SessionNo, dayType, rule.Id,
-                ActorId(actor), _clock.LocalDateTime, cancellationToken);
+        var run = await _repository.GetRunAsync(request.BusinessDate, request.SessionNo, cancellationToken);
+        var rule = run is null
+            ? await _repository.GetEffectiveRuleAsync(dayType, request.BusinessDate, cancellationToken)
+            : await GetRuleForRunAsync(run, request.BusinessDate, cancellationToken);
+        if (rule is null)
+            throw new BusinessException("找不到該營業日生效的結算規則。", "SETTLEMENT_RULE_NOT_FOUND");
+        run ??= await _repository.GetOrCreateRunAsync(request.BusinessDate, request.SessionNo, dayType, rule.Id,
+            ActorId(actor), _clock.LocalDateTime, cancellationToken);
         EnsureEditable(run);
         ValidateInputs(request);
         await _repository.SaveInputsAsync(run.Id, new SaveInputsData
         {
             PublicTipAmount = request.PublicTipAmount,
             DayType = dayType,
-            RuleVersionId = rule.Id,
+            RuleVersionId = run.RuleVersionId ?? rule.Id,
             AdmissionFeeOverride = request.AdmissionFeeOverride,
             ActivityExpense = request.ActivityExpense,
             CompanyShareHours = request.CompanyShareHours,
@@ -127,7 +130,11 @@ public sealed class SettlementService : ISettlementService
         ValidateDate(request.BusinessDate);
         try
         {
-            var run = await _repository.ReopenAsync(request.BusinessDate, request.SessionNo, request.Reason,
+            var previous = await _repository.GetRunAsync(request.BusinessDate, request.SessionNo, cancellationToken)
+                ?? throw new BusinessException("找不到要重新開放的結算時段。", "SETTLEMENT_NOT_FOUND");
+            var rule = await _repository.GetEffectiveRuleAsync(previous.DayType, request.BusinessDate, cancellationToken)
+                ?? throw new BusinessException("找不到重新開放時段當下有效的結算規則。", "SETTLEMENT_RULE_NOT_FOUND");
+            var run = await _repository.ReopenAsync(request.BusinessDate, request.SessionNo, rule, request.Reason,
                 ActorId(actor), _clock.LocalDateTime, cancellationToken);
             return await GetOverviewAsync(request.BusinessDate, run.SessionNo, cancellationToken);
         }
@@ -150,6 +157,46 @@ public sealed class SettlementService : ISettlementService
         return await GetOverviewAsync(request.BusinessDate, request.SessionNo, cancellationToken);
     }
 
+    public async Task<SettlementOverviewDto> SubmitAttendanceBackfillAsync(
+        SettlementAttendanceBackfillRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken)
+    {
+        ValidateDate(request.BusinessDate);
+        var actorRole = actor.FindFirstValue(AdminAuthConstants.RoleClaimType);
+        var actorStaffId = actor.FindFirstValue(AdminAuthConstants.StaffMemberIdClaimType);
+        if (actorRole == AdminRole.Clerk && !string.Equals(actorStaffId, request.StaffId.Trim(), StringComparison.Ordinal))
+            throw new UnauthorizedException();
+        var dayType = request.DayType is "normal" ? "normal" : "event";
+        var rule = await _repository.GetEffectiveRuleAsync(dayType, request.BusinessDate, cancellationToken)
+            ?? throw new BusinessException("找不到該營業日生效的結算規則。", "SETTLEMENT_RULE_NOT_FOUND");
+        var run = await _repository.GetRunAsync(request.BusinessDate, request.SessionNo, cancellationToken)
+            ?? await _repository.GetOrCreateRunAsync(request.BusinessDate, request.SessionNo, dayType, rule.Id,
+                ActorId(actor), _clock.LocalDateTime, cancellationToken);
+        EnsureEditable(run);
+        var reason = request.Reason.Trim();
+        if (reason.Length == 0) throw new BusinessException("補打卡必須填寫理由。", "ATTENDANCE_REASON_REQUIRED");
+        await _repository.SubmitAttendanceBackfillAsync(run.Id, request.StaffId.Trim(), request.Role,
+            request.RequestedMinutes, reason, ActorId(actor), _clock.LocalDateTime, cancellationToken);
+        return await GetOverviewAsync(request.BusinessDate, request.SessionNo, cancellationToken);
+    }
+
+    public async Task<SettlementOverviewDto> ReviewAttendanceBackfillAsync(string requestId,
+        SettlementAttendanceReviewRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken)
+    {
+        ValidateDate(request.BusinessDate);
+        if (string.IsNullOrWhiteSpace(requestId))
+            throw new BusinessException("補打卡申請編號不可為空。", "ATTENDANCE_REQUEST_REQUIRED");
+        try
+        {
+            await _repository.ReviewAttendanceBackfillAsync(requestId, request.Approved, request.Note?.Trim(),
+                ActorId(actor), _clock.LocalDateTime, cancellationToken);
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new BusinessException(ex.Message, "ATTENDANCE_REVIEW_NOT_ALLOWED");
+        }
+        return await GetOverviewAsync(request.BusinessDate, request.SessionNo, cancellationToken);
+    }
+
     private async Task<SettlementRunRow> RequireRunAsync(DateOnly date, int sessionNo, ClaimsPrincipal actor,
         CancellationToken cancellationToken)
     {
@@ -165,7 +212,7 @@ public sealed class SettlementService : ISettlementService
     private async Task<SettlementRuleRow> GetRuleForRunAsync(SettlementRunRow run, DateOnly businessDate,
         CancellationToken cancellationToken)
     {
-        if (run.Status == "finalized" && !string.IsNullOrWhiteSpace(run.RuleSnapshotJson))
+        if (!string.IsNullOrWhiteSpace(run.RuleSnapshotJson))
         {
             try
             {
@@ -349,7 +396,7 @@ public sealed class SettlementService : ISettlementService
         var inputs = source.StaffInputs;
         var results = new Dictionary<(string? StaffId, string Role), SettlementResultLineRow>();
         var payable = inputs.ToDictionary(x => (x.StaffId, x.Role), x => PayableHours(x.ActualMinutes, rule.TimeRoundMinutes));
-        var tipHours = inputs.Where(x => x.PublicTipEligible && x.Role is "designated" or "service" or "manager")
+        var tipHours = inputs.Where(x => IsPublicTipRole(x.Role) && IsPublicTipEligible(x, payable.GetValueOrDefault((x.StaffId, x.Role))))
             .Sum(x => payable.GetValueOrDefault((x.StaffId, x.Role)));
         var publicTips = run.PublicTipAmount;
         if (publicTips > 0 && tipHours <= 0)
@@ -370,7 +417,7 @@ public sealed class SettlementService : ISettlementService
             AddResult(results, run, staffId, "designated", hours, rule.DesignatedHourlyRate,
                 designatedBase.GetValueOrDefault(staffId), rule.DesignatedSharePercentage,
                 designatedShare.GetValueOrDefault(staffId), designatedTips.GetValueOrDefault(staffId),
-                PublicTipFor(input, hours, publicTips, tipHours), rule.MoneyRoundUnit, staffNames.GetValueOrDefault(staffId));
+                PublicTipFor(input, hours, publicTips, tipHours), 1, staffNames.GetValueOrDefault(staffId));
         }
         foreach (var input in inputs.Where(x => x.Role is "service" or "manager"))
         {
@@ -378,13 +425,13 @@ public sealed class SettlementService : ISettlementService
             var share = serviceManagerHours <= 0 ? 0 : servicePool * hours / serviceManagerHours;
             AddResult(results, run, input.StaffId, input.Role, hours, rule.ServiceManagerHourlyRate, 0,
                 rule.ServiceManagerPoolPercentage, share, 0, PublicTipFor(input, hours, publicTips, tipHours),
-                rule.MoneyRoundUnit, staffNames.GetValueOrDefault(input.StaffId));
+                1, staffNames.GetValueOrDefault(input.StaffId));
         }
         if (backstage.Length > 0)
         {
             foreach (var input in backstage)
                 AddResult(results, run, input.StaffId, "backstage", 0, rule.BackstageHourlyRate, 0,
-                    rule.BackstagePoolPercentage, backstagePool / backstage.Length, 0, 0, rule.MoneyRoundUnit,
+                    rule.BackstagePoolPercentage, backstagePool / backstage.Length, 0, 0, 1,
                     staffNames.GetValueOrDefault(input.StaffId));
         }
         if (dedicatedShareByOwner.Count > 0)
@@ -394,7 +441,7 @@ public sealed class SettlementService : ISettlementService
             {
                 var share = dedicatedShareByOwner.GetValueOrDefault(owner.Key);
                 AddResult(results, run, owner.Key, "dedicated_room_owner", 0, 0, owner.Sum(x => x.TotalAmount),
-                    rule.DedicatedRoomOwnerPercentage, share, 0, 0, rule.MoneyRoundUnit,
+                    rule.DedicatedRoomOwnerPercentage, share, 0, 0, 1,
                     staffNames.GetValueOrDefault(owner.Key));
             }
         }
@@ -410,13 +457,36 @@ public sealed class SettlementService : ISettlementService
             .ToDictionary(x => (x.StaffId, x.Role), x => x.ActivityHours!.Value);
         var totalHours = activityHours.Values.Sum() + (run.CompanyShareHours ?? 0);
         if (totalHours <= 0) anomalies.Add(new SettlementAnomalyDto("EVENT_DENOMINATOR_ZERO", "活動日分配基礎時數為 0。"));
+        foreach (var input in source.StaffInputs.Where(x => x.ActualMinutes > 0 || x.ActivityHours is > 0))
+        {
+            if (input.AttendanceSource is not ("clock" or "backfill_approved"))
+                anomalies.Add(new SettlementAnomalyDto("EVENT_ATTENDANCE_NOT_VERIFIED",
+                    "活動日出席必須有打卡或已核准的補打卡資料。", input.StaffId));
+        }
+        var payable = source.StaffInputs.ToDictionary(x => (x.StaffId, x.Role),
+            x => PayableHours(x.ActualMinutes, rule.TimeRoundMinutes));
+        var publicTipHours = source.StaffInputs
+            .Where(x => IsPublicTipRole(x.Role) && IsPublicTipEligible(x, payable.GetValueOrDefault((x.StaffId, x.Role))))
+            .Sum(x => payable.GetValueOrDefault((x.StaffId, x.Role)));
+        if (run.PublicTipAmount > 0 && publicTipHours <= 0)
+            anomalies.Add(new SettlementAnomalyDto("PUBLIC_TIP_DENOMINATOR_ZERO", "公共小費分配總工時為 0，需手動處理。"));
+        var designatedTips = source.Tips.Where(x => !string.IsNullOrWhiteSpace(x.StaffId))
+            .GroupBy(x => x.StaffId!, StringComparer.Ordinal)
+            .ToDictionary(x => x.Key, x => (decimal)x.Sum(t => t.StaffAmount), StringComparer.Ordinal);
         return source.StaffInputs.Where(x => activityHours.ContainsKey((x.StaffId, x.Role)))
             .Select(input =>
             {
-                var before = totalHours <= 0 ? 0 : (grossRevenue - run.ActivityExpense) * activityHours[(input.StaffId, input.Role)] / totalHours;
-                return MakeResult(run, input.StaffId, "activity", activityHours[(input.StaffId, input.Role)], 0, 0,
-                    100, before, 0, 0, rule.MoneyRoundUnit, input.DisplayName,
-                    anomalies.Count > 0 ? "manual" : "normal", anomalies.Count > 0 ? "活動日仍有待確認輸入。" : null);
+                var hours = payable.GetValueOrDefault((input.StaffId, input.Role));
+                var activityShare = totalHours <= 0 ? 0 : (grossRevenue - run.ActivityExpense)
+                    * activityHours[(input.StaffId, input.Role)] / totalHours;
+                var hourlyRate = input.Role is "service" or "manager"
+                    ? rule.ServiceManagerHourlyRate
+                    : input.Role == "designated" ? rule.DesignatedHourlyRate : rule.BackstageHourlyRate;
+                var publicTip = PublicTipFor(input, hours, run.PublicTipAmount, publicTipHours);
+                return MakeResult(run, input.StaffId, input.Role, hours, hourlyRate, activityHours[(input.StaffId, input.Role)],
+                    100, activityShare, designatedTips.GetValueOrDefault(input.StaffId), publicTip, 1,
+                    input.DisplayName, anomalies.Count > 0 ? "manual" : "normal",
+                    anomalies.Count > 0 ? "活動日仍有待確認輸入。" : null);
             }).ToArray();
     }
 
@@ -435,9 +505,9 @@ public sealed class SettlementService : ISettlementService
         string? anomalyNote)
     {
         var basePay = hours * hourlyRate;
-        var preferred = role == "dedicated_room_owner" || role == "activity" ? revenueShare : Math.Max(basePay, revenueShare);
+        var preferred = role == "dedicated_room_owner" ? revenueShare : Math.Max(basePay, revenueShare);
         var before = preferred + designatedTip + publicTip;
-        var after = moneyUnit <= 0 ? (int)Math.Ceiling(before) : checked((int)(Math.Ceiling(before / moneyUnit) * moneyUnit));
+        var after = checked((int)Math.Ceiling(before));
         return new SettlementResultLineRow
         {
             Id = Guid.NewGuid().ToString("D"), SettlementId = run.Id, StaffId = staffId, DisplayName = displayName,
@@ -449,7 +519,12 @@ public sealed class SettlementService : ISettlementService
     }
 
     private static decimal PublicTipFor(SettlementStaffInputRow? input, decimal hours, decimal publicTips, decimal totalHours)
-        => input is null || !input.PublicTipEligible || totalHours <= 0 ? 0 : publicTips * hours / totalHours;
+        => input is null || !IsPublicTipEligible(input, hours) || totalHours <= 0 ? 0 : publicTips * hours / totalHours;
+
+    private static bool IsPublicTipRole(string role) => role is "designated" or "service" or "manager";
+
+    private static bool IsPublicTipEligible(SettlementStaffInputRow input, decimal payableHours)
+        => IsPublicTipRole(input.Role) && payableHours > 0;
 
     private static decimal PayableHours(int actualMinutes, int roundMinutes)
     {
@@ -484,16 +559,28 @@ public sealed class SettlementService : ISettlementService
         SettlementSourceData source, IReadOnlyList<SettlementResultLineRow> results, SettlementSummaryDto summary,
         IReadOnlyList<SettlementAnomalyDto>? anomalies = null)
         => new(MapRun(run), MapRule(rule), summary,
-            source.StaffInputs.Select(x => new SettlementStaffInputDto(x.StaffId, x.DisplayName, x.RoleTitle, x.Role,
-                x.IsWorking, x.ActualMinutes, x.ActivityHours, PayableHours(x.ActualMinutes, rule.TimeRoundMinutes),
-                x.PublicTipEligible, x.IsBackstageParticipant, x.Note)).ToArray(),
-            results.Select(MapResult).ToArray(), anomalies ?? []);
+            source.StaffInputs.Select(x =>
+            {
+                var payableHours = PayableHours(x.ActualMinutes, rule.TimeRoundMinutes);
+                var backfill = source.AttendanceBackfillRequests
+                    .Where(r => r.StaffId == x.StaffId && r.Role == x.Role)
+                    .OrderByDescending(r => r.RequestedAt).FirstOrDefault();
+                return new SettlementStaffInputDto(x.StaffId, x.DisplayName, x.RoleTitle, x.Role,
+                    x.IsWorking, x.ActualMinutes, x.ActivityHours, payableHours,
+                    IsPublicTipEligible(x, payableHours), x.IsBackstageParticipant, x.Note,
+                    x.AttendanceSource, x.AttendanceRequestId ?? backfill?.Id, backfill?.Status,
+                    backfill?.Reason, x.AttendanceApprovedBy, x.AttendanceApprovedAt);
+            }).ToArray(),
+            results.Select(MapResult).ToArray(), anomalies ?? [],
+            source.AttendanceBackfillRequests.Select(x => new SettlementAttendanceBackfillDto(x.Id, x.StaffId,
+                x.StaffName, x.Role, x.RequestedMinutes, x.Reason, x.Status, x.RequestedBy, x.RequestedAt,
+                x.ReviewedBy, x.ReviewedAt, x.ReviewNote)).ToArray());
 
     private static SettlementRuleDto MapRule(SettlementRuleRow row) => new(row.Id, row.DayType,
         DateOnly.FromDateTime(row.EffectiveFrom), row.DesignatedHourlyRate, row.ServiceManagerHourlyRate,
         row.BackstageHourlyRate, row.DesignatedSharePercentage, row.PublicRoomStaffPercentage,
         row.DedicatedRoomOwnerPercentage, row.ServiceManagerPoolPercentage, row.BackstagePoolPercentage,
-        row.CompanyPercentage, row.TimeRoundMinutes, row.MoneyRoundUnit, row.PublicTipMode);
+        row.CompanyPercentage, row.TimeRoundMinutes, 1, row.PublicTipMode);
 
     private static SettlementRunDto MapRun(SettlementRunRow row) => new(row.Id, DateOnly.FromDateTime(row.BusinessDate),
         row.SessionNo, row.DayType, row.Status, row.RuleVersionId, row.PublicTipAmount, row.AdmissionFeeOverride,
@@ -509,7 +596,8 @@ public sealed class SettlementService : ISettlementService
     {
         StaffId = input.StaffId.Trim(), Role = input.Role, ActualMinutes = input.ActualMinutes,
         ActivityHours = input.ActivityHours, PublicTipEligible = input.PublicTipEligible,
-        IsBackstageParticipant = input.IsBackstageParticipant, Note = input.Note?.Trim()
+        IsBackstageParticipant = input.IsBackstageParticipant, AttendanceSource = input.AttendanceSource,
+        Note = input.Note?.Trim()
     };
 
     private static string ActorId(ClaimsPrincipal actor)
@@ -541,6 +629,8 @@ public sealed class SettlementService : ISettlementService
             throw new BusinessException("服務生／經理、幕後與公司比例合計必須為 100%。", "SETTLEMENT_POOL_PERCENTAGE_INVALID");
         if (request.TimeRoundMinutes != 30)
             throw new BusinessException("目前工時計薪規則固定為半小時切點。", "SETTLEMENT_TIME_RULE_INVALID");
+        if (request.MoneyRoundUnit != 1)
+            throw new BusinessException("薪資金額最小支付單位固定為 1 Gil。", "SETTLEMENT_MONEY_RULE_INVALID");
     }
 
     private sealed record CalculationResult(SettlementRunRow Run, IReadOnlyList<SettlementResultLineRow> Results,
