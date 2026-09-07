@@ -19,6 +19,7 @@ public sealed class SettlementSourceData
 
 public interface ISettlementRepository
 {
+    Task<bool> StaffMembersExistAsync(IReadOnlyList<string> staffIds, CancellationToken cancellationToken);
     Task<IReadOnlyList<SettlementRuleRow>> GetRulesAsync(string? dayType, CancellationToken cancellationToken);
     Task<SettlementRuleRow?> GetEffectiveRuleAsync(string dayType, DateOnly businessDate, CancellationToken cancellationToken);
     Task InsertRuleAsync(SettlementRuleRow rule, string actorId, DateTime now, CancellationToken cancellationToken);
