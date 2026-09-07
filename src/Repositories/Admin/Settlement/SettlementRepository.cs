@@ -10,6 +10,16 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
 {
     public SettlementRepository(AppDbContext dbContext) : base(dbContext) { }
 
+    public async Task<bool> StaffMembersExistAsync(IReadOnlyList<string> staffIds, CancellationToken cancellationToken)
+    {
+        if (staffIds.Count == 0) return true;
+        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        var count = await connection.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM `STAFF_MEMBERS` WHERE `ID` IN @StaffIds;",
+            new { StaffIds = staffIds }, cancellationToken: cancellationToken));
+        return count == staffIds.Count;
+    }
+
     public Task<IReadOnlyList<SettlementRuleRow>> GetRulesAsync(string? dayType, CancellationToken cancellationToken)
         => QueryAsync<SettlementRuleRow>("""
             SELECT `ID` AS Id, `DAY_TYPE` AS DayType, `EFFECTIVE_FROM` AS EffectiveFrom,

@@ -33,7 +33,7 @@ public sealed class ReservationRepository : DapperRepositoryBase, IReservationRe
             LEFT JOIN `STAFF_MEMBERS` M ON M.`ID` = B.`STAFF_ID`
             WHERE B.`BLOCK_STATUS` IN ('active', 'completed')
               AND B.`ENDS_AT` > @From AND B.`STARTS_AT` < @To
-            ORDER BY `STAFF_ID`, `STARTS_AT`;
+            ORDER BY `StaffId`, `StartsAt`;
             """;
         return await QueryAsync<StaffReservationRow>(sql, new { From = from, To = to }, cancellationToken);
     }
