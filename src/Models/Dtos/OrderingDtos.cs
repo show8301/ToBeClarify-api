@@ -173,7 +173,10 @@ public sealed record OrderDto(
     IReadOnlyList<OrderTipDto> Tips,
     IReadOnlyList<OrderAddonDto> Addons,
     IReadOnlyList<OrderStatusHistoryDto> History,
-    IReadOnlyList<OrderRoomBookingDto> RoomBookings);
+    IReadOnlyList<OrderRoomBookingDto> RoomBookings)
+{
+    public System.Text.Json.JsonElement? MenuSnapshot { get; init; }
+}
 
 public sealed record AdminOrderSessionDto(
     OrderSessionDto Session,
@@ -289,6 +292,8 @@ public sealed class TipOrderLineRequest
 
 public sealed class SubmitOrderRequest
 {
+    [StringLength(40)]
+    public string? QuoteToken { get; init; }
     public IReadOnlyList<MealOrderLineRequest> Meals { get; init; } = [];
     public IReadOnlyList<NominationOrderLineRequest> Nominations { get; init; } = [];
     public IReadOnlyList<RoomOrderLineRequest> Rooms { get; init; } = [];

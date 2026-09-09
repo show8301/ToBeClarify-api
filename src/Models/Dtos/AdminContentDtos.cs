@@ -458,10 +458,14 @@ public sealed record AdminPricingRuleDto(
     string Description,
     string? PriceText,
     int SortOrder,
-    bool IsEnabled);
+    bool IsEnabled)
+{
+    public PricingPolicy Policy { get; init; } = new();
+}
 
 public sealed class SavePricingRuleRequest
 {
+    public PricingPolicy? Policy { get; init; }
     [Required, StringLength(80, MinimumLength = 1)]
     public string Title { get; init; } = string.Empty;
 
@@ -495,7 +499,10 @@ public sealed record AdminMenuItemDto(
     string? ImageUrl,
     JsonElement? Tags,
     int SortOrder,
-    bool IsAvailable);
+    bool IsAvailable)
+{
+    public ProductPolicy Policy { get; init; } = new();
+}
 
 public sealed class SaveMenuCategoryRequest
 {
@@ -513,6 +520,7 @@ public sealed class SaveMenuCategoryRequest
 
 public sealed class SaveMenuItemRequest
 {
+    public ProductPolicy? Policy { get; init; }
     [Required, StringLength(40)]
     public string CategoryId { get; init; } = string.Empty;
 
@@ -556,10 +564,14 @@ public sealed record AdminMenuSetDto(
     string? ImageUrl,
     int SortOrder,
     bool IsAvailable,
-    IReadOnlyList<AdminMenuSetItemDto> Items);
+    IReadOnlyList<AdminMenuSetItemDto> Items)
+{
+    public ProductPolicy Policy { get; init; } = new();
+}
 
 public sealed class SaveMenuSetRequest
 {
+    public ProductPolicy? Policy { get; init; }
     [Required, StringLength(100, MinimumLength = 1)]
     public string SetName { get; init; } = string.Empty;
 
@@ -603,7 +615,11 @@ public sealed class SaveMenuSetItemRequest
 public sealed record AdminMenuDto(
     IReadOnlyList<AdminPricingRuleDto> PricingRules,
     IReadOnlyList<AdminMenuCategoryDto> Categories,
-    IReadOnlyList<AdminMenuSetDto> Sets);
+    IReadOnlyList<AdminMenuSetDto> Sets)
+{
+    public string Revision { get; init; } = "";
+    public int ContractVersion { get; init; } = 2;
+}
 
 public sealed record AdminMediaUploadDto(
     string Id,

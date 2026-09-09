@@ -1,3 +1,4 @@
+using ToBeClarify.Api.Services.Menu;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -33,7 +34,7 @@ internal static class ClientContentMappings
     }
 
     internal static PricingRuleDto MapPricingRule(PricingRuleRow row)
-        => new(row.Id, row.Title, row.Description, row.PriceText);
+        => new(row.Id, row.Title, row.Description, row.PriceText) { Policy = MenuPolicies.Read<PricingPolicy>(row.PolicyJson) };
 
     internal static StaffListItemDto MapStaffListItem(StaffRow row, IEnumerable<StaffServiceRow> services, MediaUrlService mediaUrls)
     {
@@ -64,10 +65,10 @@ internal static class ClientContentMappings
 
     internal static MenuItemDto MapMenuItem(MenuItemRow row, MediaUrlService mediaUrls)
         => new(row.Id, row.CategoryId, row.ItemName, row.ItemDescription, row.Price,
-            mediaUrls.BuildUrl(row.MediaId, "card"), ParseJson(row.Tags));
+            mediaUrls.BuildUrl(row.MediaId, "card"), ParseJson(row.Tags)) { Policy = MenuPolicies.Read<ProductPolicy>(row.PolicyJson) };
 
     internal static MenuSetItemDto MapMenuSetItem(MenuSetItemRow row)
-        => new(row.Id, row.MenuItemId, row.ItemName, row.ItemRole, row.Quantity);
+        => new(row.Id, row.MenuItemId, row.ItemName, row.ItemRole, row.Quantity) { IsAvailable = row.IsAvailable, EventCategories = MenuPolicies.Read<ProductPolicy>(row.PolicyJson).EventCategories };
 
     internal static IReadOnlyList<GuestbookCommentDto> MapGuestbookComments(
         IReadOnlyList<GuestbookCommentRow> comments,

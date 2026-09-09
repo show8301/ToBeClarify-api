@@ -14,7 +14,7 @@ public sealed class MenuRepository : DapperRepositoryBase, IMenuRepository
     public async Task<IReadOnlyList<PricingRuleRow>> GetPricingRulesAsync(CancellationToken cancellationToken)
     {
         const string sql = """
-            SELECT `ID` AS Id, `TITLE` AS Title, `DESCRIPTION` AS Description, `PRICE_TEXT` AS PriceText
+            SELECT `ID` AS Id, `TITLE` AS Title, `DESCRIPTION` AS Description, `PRICE_TEXT` AS PriceText, `POLICY_JSON` AS PolicyJson
             FROM `PRICING_RULES` WHERE `IS_ENABLED` = TRUE ORDER BY `SORT_ORDER`, `CREATED_AT`;
             """;
         return await QueryAsync<PricingRuleRow>(sql, null, cancellationToken);
@@ -28,20 +28,20 @@ public sealed class MenuRepository : DapperRepositoryBase, IMenuRepository
 
             SELECT I.`ID` AS Id, I.`CATEGORY_ID` AS CategoryId, I.`ITEM_NAME` AS ItemName,
                    I.`ITEM_DESCRIPTION` AS ItemDescription, I.`PRICE` AS Price,
-                   I.`MEDIA_ID` AS MediaId, I.`TAGS` AS Tags
+                   I.`MEDIA_ID` AS MediaId, I.`TAGS` AS Tags, I.`POLICY_JSON` AS PolicyJson
             FROM `MENU_ITEMS` I
             INNER JOIN `MENU_CATEGORIES` C ON C.`ID` = I.`CATEGORY_ID` AND C.`IS_ENABLED` = TRUE
             WHERE I.`IS_AVAILABLE` = TRUE ORDER BY C.`SORT_ORDER`, I.`SORT_ORDER`, I.`ITEM_NAME`;
 
             SELECT `ID` AS Id, `SET_NAME` AS SetName, `SET_DESCRIPTION` AS SetDescription,
-                   `SET_PRICE` AS SetPrice, `MEDIA_ID` AS MediaId
+                   `SET_PRICE` AS SetPrice, `POLICY_JSON` AS PolicyJson, `MEDIA_ID` AS MediaId
             FROM `MENU_SETS` WHERE `IS_AVAILABLE` = TRUE ORDER BY `SORT_ORDER`, `SET_NAME`;
 
             SELECT SI.`ID` AS Id, SI.`SET_ID` AS SetId, SI.`MENU_ITEM_ID` AS MenuItemId,
-                   I.`ITEM_NAME` AS ItemName, SI.`ITEM_ROLE` AS ItemRole, SI.`QUANTITY` AS Quantity
+                   COALESCE(I.`ITEM_NAME`, '已移除品項') AS ItemName, SI.`ITEM_ROLE` AS ItemRole, SI.`QUANTITY` AS Quantity, COALESCE(I.`IS_AVAILABLE`, FALSE) AS IsAvailable, I.`POLICY_JSON` AS PolicyJson
             FROM `MENU_SET_ITEMS` SI
             INNER JOIN `MENU_SETS` S ON S.`ID` = SI.`SET_ID` AND S.`IS_AVAILABLE` = TRUE
-            INNER JOIN `MENU_ITEMS` I ON I.`ID` = SI.`MENU_ITEM_ID` AND I.`IS_AVAILABLE` = TRUE
+            LEFT JOIN `MENU_ITEMS` I ON I.`ID` = SI.`MENU_ITEM_ID`
             ORDER BY S.`SORT_ORDER`, SI.`SORT_ORDER`, I.`ITEM_NAME`;
             """;
 

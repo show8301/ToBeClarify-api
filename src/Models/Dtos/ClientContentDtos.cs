@@ -41,7 +41,10 @@ public sealed record HomePageVisibilityDto(
 
 public sealed record ShopRuleDto(string Id, string RuleText, string? RuleNote);
 
-public sealed record PricingRuleDto(string Id, string Title, string Description, string? PriceText);
+public sealed record PricingRuleDto(string Id, string Title, string Description, string? PriceText)
+{
+    public PricingPolicy Policy { get; init; } = new();
+}
 
 public sealed record StaffListItemDto(
     string Id,
@@ -167,7 +170,10 @@ public sealed record MenuItemDto(
     string? ItemDescription,
     int Price,
     string? ImageUrl,
-    JsonElement? Tags);
+    JsonElement? Tags)
+{
+    public ProductPolicy Policy { get; init; } = new();
+}
 
 public sealed record MenuCategoryDto(
     string Id,
@@ -180,7 +186,11 @@ public sealed record MenuSetItemDto(
     string MenuItemId,
     string ItemName,
     string ItemRole,
-    int Quantity);
+    int Quantity)
+{
+    public bool IsAvailable { get; init; } = true;
+    public string[] EventCategories { get; init; } = [];
+}
 
 public sealed record MenuSetDto(
     string Id,
@@ -188,13 +198,23 @@ public sealed record MenuSetDto(
     string? SetDescription,
     int SetPrice,
     string? ImageUrl,
-    IReadOnlyList<MenuSetItemDto> Items);
+    IReadOnlyList<MenuSetItemDto> Items)
+{
+    public ProductPolicy Policy { get; init; } = new();
+    public bool IsOrderable { get; init; } = true;
+    public string? UnavailableReason { get; init; }
+    public string[] EffectiveEventCategories { get; init; } = [];
+}
 
 public sealed record MenuDto(
     IReadOnlyList<PricingRuleDto> PricingRules,
     IReadOnlyList<MenuCategoryDto> Categories,
     IReadOnlyList<MenuSetDto> Sets,
-    bool ShowSets);
+    bool ShowSets)
+{
+    public int ContractVersion { get; init; } = 2;
+    public DateTimeOffset UpdatedAt { get; init; } = DateTimeOffset.UtcNow;
+}
 
 public sealed record StaffReservationDto(
     string Id,

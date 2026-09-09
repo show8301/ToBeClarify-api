@@ -161,6 +161,7 @@ public sealed class AdminStaffGalleryItemRow
 
 public sealed class AdminPricingRuleRow
 {
+    public string? PolicyJson { get; set; }
     public string Id { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
@@ -180,6 +181,7 @@ public sealed class AdminMenuCategoryRow
 
 public sealed class AdminMenuItemRow
 {
+    public string? PolicyJson { get; set; }
     public string Id { get; set; } = string.Empty;
     public string CategoryId { get; set; } = string.Empty;
     public string ItemName { get; set; } = string.Empty;
@@ -193,6 +195,7 @@ public sealed class AdminMenuItemRow
 
 public sealed class AdminMenuSetRow
 {
+    public string? PolicyJson { get; set; }
     public string Id { get; set; } = string.Empty;
     public string SetName { get; set; } = string.Empty;
     public string? SetDescription { get; set; }

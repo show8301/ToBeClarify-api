@@ -106,6 +106,7 @@ public sealed class StaffNominationRow
 
 public sealed class OrderRow
 {
+    public string? MenuSnapshotJson { get; set; }
     public string Id { get; set; } = string.Empty;
     public string SessionId { get; set; } = string.Empty;
     public string OrderNumber { get; set; } = string.Empty;
@@ -259,7 +260,12 @@ public sealed record NewOrderAggregate(
     DateTime SubmittedAt, int Subtotal, int MealCreditApplied, int TotalAmount,
     string? CustomerNote, IReadOnlyList<NewOrderItem> Items,
     IReadOnlyList<NewOrderNominee> Nominees, IReadOnlyList<NewOrderRoom> Rooms,
-    IReadOnlyList<NewOrderTip> Tips);
+    IReadOnlyList<NewOrderTip> Tips)
+{
+    public string? MenuSnapshotJson { get; init; }
+    public string? QuoteId { get; init; }
+    public string? QuoteFingerprint { get; init; }
+}
 
 public sealed record OrderBundle(
     IReadOnlyList<OrderRow> Orders,

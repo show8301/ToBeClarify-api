@@ -39,6 +39,11 @@ public sealed class OrderingController : ControllerBase
     public async Task<ActionResult<ApiResponse<IReadOnlyList<OrderDto>>>> Orders(CancellationToken cancellationToken)
         => Ok(ApiResponse<IReadOnlyList<OrderDto>>.Ok(await _service.GetMyOrdersAsync(Token(), cancellationToken)));
 
+    [HttpPost("quote")]
+    [EnableRateLimiting("ordering-write")]
+    public async Task<ActionResult<ApiResponse<MenuQuoteDto>>> Quote(SubmitOrderRequest request, CancellationToken cancellationToken)
+        => Ok(ApiResponse<MenuQuoteDto>.Ok(await _service.QuoteOrderAsync(Token(), request, cancellationToken)));
+
     [HttpPost("orders")]
     [EnableRateLimiting("ordering-write")]
     public async Task<ActionResult<ApiResponse<OrderDto>>> Submit(

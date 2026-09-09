@@ -36,7 +36,7 @@ public interface IOrderingRepository
     Task<RoomRow?> GetActiveRoomAsync(string roomId, CancellationToken cancellationToken);
     Task<string?> GetStaffNameAsync(string staffId, CancellationToken cancellationToken);
     Task<bool> IsStaffBusyAsync(string staffId, DateTime startsAt, DateTime endsAt, CancellationToken cancellationToken);
-    Task CreateOrderAsync(NewOrderAggregate order, CancellationToken cancellationToken);
+    Task<string> CreateOrderAsync(NewOrderAggregate order, CancellationToken cancellationToken);
     Task<AddonParentRow?> GetAddonParentAsync(string nomineeId, CancellationToken cancellationToken);
     Task CreateAddonOrderAsync(NewAddonAggregate addon, CancellationToken cancellationToken);
     Task ConfirmAddonAsync(string orderId, string staffId, string actorId, DateTime now,

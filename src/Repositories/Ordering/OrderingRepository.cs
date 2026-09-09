@@ -1,3 +1,4 @@
+using ToBeClarify.Api.Services.Menu;
 using System.Text.Json;
 using Dapper;
 using MySqlConnector;
@@ -473,12 +474,15 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             new { StaffId = staffId, StartsAt = startsAt, EndsAt = endsAt }, cancellationToken: cancellationToken));
     }
 
-    public async Task CreateOrderAsync(NewOrderAggregate order, CancellationToken cancellationToken)
+    public async Task<string> CreateOrderAsync(NewOrderAggregate order, CancellationToken cancellationToken)
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
+            var existing = await MenuQuoteService.ConsumeAsync(connection, transaction, order, cancellationToken);
+            if (existing is not null) { await transaction.CommitAsync(cancellationToken); return existing; }
+            await MenuQuoteService.ValidateInventoryAsync(connection, transaction, order, cancellationToken);
             var remaining = await connection.ExecuteScalarAsync<int?>(new CommandDefinition(
                 "SELECT `REMAINING_MEAL_CREDIT` FROM `CUSTOMER_ORDER_SESSIONS` WHERE `ID` = @SessionId AND `SESSION_STATUS` = 'active' FOR UPDATE;",
                 new { order.SessionId }, transaction, cancellationToken: cancellationToken));
@@ -491,11 +495,11 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
                     (`ID`, `SESSION_ID`, `ORDER_NUMBER`, `ORDER_KIND`, `PARENT_NOMINEE_ID`,
                      `ORDER_STATUS`, `INTAKE_MODE_SNAPSHOT`, `STORE_CONFIRMATION_STATUS`,
                      `QUEUE_ENTERED_AT`, `SUBMITTED_AT`,
-                     `CONFIRMED_AT`, `SUBTOTAL`, `MEAL_CREDIT_APPLIED`, `TOTAL_AMOUNT`, `CUSTOMER_NOTE`, `CREATED_AT`, `UPDATED_AT`)
+                     `CONFIRMED_AT`, `SUBTOTAL`, `MEAL_CREDIT_APPLIED`, `TOTAL_AMOUNT`, `CUSTOMER_NOTE`, `CREATED_AT`, `UPDATED_AT`, `MENU_SNAPSHOT_JSON`)
                 VALUES (@Id, @SessionId, @OrderNumber, @OrderKind, @ParentNomineeId, @Status,
                         @IntakeModeSnapshot, @StoreConfirmationStatus, @QueueEnteredAt, @SubmittedAt,
                         CASE WHEN @Status = 'confirmed' THEN @SubmittedAt ELSE NULL END,
-                        @Subtotal, @MealCreditApplied, @TotalAmount, @CustomerNote, @SubmittedAt, @SubmittedAt);
+                        @Subtotal, @MealCreditApplied, @TotalAmount, @CustomerNote, @SubmittedAt, @SubmittedAt, @MenuSnapshotJson);
                 UPDATE `CUSTOMER_ORDER_SESSIONS`
                 SET `REMAINING_MEAL_CREDIT` = `REMAINING_MEAL_CREDIT` - @MealCreditApplied,
                     `UPDATED_AT` = @SubmittedAt
@@ -613,7 +617,9 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
 
             await InsertHistoryAsync(connection, transaction, order.Id, null, order.Status,
                 "顧客送出訂單", "customer", null, order.SubmittedAt, cancellationToken);
+            await MenuNotifications.EnqueueAsync(connection, transaction, order, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
+            return order.Id;
         }
         catch
         {
@@ -633,7 +639,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
         var sql = $"""
             SELECT O.`ID` AS Id, O.`SESSION_ID` AS SessionId, O.`ORDER_NUMBER` AS OrderNumber,
                    O.`ORDER_KIND` AS OrderKind, O.`PARENT_NOMINEE_ID` AS ParentNomineeId,
-                   O.`ORDER_STATUS` AS OrderStatus, O.`INTAKE_MODE_SNAPSHOT` AS IntakeModeSnapshot,
+                   O.`MENU_SNAPSHOT_JSON` AS MenuSnapshotJson, O.`ORDER_STATUS` AS OrderStatus, O.`INTAKE_MODE_SNAPSHOT` AS IntakeModeSnapshot,
                    O.`STORE_CONFIRMATION_STATUS` AS StoreConfirmationStatus,
                    O.`STORE_CONFIRMED_AT` AS StoreConfirmedAt, O.`STORE_CONFIRMED_BY` AS StoreConfirmedBy,
                    O.`QUEUE_ENTERED_AT` AS QueueEnteredAt,

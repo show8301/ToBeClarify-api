@@ -1,3 +1,4 @@
+using ToBeClarify.Api.Services.Menu;
 using System.Security.Claims;
 using System.Globalization;
 using System.Text.Json;
@@ -328,6 +329,7 @@ public sealed class AdminContentService : IAdminContentService
     public async Task<AdminPricingRuleDto> SavePricingRuleAsync(string? id, SavePricingRuleRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
         EnsureManager(actor);
+        MenuPolicies.Validate(request.Policy);
         var entityId = string.IsNullOrWhiteSpace(id) ? NewId() : Required(id, "PRICING_RULE_ID_REQUIRED");
         await _repository.UpsertPricingRuleAsync(entityId, request, ActorId(actor), _clock.LocalDateTime, cancellationToken);
         return Map((await _repository.GetPricingRulesAsync(cancellationToken)).Single(x => x.Id == entityId));
@@ -348,11 +350,12 @@ public sealed class AdminContentService : IAdminContentService
         var items = menu.Items.Select(Map).ToArray();
         var sets = menu.Sets.Select(set => new AdminMenuSetDto(set.Id, set.SetName, set.SetDescription, set.SetPrice,
             set.MediaId, _mediaUrls.BuildUrl(set.MediaId, "card"), set.SortOrder, set.IsAvailable,
-            menu.SetItems.Where(item => item.SetId == set.Id).Select(Map).ToArray())).ToArray();
-        return new AdminMenuDto((await pricingTask).Select(Map).ToArray(),
+            menu.SetItems.Where(item => item.SetId == set.Id).Select(Map).ToArray()) { Policy = MenuPolicies.Read<ProductPolicy>(set.PolicyJson) }).ToArray();
+        var result = new AdminMenuDto((await pricingTask).Select(Map).ToArray(),
             menu.Categories.Select(category => new AdminMenuCategoryDto(category.Id, category.CategoryName,
                 category.CategoryDescription, category.SortOrder, category.IsEnabled,
                 items.Where(item => item.CategoryId == category.Id).ToArray())).ToArray(), sets);
+        return result with { Revision = MenuPolicies.SortRevision(result) };
     }
 
     public async Task<AdminMenuCategoryDto> SaveMenuCategoryAsync(string? id, SaveMenuCategoryRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken)
@@ -379,6 +382,10 @@ public sealed class AdminContentService : IAdminContentService
     public async Task<AdminMenuItemDto> SaveMenuItemAsync(string? id, SaveMenuItemRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
         EnsureManager(actor);
+        MenuPolicies.Validate(request.Policy);
+        var catalog = await GetMenuAsync(cancellationToken);
+        if (!catalog.Categories.Any(x => x.Id == request.CategoryId)) throw new BusinessException("請選擇有效分類。", "MENU_CATEGORY_INVALID");
+        MenuPolicies.ValidateTags(request.Tags);
         var entityId = string.IsNullOrWhiteSpace(id) ? NewId() : Required(id, "MENU_ITEM_ID_REQUIRED");
         await _repository.UpsertMenuItemAsync(entityId, request, ActorId(actor), _clock.LocalDateTime, cancellationToken);
         return (await GetMenuAsync(cancellationToken)).Categories.SelectMany(x => x.Items).Single(x => x.Id == entityId);
@@ -400,6 +407,9 @@ public sealed class AdminContentService : IAdminContentService
     public async Task<AdminMenuSetDto> SaveMenuSetAsync(string? id, SaveMenuSetRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
         EnsureManager(actor);
+        MenuPolicies.Validate(request.Policy);
+        var catalog = await GetMenuAsync(cancellationToken);
+        MenuPolicies.ValidateSet(request, catalog);
         var entityId = string.IsNullOrWhiteSpace(id) ? NewId() : Required(id, "MENU_SET_ID_REQUIRED");
         await _repository.SaveMenuSetAsync(entityId, request, ActorId(actor), _clock.LocalDateTime, cancellationToken);
         return (await GetMenuAsync(cancellationToken)).Sets.Single(x => x.Id == entityId);
@@ -634,11 +644,11 @@ public sealed class AdminContentService : IAdminContentService
     }
 
     private static AdminPricingRuleDto Map(AdminPricingRuleRow row)
-        => new(row.Id, row.Title, row.Description, row.PriceText, row.SortOrder, row.IsEnabled);
+        => new(row.Id, row.Title, row.Description, row.PriceText, row.SortOrder, row.IsEnabled) { Policy = MenuPolicies.Read<PricingPolicy>(row.PolicyJson) };
 
     private AdminMenuItemDto Map(AdminMenuItemRow row)
         => new(row.Id, row.CategoryId, row.ItemName, row.ItemDescription, row.Price, row.MediaId,
-            _mediaUrls.BuildUrl(row.MediaId, "card"), ParseNullableJson(row.Tags), row.SortOrder, row.IsAvailable);
+            _mediaUrls.BuildUrl(row.MediaId, "card"), ParseNullableJson(row.Tags), row.SortOrder, row.IsAvailable) { Policy = MenuPolicies.Read<ProductPolicy>(row.PolicyJson) };
 
     private static AdminMenuSetItemDto Map(AdminMenuSetItemRow row)
         => new(row.Id, row.MenuItemId, row.ItemName, row.ItemRole, row.Quantity, row.SortOrder);

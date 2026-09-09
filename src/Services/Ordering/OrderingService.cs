@@ -1,3 +1,5 @@
+using ToBeClarify.Api.Services.Menu;
+using System.Text.Json;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using ToBeClarify.Api.Auth;
@@ -23,9 +25,10 @@ public sealed class OrderingService : IOrderingService
     private readonly IRoomService _roomService;
     private readonly IStaffService _staffService;
     private readonly IAppClock _clock;
+    private readonly MenuQuoteService _quotes;
 
     public OrderingService(IOrderingRepository repository, IOrderingTokenService tokens,
-        IMenuService menuService, IRoomService roomService, IStaffService staffService, IAppClock clock)
+        IMenuService menuService, IRoomService roomService, IStaffService staffService, IAppClock clock, MenuQuoteService quotes)
     {
         _repository = repository;
         _tokens = tokens;
@@ -33,6 +36,7 @@ public sealed class OrderingService : IOrderingService
         _roomService = roomService;
         _staffService = staffService;
         _clock = clock;
+        _quotes = quotes;
     }
 
     public async Task<OrderSessionIssuedDto> CreateSessionAsync(CreateOrderSessionRequest request,
@@ -128,7 +132,7 @@ public sealed class OrderingService : IOrderingService
     {
         _ = await ValidateTokenAsync(token, cancellationToken);
         var settingsTask = _repository.GetSettingsAsync(cancellationToken);
-        var menuTask = _menuService.GetMenuAsync(cancellationToken);
+        var menuTask = _menuService.GetMenuAsync(cancellationToken, true);
         var staffTask = _staffService.GetStaffAsync(null, cancellationToken);
         var roomsTask = _roomService.GetRoomsAsync(cancellationToken);
         await Task.WhenAll(settingsTask, menuTask, staffTask, roomsTask);
@@ -136,10 +140,29 @@ public sealed class OrderingService : IOrderingService
             (await roomsTask).Rooms);
     }
 
-    public async Task<OrderDto> SubmitOrderAsync(string token, SubmitOrderRequest request,
-        CancellationToken cancellationToken)
+    public async Task<MenuQuoteDto> QuoteOrderAsync(string token, SubmitOrderRequest request, CancellationToken cancellationToken)
     {
         var session = await ValidateTokenAsync(token, cancellationToken);
+        var order = await BuildOrderAsync(session, request, cancellationToken);
+        return await _quotes.CreateAsync(session, request, order, cancellationToken);
+    }
+
+    public async Task<OrderDto> SubmitOrderAsync(string token, SubmitOrderRequest request, CancellationToken cancellationToken)
+    {
+        var session = await ValidateTokenAsync(token, cancellationToken);
+        var existing = await _quotes.ExistingOrderAsync(session.Id, request.QuoteToken, cancellationToken);
+        if (existing is not null)
+            return (await MapOrdersAsync(await _repository.GetOrderAsync(existing, cancellationToken), cancellationToken)).Single();
+        if (request.Meals.Count > 0 && string.IsNullOrWhiteSpace(request.QuoteToken))
+            throw new ConflictException("請先取得最新報價並確認訂單。", "MENU_QUOTE_REQUIRED");
+        var order = await BuildOrderAsync(session, request, cancellationToken);
+        await _quotes.ValidateAsync(session.Id, request, order, cancellationToken);
+        var id = await _repository.CreateOrderAsync(order with { QuoteId = request.QuoteToken, QuoteFingerprint = MenuQuoteService.Fingerprint(order) }, cancellationToken);
+        return (await MapOrdersAsync(await _repository.GetOrderAsync(id, cancellationToken), cancellationToken)).Single();
+    }
+
+    private async Task<NewOrderAggregate> BuildOrderAsync(OrderSessionRow session, SubmitOrderRequest request, CancellationToken cancellationToken)
+    {
         if (request.Meals.Count + request.Nominations.Count + request.Rooms.Count + request.Tips.Count == 0)
             throw new BusinessException("本次點餐尚未加入任何項目。", "ORDER_EMPTY");
         if (request.Nominations.Select(item => item.StaffId).Distinct(StringComparer.Ordinal).Count() > session.MaxNominatedStaff)
@@ -165,16 +188,16 @@ public sealed class OrderingService : IOrderingService
         var sort = 0;
         var mealSubtotal = 0;
 
+        var menu = await _menuService.GetMenuAsync(cancellationToken, true);
+        var menuLines = new List<MenuLineSnapshot>();
         foreach (var line in request.Meals)
         {
-            var product = await _repository.GetMenuProductAsync(Required(line.ReferenceId, "MENU_REFERENCE_REQUIRED"),
-                line.Kind, cancellationToken);
-            if (product is null || !product.IsAvailable)
-                throw new BusinessException("餐點已停售或不存在，請重新選擇。", "MENU_PRODUCT_UNAVAILABLE");
-            var total = checked(product.Price * line.Quantity);
+            var snapshot = MenuQuoteService.ResolveLine(menu, line);
+            menuLines.Add(snapshot);
+            var total = checked(snapshot.UnitPrice * line.Quantity);
             mealSubtotal = checked(mealSubtotal + total);
-            items.Add(new NewOrderItem(NewId(), line.Kind == "set" ? "menu_set" : "menu_item", product.Id,
-                null, product.Name, product.Price, line.Quantity, null, null, total, "fixed", sort++));
+            items.Add(new NewOrderItem(NewId(), line.Kind == "set" ? "menu_set" : "menu_item", snapshot.ReferenceId,
+                null, snapshot.Name, snapshot.UnitPrice, line.Quantity, null, null, total, "fixed", sort++));
         }
 
         foreach (var line in request.Nominations)
@@ -287,8 +310,9 @@ public sealed class OrderingService : IOrderingService
             initialStatus == "submitted" ? now : null, now,
             subtotal, creditApplied, subtotal - creditApplied,
             string.IsNullOrWhiteSpace(request.CustomerNote) ? null : request.CustomerNote.Trim(), items, nominees, rooms, tips);
-        await _repository.CreateOrderAsync(aggregate, cancellationToken);
-        return (await MapOrdersAsync(await _repository.GetOrderAsync(orderId, cancellationToken), cancellationToken)).Single();
+        return aggregate with { MenuSnapshotJson = JsonSerializer.Serialize(new MenuOrderSnapshot(menuLines,
+            menu.PricingRules.Where(x => x.Policy.ShowOnOrder).Select(x => new MenuRuleSnapshot(x.Id, x.Title, x.Description, x.PriceText, x.Policy)).ToArray(),
+            session.PrepaidMealCredit, settings.BaseNominationFee, settings.SegmentMinutes), MenuPolicies.Json) };
     }
 
     public async Task<OrderDto> SubmitAddonAsync(string token, SubmitAddonRequest request,
@@ -729,7 +753,9 @@ public sealed class OrderingService : IOrderingService
                 bundle.RoomBookings.Where(item => item.OrderId == order.Id).Select(item =>
                     new OrderRoomBookingDto(item.Id, item.RoomId, item.RoomNameSnapshot,
                         item.SegmentCount, item.SegmentMinutesSnapshot, item.UnitPrice, item.TotalAmount,
-                        ToOffset(item.StartsAt)!.Value, ToOffset(item.EndsAt)!.Value, item.OrderStatus)).ToArray());
+                        ToOffset(item.StartsAt)!.Value, ToOffset(item.EndsAt)!.Value, item.OrderStatus)).ToArray()) {
+                            MenuSnapshot = order.MenuSnapshotJson is null ? null : JsonSerializer.Deserialize<JsonElement>(order.MenuSnapshotJson)
+                        };
         }).ToArray();
     }
 

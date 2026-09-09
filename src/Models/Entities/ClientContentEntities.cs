@@ -46,6 +46,7 @@ public sealed class ShopRuleRow
 
 public sealed class PricingRuleRow
 {
+    public string? PolicyJson { get; set; }
     public string Id { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
@@ -140,6 +141,7 @@ public sealed class MenuCategoryRow
 
 public sealed class MenuItemRow
 {
+    public string? PolicyJson { get; set; }
     public string Id { get; set; } = string.Empty;
     public string CategoryId { get; set; } = string.Empty;
     public string ItemName { get; set; } = string.Empty;
@@ -151,6 +153,7 @@ public sealed class MenuItemRow
 
 public sealed class MenuSetRow
 {
+    public string? PolicyJson { get; set; }
     public string Id { get; set; } = string.Empty;
     public string SetName { get; set; } = string.Empty;
     public string? SetDescription { get; set; }
@@ -160,6 +163,8 @@ public sealed class MenuSetRow
 
 public sealed class MenuSetItemRow
 {
+    public bool IsAvailable { get; set; }
+    public string? PolicyJson { get; set; }
     public string Id { get; set; } = string.Empty;
     public string SetId { get; set; } = string.Empty;
     public string MenuItemId { get; set; } = string.Empty;

@@ -583,7 +583,7 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
 
     public Task<IReadOnlyList<AdminPricingRuleRow>> GetPricingRulesAsync(CancellationToken cancellationToken)
         => QueryAsync<AdminPricingRuleRow>("""
-            SELECT `ID` AS Id, `TITLE` AS Title, `DESCRIPTION` AS Description, `PRICE_TEXT` AS PriceText,
+            SELECT `ID` AS Id, `TITLE` AS Title, `DESCRIPTION` AS Description, `PRICE_TEXT` AS PriceText, `POLICY_JSON` AS PolicyJson,
                    `SORT_ORDER` AS SortOrder, `IS_ENABLED` AS IsEnabled
             FROM `PRICING_RULES` ORDER BY `SORT_ORDER`, `CREATED_AT`;
             """, null, cancellationToken);
@@ -591,11 +591,11 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
     public Task UpsertPricingRuleAsync(string id, SavePricingRuleRequest request, string actorId, DateTime now, CancellationToken cancellationToken)
         => ExecuteAsync("""
             INSERT INTO `PRICING_RULES`
-                (`ID`, `TITLE`, `DESCRIPTION`, `PRICE_TEXT`, `SORT_ORDER`, `IS_ENABLED`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
-            VALUES (@Id, @Title, @Description, @PriceText, @SortOrder, @IsEnabled, @Now, @ActorId, @Now, @ActorId)
+                (`ID`, `TITLE`, `DESCRIPTION`, `PRICE_TEXT`, `SORT_ORDER`, `IS_ENABLED`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`, `POLICY_JSON`)
+            VALUES (@Id, @Title, @Description, @PriceText, @SortOrder, @IsEnabled, @Now, @ActorId, @Now, @ActorId, @PolicyJson)
             ON DUPLICATE KEY UPDATE `TITLE` = VALUES(`TITLE`), `DESCRIPTION` = VALUES(`DESCRIPTION`), `PRICE_TEXT` = VALUES(`PRICE_TEXT`),
-                `SORT_ORDER` = VALUES(`SORT_ORDER`), `IS_ENABLED` = VALUES(`IS_ENABLED`), `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId;
-            """, new { Id = id, request.Title, request.Description, request.PriceText, request.SortOrder, request.IsEnabled, Now = now, ActorId = actorId }, cancellationToken);
+                `SORT_ORDER` = VALUES(`SORT_ORDER`), `IS_ENABLED` = VALUES(`IS_ENABLED`), `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId, `POLICY_JSON` = COALESCE(@PolicyJson, `POLICY_JSON`);
+            """, new { Id = id, PolicyJson = request.Policy is null ? null : JsonSerializer.Serialize(request.Policy), request.Title, request.Description, request.PriceText, request.SortOrder, request.IsEnabled, Now = now, ActorId = actorId }, cancellationToken);
 
     public Task DeletePricingRuleAsync(string id, string actorId, DateTime now, CancellationToken cancellationToken)
         => ExecuteAsync("DELETE FROM `PRICING_RULES` WHERE `ID` = @Id;", new { Id = id, ActorId = actorId, Now = now }, cancellationToken);
@@ -607,10 +607,10 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
                    `SORT_ORDER` AS SortOrder, `IS_ENABLED` AS IsEnabled
             FROM `MENU_CATEGORIES` ORDER BY `SORT_ORDER`, `CATEGORY_NAME`;
             SELECT `ID` AS Id, `CATEGORY_ID` AS CategoryId, `ITEM_NAME` AS ItemName, `ITEM_DESCRIPTION` AS ItemDescription,
-                   `PRICE` AS Price, `MEDIA_ID` AS MediaId, `TAGS` AS Tags,
+                   `PRICE` AS Price, `MEDIA_ID` AS MediaId, `TAGS` AS Tags, `POLICY_JSON` AS PolicyJson,
                    `SORT_ORDER` AS SortOrder, `IS_AVAILABLE` AS IsAvailable
             FROM `MENU_ITEMS` ORDER BY `CATEGORY_ID`, `SORT_ORDER`, `ITEM_NAME`;
-            SELECT `ID` AS Id, `SET_NAME` AS SetName, `SET_DESCRIPTION` AS SetDescription, `SET_PRICE` AS SetPrice,
+            SELECT `ID` AS Id, `SET_NAME` AS SetName, `SET_DESCRIPTION` AS SetDescription, `SET_PRICE` AS SetPrice, `POLICY_JSON` AS PolicyJson,
                    `MEDIA_ID` AS MediaId, `SORT_ORDER` AS SortOrder, `IS_AVAILABLE` AS IsAvailable
             FROM `MENU_SETS` ORDER BY `SORT_ORDER`, `SET_NAME`;
             SELECT SI.`ID` AS Id, SI.`SET_ID` AS SetId, SI.`MENU_ITEM_ID` AS MenuItemId,
@@ -646,13 +646,13 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
     public Task UpsertMenuItemAsync(string id, SaveMenuItemRequest request, string actorId, DateTime now, CancellationToken cancellationToken)
         => ExecuteAsync("""
             INSERT INTO `MENU_ITEMS`
-                (`ID`, `CATEGORY_ID`, `ITEM_NAME`, `ITEM_DESCRIPTION`, `PRICE`, `MEDIA_ID`, `TAGS`, `SORT_ORDER`, `IS_AVAILABLE`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
-            VALUES (@Id, @CategoryId, @ItemName, @ItemDescription, @Price, @MediaId, @Tags, @SortOrder, @IsAvailable, @Now, @ActorId, @Now, @ActorId)
+                (`ID`, `CATEGORY_ID`, `ITEM_NAME`, `ITEM_DESCRIPTION`, `PRICE`, `MEDIA_ID`, `TAGS`, `SORT_ORDER`, `IS_AVAILABLE`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`, `POLICY_JSON`)
+            VALUES (@Id, @CategoryId, @ItemName, @ItemDescription, @Price, @MediaId, @Tags, @SortOrder, @IsAvailable, @Now, @ActorId, @Now, @ActorId, @PolicyJson)
             ON DUPLICATE KEY UPDATE `CATEGORY_ID` = VALUES(`CATEGORY_ID`), `ITEM_NAME` = VALUES(`ITEM_NAME`),
                 `ITEM_DESCRIPTION` = VALUES(`ITEM_DESCRIPTION`), `PRICE` = VALUES(`PRICE`), `MEDIA_ID` = VALUES(`MEDIA_ID`),
                 `TAGS` = VALUES(`TAGS`), `SORT_ORDER` = VALUES(`SORT_ORDER`),
-                `IS_AVAILABLE` = VALUES(`IS_AVAILABLE`), `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId;
-            """, new { Id = id, request.CategoryId, request.ItemName, request.ItemDescription, request.Price,
+                `IS_AVAILABLE` = VALUES(`IS_AVAILABLE`), `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId, `POLICY_JSON` = COALESCE(@PolicyJson, `POLICY_JSON`);
+            """, new { Id = id, PolicyJson = request.Policy is null ? null : JsonSerializer.Serialize(request.Policy), request.CategoryId, request.ItemName, request.ItemDescription, request.Price,
                 request.MediaId, Tags = request.Tags?.GetRawText(), request.SortOrder,
                 request.IsAvailable, Now = now, ActorId = actorId }, cancellationToken);
 
@@ -670,12 +670,12 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await connection.ExecuteAsync(new CommandDefinition("""
             INSERT INTO `MENU_SETS`
-                (`ID`, `SET_NAME`, `SET_DESCRIPTION`, `SET_PRICE`, `MEDIA_ID`, `SORT_ORDER`, `IS_AVAILABLE`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
-            VALUES (@Id, @SetName, @SetDescription, @SetPrice, @MediaId, @SortOrder, @IsAvailable, @Now, @ActorId, @Now, @ActorId)
+                (`ID`, `SET_NAME`, `SET_DESCRIPTION`, `SET_PRICE`, `MEDIA_ID`, `SORT_ORDER`, `IS_AVAILABLE`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`, `POLICY_JSON`)
+            VALUES (@Id, @SetName, @SetDescription, @SetPrice, @MediaId, @SortOrder, @IsAvailable, @Now, @ActorId, @Now, @ActorId, @PolicyJson)
             ON DUPLICATE KEY UPDATE `SET_NAME` = VALUES(`SET_NAME`), `SET_DESCRIPTION` = VALUES(`SET_DESCRIPTION`),
                 `SET_PRICE` = VALUES(`SET_PRICE`), `MEDIA_ID` = VALUES(`MEDIA_ID`),
-                `SORT_ORDER` = VALUES(`SORT_ORDER`), `IS_AVAILABLE` = VALUES(`IS_AVAILABLE`), `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId;
-            """, new { Id = id, request.SetName, request.SetDescription, request.SetPrice, request.MediaId,
+                `SORT_ORDER` = VALUES(`SORT_ORDER`), `IS_AVAILABLE` = VALUES(`IS_AVAILABLE`), `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId, `POLICY_JSON` = COALESCE(@PolicyJson, `POLICY_JSON`);
+            """, new { Id = id, PolicyJson = request.Policy is null ? null : JsonSerializer.Serialize(request.Policy), request.SetName, request.SetDescription, request.SetPrice, request.MediaId,
                 request.SortOrder, request.IsAvailable, Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
         await connection.ExecuteAsync(new CommandDefinition("DELETE FROM `MENU_SET_ITEMS` WHERE `SET_ID` = @SetId;", new { SetId = id }, transaction, cancellationToken: cancellationToken));
         foreach (var item in request.Items)
