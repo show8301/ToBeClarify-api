@@ -26,9 +26,10 @@ public sealed class OrderingService : IOrderingService
     private readonly IStaffService _staffService;
     private readonly IAppClock _clock;
     private readonly MenuQuoteService _quotes;
+    private readonly IConfiguration _configuration;
 
     public OrderingService(IOrderingRepository repository, IOrderingTokenService tokens,
-        IMenuService menuService, IRoomService roomService, IStaffService staffService, IAppClock clock, MenuQuoteService quotes)
+        IMenuService menuService, IRoomService roomService, IStaffService staffService, IAppClock clock, MenuQuoteService quotes, IConfiguration configuration)
     {
         _repository = repository;
         _tokens = tokens;
@@ -37,6 +38,7 @@ public sealed class OrderingService : IOrderingService
         _staffService = staffService;
         _clock = clock;
         _quotes = quotes;
+        _configuration = configuration;
     }
 
     public async Task<OrderSessionIssuedDto> CreateSessionAsync(CreateOrderSessionRequest request,
@@ -153,7 +155,9 @@ public sealed class OrderingService : IOrderingService
         var existing = await _quotes.ExistingOrderAsync(session.Id, request.QuoteToken, cancellationToken);
         if (existing is not null)
             return (await MapOrdersAsync(await _repository.GetOrderAsync(existing, cancellationToken), cancellationToken)).Single();
-        if (request.Meals.Count > 0 && string.IsNullOrWhiteSpace(request.QuoteToken))
+        // Enable enforcement after Web dev -> main promotion; legacy production clients
+        // must remain usable while the API and Web are released independently.
+        if (_configuration.GetValue<bool>("Menu:RequireQuote") && request.Meals.Count > 0 && string.IsNullOrWhiteSpace(request.QuoteToken))
             throw new ConflictException("請先取得最新報價並確認訂單。", "MENU_QUOTE_REQUIRED");
         var order = await BuildOrderAsync(session, request, cancellationToken);
         await _quotes.ValidateAsync(session.Id, request, order, cancellationToken);

@@ -31,7 +31,7 @@
 ### C：報價及店內通知
 
 - `POST /api/ordering/quote` 共用正式提交的計價服務，回傳完整費用、套餐內容、適用規則、折抵、餘額與是否待店內確認。
-- 報價有效五分鐘；綁定點餐 session 及完整請求。含餐點訂單必須先報價，Web 在 v2 API 下所有訂單都先確認報價。
+- 報價有效五分鐘；綁定點餐 session 及完整請求。Web 在 v2 API 下所有訂單都先確認報價；`Menu:RequireQuote=true` 時，API 強制所有含餐點訂單先報價。
 - 提交重新確認價格、政策、套餐供應、組成、信物餘額；發生變更回傳衝突，要求重新報價。交易內鎖定相關資料以防報價到提交間異動。
 - 相同報價 token 重送會回傳原訂單，避免回應中斷時重複建單與通知。前端另防止按鈕重複提交。
 - 訂單與 notification outbox 同交易寫入，僅提交成功才派送；接收帳號及命中規則在事件建立時快照。
@@ -59,10 +59,10 @@
    - `db/migrations/20260909_02_menu_notifications.sql`
    - `db/migrations/20260909_03_notification_sounds.sql`
 4. migration 使用既有 MariaDB 相容語法，不自動回填商品分類或改寫既有金額。不要在新 API 執行期間移除欄位／資料表。
-5. 部署新 API 時先保留 `Notifications:Enabled=false`。先確認 v2 菜單／報價契約與資料，再準備音效。
+5. 部署新 API 時先保留 `Notifications:Enabled=false` 與 `Menu:RequireQuote=false`。這段相容期仍接受舊正式 Web 的無報價提交，新 Web 則一律走報價確認；避免分開發布造成舊站無法點餐。先確認 v2 菜單／報價契約與資料，再準備音效。
 6. 設定 `Notifications:FFprobePath`、`Notifications:FFmpegPath` 為受維護的音訊工具絕對路徑；API 身分需要執行權限，並可寫入 `Media:RootPath/notification-sounds`。
 7. 開發者在音效庫上傳系統音效（建議代碼 `order_chime`、`time_reminder`、`store_broadcast`）；管理者標記真實商品並儲存廣播規則後，再開啟 `Notifications:Enabled=true`、重新啟動 API。
-8. 使用者確認 dev 運作正常後，Web 只透過 `dev → main` 手動 PR 晉升。不得由功能分支直接進 main。
+8. 使用者確認 dev 運作正常後，Web 只透過 `dev → main` 手動 PR 晉升。不得由功能分支直接進 main。新版 Web 正式上線後，把 API `Menu:RequireQuote=true`，結束相容期並啟用無報價提交的強制拒絕；回退到舊 Web 前須先關閉此開關。
 
 回退以先停用 notifications worker／回退應用程式為主，保留新增資料與欄位。正式環境部署、資料庫更新及音效設定尚未在本次開發發布中執行。
 
