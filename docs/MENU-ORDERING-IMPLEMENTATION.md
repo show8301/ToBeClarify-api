@@ -70,8 +70,10 @@
 
 本次依專案規範只執行 .NET Release build、Web production build、TypeScript、ESLint、差異／設定檢查及開發部署狀態／HTTP 可用性檢查，不執行自動化測試或操作正式資料。
 
+2026-09-09 發布紀錄：Web `ed77f27` 的 GitHub Actions 建置與 IIS dev 部署成功；開發站 `/api/health` 回報相同完整 commit SHA。`/menu`、`/meun`（跟隨導向）、`/admin/menu`、`/admin/notifications`、`/order` 均回應 HTTP 200。這只確認入口可用，不表示已完成登入或點餐流程驗收。API 程式 `68e647b` 的 dev 建置成功，production deploy job 按規定跳過。
+
 人工確認重點：一項子品停售與全部停售、固定套餐不能不完整下單、舊購物車調價重新報價、重送同 token、套餐改名後歷史保留、多個香檳塔只產生一次提交通知、規則停用、個人與廣播合併、取消訂單、登入／登出、多分頁及音效權限。這些是待執行的驗收案例，不是已完成的測試紀錄。
 
 ## 本機 SDK
 
-API 的 `global.json` 固定 .NET 10 SDK 主版本並允許後續 feature band。此帳號的 PowerShell 7 與 Windows PowerShell profile 優先使用 `%USERPROFILE%/.dotnet`；新工作階段 `dotnet --version` 為 `10.0.400`。此設定不移除 .NET 8，也不改系統層級的 CMD PATH。
+API 的 `global.json` 固定 .NET 10 SDK 主版本並允許後續 feature band。此帳號的 PowerShell 7 profile 優先使用 `%USERPROFILE%/.dotnet`；新工作階段 `dotnet --version` 為 `10.0.400`。舊 Windows PowerShell 的 execution policy 為 Restricted，未變更其安全設定，也未留下無法載入的 profile。此設定不移除 .NET 8，也不改系統層級的 CMD PATH。
