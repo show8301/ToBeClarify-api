@@ -765,10 +765,30 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             UPDATE `ORDER_SERVICE_ADDONS` A JOIN `ORDERS` O ON O.`ID` = A.`ORDER_ID`
             SET A.`ADDON_STATUS` = 'expired', A.`UPDATED_AT` = @Now
             WHERE O.`ORDER_STATUS` = 'expired' AND A.`ADDON_STATUS` = 'waiting';
-            """;
+        """;
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
-        var command = new CommandDefinition(sql, new { Cutoff = cutoff, Now = now }, cancellationToken: cancellationToken);
-        return await connection.ExecuteAsync(command);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            var orderIds = (await connection.QueryAsync<string>(new CommandDefinition("""
+                SELECT `ID` FROM `ORDERS`
+                WHERE `ORDER_STATUS` IN ('submitted', 'partially_confirmed', 'needs_reschedule')
+                  AND `QUEUE_ENTERED_AT` <= @Cutoff FOR UPDATE;
+                """, new { Cutoff = cutoff }, transaction, cancellationToken: cancellationToken))).ToArray();
+            foreach (var orderId in orderIds)
+                await MenuNotifications.InvalidateNominationSchedulesAsync(connection, transaction, orderId, now,
+                    cancellationToken, reason: "order_expired");
+            var command = new CommandDefinition(sql, new { Cutoff = cutoff, Now = now }, transaction,
+                cancellationToken: cancellationToken);
+            var affected = orderIds.Length == 0 ? 0 : await connection.ExecuteAsync(command);
+            await transaction.CommitAsync(cancellationToken);
+            return affected;
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
     }
 
     public async Task<string> ConfirmNomineeAsync(string orderId, string? staffId, string actorId, bool privileged,
@@ -872,6 +892,8 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
                 nominees.Select(item => new { Id = NewId(), OrderId = orderId, NomineeId = item.Id,
                     item.StaffId, StartsAt = item.RequestedStartsAt, ServiceEndsAt = item.RequestedServiceEndsAt,
                     EndsAt = item.RequestedBusyUntil, Now = now }), transaction, cancellationToken: cancellationToken));
+            await MenuNotifications.EnsureNominationSchedulesAsync(connection, transaction, nominees, now, cancellationToken,
+                nextScheduleRevision: true);
             await connection.ExecuteAsync(new CommandDefinition("""
                 UPDATE `ORDERS` SET `ORDER_STATUS` = 'confirmed', `CONFIRMED_AT` = @Now, `UPDATED_AT` = @Now
                 WHERE `ID` = @OrderId;
@@ -977,6 +999,8 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
                    `BUFFER_MINUTES_SNAPSHOT` AS BufferMinutesSnapshot
             FROM `ORDER_NOMINEES` WHERE `ORDER_ID` = @OrderId FOR UPDATE;
             """, new { OrderId = orderId }, transaction, cancellationToken: cancellationToken))).AsList();
+        await MenuNotifications.InvalidateNominationSchedulesAsync(connection, transaction, orderId, now,
+            cancellationToken, reason: "order_rescheduled");
         foreach (var nominee in nominees)
         {
             var serviceEnds = startsAt.AddMinutes(nominee.ReservedMinutes);
@@ -1035,6 +1059,8 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
                 FROM `ORDERS` WHERE `ID` = @OrderId FOR UPDATE;
                 """, new { OrderId = orderId }, transaction, cancellationToken: cancellationToken))
                 ?? throw new BusinessException("找不到訂單。", "ORDER_NOT_FOUND");
+            await MenuNotifications.InvalidateNominationSchedulesAsync(connection, transaction, orderId, now,
+                cancellationToken, reason: "order_backfill_served");
             if (order.OrderStatus != "expired")
                 throw new BusinessException("只有已失效訂單可以補登已接待。", "ORDER_BACKFILL_STATUS_INVALID");
             if (order.OrderKind == "service_addon")
@@ -1245,6 +1271,8 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             var reservedMinutes = checked(segmentCount * segmentMinutes);
             var serviceEndsAt = row.RequestedStartsAt.AddMinutes(reservedMinutes);
             var busyUntil = serviceEndsAt.AddMinutes(Math.Max(0, row.BufferMinutesSnapshot));
+            await MenuNotifications.InvalidateNominationSchedulesAsync(connection, transaction, orderId, now,
+                cancellationToken, row.NomineeId, "nomination_shortened");
             await connection.ExecuteAsync(new CommandDefinition("""
                 UPDATE `ORDER_NOMINEES`
                 SET `SEGMENT_COUNT` = @SegmentCount, `RESERVED_MINUTES` = @ReservedMinutes,
@@ -1280,6 +1308,19 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
                 row.BaseItemId,
                 row.ServiceItemId
             }, transaction, cancellationToken: cancellationToken));
+            if (row.OrderStatus == "confirmed")
+            {
+                await MenuNotifications.EnsureNominationSchedulesAsync(connection, transaction, [new OrderNomineeRow
+                {
+                    Id = row.NomineeId,
+                    OrderId = row.OrderId,
+                    StaffId = row.StaffId,
+                    RequestedStartsAt = row.RequestedStartsAt,
+                    RequestedServiceEndsAt = serviceEndsAt,
+                    RequestedBusyUntil = busyUntil,
+                    ConfirmationStatus = "confirmed"
+                }], now, cancellationToken, nextScheduleRevision: true);
+            }
             await RecalculateOrderAsync(connection, transaction, orderId, now, actorId, cancellationToken);
             await InsertHistoryAsync(connection, transaction, orderId, row.OrderStatus, row.OrderStatus,
                 $"指名預約由 {row.SegmentCount} 節正式縮短為 {segmentCount} 節。原因：{reason}",
@@ -1500,6 +1541,17 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             if (isEarlyCompletion && string.IsNullOrWhiteSpace(reason))
                 throw new BusinessException("實際提早完成必須填寫原因；此操作不會自動改變已成立訂單金額。",
                     "EARLY_COMPLETION_REASON_REQUIRED");
+            if (action is "start" or "complete" or "cancel" or "reject" or "return_to_reschedule")
+            {
+                var preservedScheduleTypes = action switch
+                {
+                    "start" => new[] { "nomination_ending", "nomination_ended" },
+                    "complete" => new[] { "nomination_ended" },
+                    _ => Array.Empty<string>()
+                };
+                await MenuNotifications.InvalidateNominationSchedulesAsync(connection, transaction, orderId, now,
+                    cancellationToken, reason: $"order_{action}", preserveRuleTypes: preservedScheduleTypes);
+            }
 
             await connection.ExecuteAsync(new CommandDefinition("""
                 UPDATE `ORDERS`
@@ -1703,6 +1755,8 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             ?? throw new BusinessException("找不到訂單。", "ORDER_NOT_FOUND");
         if (order.OrderStatus is not ("submitted" or "partially_confirmed" or "needs_reschedule"))
             throw new BusinessException("只能刪除尚未執行的等待訂單。", "ORDER_DELETE_FORBIDDEN");
+        await MenuNotifications.InvalidateNominationSchedulesAsync(connection, transaction, orderId, now,
+            cancellationToken, reason: "order_cancelled");
         await connection.ExecuteAsync(new CommandDefinition("""
             UPDATE `ORDERS` SET `ORDER_STATUS` = 'cancelled', `CANCELLED_AT` = @Now,
                    `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId WHERE `ID` = @OrderId;
