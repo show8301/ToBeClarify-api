@@ -53,24 +53,24 @@
 ## 發布順序與相容性
 
 1. Web 先發布 `dev` → `www-dev.marchgroup.net`。舊 API 下保留既有編輯／下單能力；新版政策欄位、原子排序與通知依能力啟用。
-2. API `dev` 只建置及產生 artifact，沒有獨立測試主機。Web dev 本身不代表新 API 已上線。
-3. 正式 API 發布需要另外確認。確認後先備份並由 migration 帳號依序執行三份新增式 migration：
+2. API `dev` 只建置及產生 artifact，沒有獨立測試主機；依本次發布決定，API 直接由已驗證的 `dev` 推送 `main`。
+3. 正式 API 發布前先備份並由 migration 帳號依序執行三份新增式 migration：
    - `db/migrations/20260909_01_menu_policies_and_quotes.sql`
    - `db/migrations/20260909_02_menu_notifications.sql`
    - `db/migrations/20260909_03_notification_sounds.sql`
-4. migration 使用既有 MariaDB 相容語法，不自動回填商品分類或改寫既有金額。不要在新 API 執行期間移除欄位／資料表。
+4. migration 使用既有 MariaDB 相容語法，不自動回填商品分類或改寫既有金額。不要在新 API 執行期間移除欄位／資料表。本次已確認正式資料庫為 MariaDB 11.2.2，三份 migration 均成功套用。
 5. 部署新 API 時先保留 `Notifications:Enabled=false` 與 `Menu:RequireQuote=false`。這段相容期仍接受舊正式 Web 的無報價提交，新 Web 則一律走報價確認；避免分開發布造成舊站無法點餐。先確認 v2 菜單／報價契約與資料，再準備音效。
 6. 設定 `Notifications:FFprobePath`、`Notifications:FFmpegPath` 為受維護的音訊工具絕對路徑；API 身分需要執行權限，並可寫入 `Media:RootPath/notification-sounds`。
 7. 開發者在音效庫上傳系統音效（建議代碼 `order_chime`、`time_reminder`、`store_broadcast`）；管理者標記真實商品並儲存廣播規則後，再開啟 `Notifications:Enabled=true`、重新啟動 API。
-8. 使用者確認 dev 運作正常後，Web 只透過 `dev → main` 手動 PR 晉升。不得由功能分支直接進 main。新版 Web 正式上線後，把 API `Menu:RequireQuote=true`，結束相容期並啟用無報價提交的強制拒絕；回退到舊 Web 前須先關閉此開關。
+8. Web 仍只透過 `dev → main` 手動 PR 晉升。API 沒有測試環境，本次依使用者要求直接由已建置成功的 `dev` 推送 `main`；新版 Web 正式上線後，把 API `Menu:RequireQuote=true`，結束相容期並啟用無報價提交的強制拒絕；回退到舊 Web 前須先關閉此開關。
 
-回退以先停用 notifications worker／回退應用程式為主，保留新增資料與欄位。正式環境部署、資料庫更新及音效設定尚未在本次開發發布中執行。
+回退以先停用 notifications worker／回退應用程式為主，保留新增資料與欄位。音效仍未上傳，通知維持 `Notifications:Enabled=false`。
 
 ## 驗證紀錄與人工確認
 
-本次依專案規範只執行 .NET Release build、Web production build、TypeScript、ESLint、差異／設定檢查及開發部署狀態／HTTP 可用性檢查，不執行自動化測試或操作正式資料。
+本次依專案規範只執行 .NET Release build、Web production build、TypeScript、ESLint、差異／設定檢查及部署狀態／HTTP 可用性檢查，不執行自動化測試；正式資料庫只套用本次三份新增式 schema migration。
 
-2026-09-09 發布紀錄：Web `ed77f27` 的 GitHub Actions 建置與 IIS dev 部署成功；開發站 `/api/health` 回報相同完整 commit SHA。`/menu`、`/meun`（跟隨導向）、`/admin/menu`、`/admin/notifications`、`/order` 均回應 HTTP 200。這只確認入口可用，不表示已完成登入或點餐流程驗收。API 程式 `68e647b` 的 dev 建置成功，production deploy job 按規定跳過。
+2026-09-09 發布紀錄：Web `ed77f27` 的 GitHub Actions 建置與 IIS dev 部署成功；開發站 `/api/health` 回報相同完整 commit SHA。`/menu`、`/meun`（跟隨導向）、`/admin/menu`、`/admin/notifications`、`/order` 均回應 HTTP 200。API `f71f103` 的 production build、IIS deploy 與 workflow health check 成功；`https://api.marchgroup.net/api/client/menu` 回應 HTTP 200、`contractVersion=2`，公開資料讀取正常。這只確認入口與公開契約可用，不表示已完成登入或點餐流程驗收。
 
 人工確認重點：一項子品停售與全部停售、固定套餐不能不完整下單、舊購物車調價重新報價、重送同 token、套餐改名後歷史保留、多個香檳塔只產生一次提交通知、規則停用、個人與廣播合併、取消訂單、登入／登出、多分頁及音效權限。這些是待執行的驗收案例，不是已完成的測試紀錄。
 
