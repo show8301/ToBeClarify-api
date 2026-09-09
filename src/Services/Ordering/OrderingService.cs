@@ -312,7 +312,7 @@ public sealed class OrderingService : IOrderingService
             string.IsNullOrWhiteSpace(request.CustomerNote) ? null : request.CustomerNote.Trim(), items, nominees, rooms, tips);
         return aggregate with { MenuSnapshotJson = JsonSerializer.Serialize(new MenuOrderSnapshot(menuLines,
             menu.PricingRules.Where(x => x.Policy.ShowOnOrder).Select(x => new MenuRuleSnapshot(x.Id, x.Title, x.Description, x.PriceText, x.Policy)).ToArray(),
-            session.PrepaidMealCredit, settings.BaseNominationFee, settings.SegmentMinutes), MenuPolicies.Json) };
+            session.PrepaidMealCredit, settings.BaseNominationFee, settings.SegmentMinutes, session.RemainingMealCredit), MenuPolicies.Json) };
     }
 
     public async Task<OrderDto> SubmitAddonAsync(string token, SubmitAddonRequest request,
@@ -346,6 +346,14 @@ public sealed class OrderingService : IOrderingService
     {
         _ = await GetSessionByIdAsync(sessionId, cancellationToken);
         return await MapOrdersAsync(await _repository.GetOrdersBySessionAsync(sessionId, cancellationToken), cancellationToken);
+    }
+
+    public async Task<AdminOrderLookupDto> GetAdminOrderAsync(string orderId, CancellationToken cancellationToken)
+    {
+        var bundle = await _repository.GetOrderAsync(orderId, cancellationToken);
+        var row = bundle.Orders.SingleOrDefault() ?? throw new NotFoundException("訂單不存在。", "ORDER_NOT_FOUND");
+        var session = await GetSessionByIdAsync(row.SessionId, cancellationToken);
+        return new(MapSession(session), (await MapOrdersAsync(bundle, cancellationToken)).Single());
     }
 
     public async Task<OrderingSettingsDto> GetSettingsAsync(CancellationToken cancellationToken)

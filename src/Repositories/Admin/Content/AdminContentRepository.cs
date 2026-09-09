@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ToBeClarify.Api.Exceptions;
 using Dapper;
 using ToBeClarify.Api.Infrastructure;
 using ToBeClarify.Api.Models.Dtos;
@@ -638,13 +639,21 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
     public async Task DeleteMenuCategoryAsync(string id, string actorId, DateTime now, CancellationToken cancellationToken)
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
-        var hasItems = await connection.ExecuteScalarAsync<bool>(new CommandDefinition("SELECT COUNT(*) > 0 FROM `MENU_ITEMS` WHERE `CATEGORY_ID` = @Id;", new { Id = id }, cancellationToken: cancellationToken));
-        if (hasItems) throw new InvalidOperationException("Menu category still contains items.");
-        await connection.ExecuteAsync(new CommandDefinition("DELETE FROM `MENU_CATEGORIES` WHERE `ID` = @Id;", new { Id = id, ActorId = actorId, Now = now }, cancellationToken: cancellationToken));
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        _ = await connection.QuerySingleOrDefaultAsync<string>(new CommandDefinition("SELECT ID FROM MENU_CATEGORIES WHERE ID=@Id FOR UPDATE;",new{Id=id},transaction,cancellationToken:cancellationToken));
+        var hasItems = await connection.ExecuteScalarAsync<bool>(new CommandDefinition("SELECT COUNT(*) > 0 FROM `MENU_ITEMS` WHERE `CATEGORY_ID` = @Id;", new { Id = id }, transaction, cancellationToken: cancellationToken));
+        if (hasItems) throw new BusinessException("此分類仍有餐點，請先移除或移至其他分類。","MENU_CATEGORY_IN_USE");
+        await connection.ExecuteAsync(new CommandDefinition("DELETE FROM `MENU_CATEGORIES` WHERE `ID` = @Id;", new { Id = id, ActorId = actorId, Now = now }, transaction, cancellationToken: cancellationToken));
+        await transaction.CommitAsync(cancellationToken);
     }
 
-    public Task UpsertMenuItemAsync(string id, SaveMenuItemRequest request, string actorId, DateTime now, CancellationToken cancellationToken)
-        => ExecuteAsync("""
+    public async Task UpsertMenuItemAsync(string id, SaveMenuItemRequest request, string actorId, DateTime now, CancellationToken cancellationToken)
+    {
+        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var category = await connection.QuerySingleOrDefaultAsync<string>(new CommandDefinition("SELECT ID FROM MENU_CATEGORIES WHERE ID=@Id FOR UPDATE;",new{Id=request.CategoryId},transaction,cancellationToken:cancellationToken));
+        if(category is null) throw new BusinessException("所屬分類已移除，請重新載入。","MENU_CATEGORY_INVALID");
+        await connection.ExecuteAsync(new CommandDefinition("""
             INSERT INTO `MENU_ITEMS`
                 (`ID`, `CATEGORY_ID`, `ITEM_NAME`, `ITEM_DESCRIPTION`, `PRICE`, `MEDIA_ID`, `TAGS`, `SORT_ORDER`, `IS_AVAILABLE`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`, `POLICY_JSON`)
             VALUES (@Id, @CategoryId, @ItemName, @ItemDescription, @Price, @MediaId, @Tags, @SortOrder, @IsAvailable, @Now, @ActorId, @Now, @ActorId, @PolicyJson)
@@ -654,20 +663,27 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
                 `IS_AVAILABLE` = VALUES(`IS_AVAILABLE`), `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId, `POLICY_JSON` = COALESCE(@PolicyJson, `POLICY_JSON`);
             """, new { Id = id, PolicyJson = request.Policy is null ? null : JsonSerializer.Serialize(request.Policy), request.CategoryId, request.ItemName, request.ItemDescription, request.Price,
                 request.MediaId, Tags = request.Tags?.GetRawText(), request.SortOrder,
-                request.IsAvailable, Now = now, ActorId = actorId }, cancellationToken);
+                request.IsAvailable, Now = now, ActorId = actorId }, transaction, cancellationToken:cancellationToken));
+        await transaction.CommitAsync(cancellationToken);
+    }
 
     public async Task DeleteMenuItemAsync(string id, string actorId, DateTime now, CancellationToken cancellationToken)
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
-        var used = await connection.ExecuteScalarAsync<bool>(new CommandDefinition("SELECT COUNT(*) > 0 FROM `MENU_SET_ITEMS` WHERE `MENU_ITEM_ID` = @Id;", new { Id = id }, cancellationToken: cancellationToken));
-        if (used) throw new InvalidOperationException("Menu item is used by a menu set.");
-        await connection.ExecuteAsync(new CommandDefinition("DELETE FROM `MENU_ITEMS` WHERE `ID` = @Id;", new { Id = id, ActorId = actorId, Now = now }, cancellationToken: cancellationToken));
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        _ = await connection.QuerySingleOrDefaultAsync<string>(new CommandDefinition("SELECT ID FROM MENU_ITEMS WHERE ID=@Id FOR UPDATE;",new{Id=id},transaction,cancellationToken:cancellationToken));
+        var used = await connection.ExecuteScalarAsync<bool>(new CommandDefinition("SELECT COUNT(*) > 0 FROM `MENU_SET_ITEMS` WHERE `MENU_ITEM_ID` = @Id;", new { Id = id }, transaction, cancellationToken: cancellationToken));
+        if (used) throw new BusinessException("此餐點仍用於套餐，請先移除套餐內容或改為停售。","MENU_ITEM_IN_USE");
+        await connection.ExecuteAsync(new CommandDefinition("DELETE FROM `MENU_ITEMS` WHERE `ID` = @Id;", new { Id = id, ActorId = actorId, Now = now }, transaction, cancellationToken: cancellationToken));
+        await transaction.CommitAsync(cancellationToken);
     }
 
     public async Task SaveMenuSetAsync(string id, SaveMenuSetRequest request, string actorId, DateTime now, CancellationToken cancellationToken)
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var existingItems=(await connection.QueryAsync<string>(new CommandDefinition("SELECT ID FROM MENU_ITEMS ORDER BY ID FOR UPDATE;",transaction:transaction,cancellationToken:cancellationToken))).ToHashSet(StringComparer.Ordinal);
+        if(request.Items.Any(item=>!existingItems.Contains(item.MenuItemId))) throw new BusinessException("套餐內有已移除餐點，請重新載入。","MENU_SET_ITEM_INVALID");
         await connection.ExecuteAsync(new CommandDefinition("""
             INSERT INTO `MENU_SETS`
                 (`ID`, `SET_NAME`, `SET_DESCRIPTION`, `SET_PRICE`, `MEDIA_ID`, `SORT_ORDER`, `IS_AVAILABLE`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`, `POLICY_JSON`)

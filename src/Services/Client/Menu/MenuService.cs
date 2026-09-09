@@ -63,6 +63,9 @@ public sealed class MenuService : IMenuService
                 EffectiveEventCategories = policy.EventCategories.Concat(parts.SelectMany(x => x.EventCategories)).Distinct().Order().ToArray()
             };
         }).Where(set => set.Items.Any(x => x.IsAvailable)).ToArray();
+        // Public display hides unavailable children while retaining the configured set price.
+        // Ordering keeps the full composition so missing mandatory contents cannot be sold.
+        if (!forOrdering) sets = sets.Select(set => set with { Items = set.Items.Where(x => x.IsAvailable).ToArray() }).ToArray();
         return new MenuDto(await pricingTask, categories, sets, showSets);
     }
 

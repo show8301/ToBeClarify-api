@@ -17,6 +17,7 @@ public interface IOrderingService
     Task<IReadOnlyList<OrderDto>> GetMyOrdersAsync(string token, CancellationToken cancellationToken);
     Task<IReadOnlyList<AdminOrderSessionDto>> GetAdminSessionsAsync(DateOnly? businessDate, string? search, CancellationToken cancellationToken);
     Task<IReadOnlyList<OrderDto>> GetAdminOrdersAsync(string sessionId, CancellationToken cancellationToken);
+    Task<AdminOrderLookupDto> GetAdminOrderAsync(string orderId, CancellationToken cancellationToken);
     Task<OrderingBusinessContextDto> GetBusinessContextAsync(CancellationToken cancellationToken);
     Task<OrderingBusinessContextDto> OpenBusinessPeriodAsync(OpenBusinessPeriodRequest request,
         ClaimsPrincipal actor, CancellationToken cancellationToken);

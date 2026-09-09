@@ -489,6 +489,9 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             if (!remaining.HasValue) throw new BusinessException("點餐碼已失效。", "ORDER_SESSION_INACTIVE");
             if (order.MealCreditApplied > remaining.Value)
                 throw new BusinessException("信物折抵餘額已變更，請重新確認訂單。", "MEAL_CREDIT_CHANGED");
+            if (order.QuoteId is not null && order.MenuSnapshotJson is not null &&
+                JsonSerializer.Deserialize<MenuOrderSnapshot>(order.MenuSnapshotJson,MenuPolicies.Json)!.RemainingMealCredit != remaining.Value)
+                throw new ConflictException("信物餘額已變更，請重新取得報價。","MENU_QUOTE_CHANGED");
 
             const string insertOrder = """
                 INSERT INTO `ORDERS`

@@ -10,7 +10,24 @@ namespace ToBeClarify.Api.Controllers.Admin;
 public sealed class MenuNotificationsController(MenuNotifications notifications,NotificationSounds sounds,IConfiguration config):ControllerBase
 {
     [HttpGet("capabilities")]
-    public object Capabilities()=>ApiResponse<object>.Ok(new{enabled=config.GetValue<bool>("Notifications:Enabled"),ruleTypes=new[]{"order_received","champagne_order_received"},delivery="polling",soundUploadConfigured=!string.IsNullOrWhiteSpace(config["Notifications:FFprobePath"])&&!string.IsNullOrWhiteSpace(config["Notifications:FFmpegPath"])});
+    public object Capabilities()=>ApiResponse<object>.Ok(new{enabled=config.GetValue<bool>("Notifications:Enabled"),ruleTypes=new[]{"order_received","champagne_order_received"},delivery="sse",soundUploadConfigured=!string.IsNullOrWhiteSpace(config["Notifications:FFprobePath"])&&!string.IsNullOrWhiteSpace(config["Notifications:FFmpegPath"])});
+    [HttpGet("stream")]
+    public async Task Stream(CancellationToken ct)
+    {
+        if(!config.GetValue<bool>("Notifications:Enabled")){Response.StatusCode=503;return;}
+        Response.ContentType="text/event-stream";
+        Response.Headers.CacheControl="private, no-store";
+        Response.Headers["X-Accel-Buffering"]="no";
+        HttpContext.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpResponseBodyFeature>()?.DisableBuffering();
+        // Bounded connections re-authenticate on reconnect; the inbox also rechecks active accounts.
+        for(var i=0;i<10&&!ct.IsCancellationRequested;i++)
+        {
+            var inbox=await notifications.InboxAsync(User,ct);
+            await Response.WriteAsync("event: inbox\ndata: "+System.Text.Json.JsonSerializer.Serialize(inbox,MenuPolicies.Json)+"\n\n",ct);
+            await Response.Body.FlushAsync(ct);
+            await Task.Delay(TimeSpan.FromSeconds(5),ct);
+        }
+    }
     [HttpGet]
     public async Task<object> Inbox(CancellationToken ct)=>ApiResponse<MenuNotificationInbox>.Ok(await notifications.InboxAsync(User,ct));
     [HttpGet("settings")]

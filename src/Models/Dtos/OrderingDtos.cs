@@ -178,6 +178,8 @@ public sealed record OrderDto(
     public System.Text.Json.JsonElement? MenuSnapshot { get; init; }
 }
 
+public sealed record AdminOrderLookupDto(OrderSessionDto Session, OrderDto Order);
+
 public sealed record AdminOrderSessionDto(
     OrderSessionDto Session,
     int OrderCount,
@@ -294,9 +296,13 @@ public sealed class SubmitOrderRequest
 {
     [StringLength(40)]
     public string? QuoteToken { get; init; }
+    [Required, MaxLength(100)]
     public IReadOnlyList<MealOrderLineRequest> Meals { get; init; } = [];
+    [Required, MaxLength(100)]
     public IReadOnlyList<NominationOrderLineRequest> Nominations { get; init; } = [];
+    [Required, MaxLength(100)]
     public IReadOnlyList<RoomOrderLineRequest> Rooms { get; init; } = [];
+    [Required, MaxLength(100)]
     public IReadOnlyList<TipOrderLineRequest> Tips { get; init; } = [];
 
     [StringLength(500)]

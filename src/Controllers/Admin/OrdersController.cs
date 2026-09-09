@@ -45,6 +45,10 @@ public sealed class OrdersController : ControllerBase
         => Ok(ApiResponse<IReadOnlyList<OrderDto>>.Ok(
             await _service.GetAdminOrdersAsync(sessionId, cancellationToken)));
 
+    [HttpGet("orders/{orderId}")]
+    public async Task<ActionResult<ApiResponse<AdminOrderLookupDto>>> Order(string orderId, CancellationToken cancellationToken)
+        => Ok(ApiResponse<AdminOrderLookupDto>.Ok(await _service.GetAdminOrderAsync(orderId, cancellationToken)));
+
     [HttpGet("ordering-settings")]
     [Authorize(Policy = "AdminManager")]
     public async Task<ActionResult<ApiResponse<OrderingSettingsDto>>> Settings(CancellationToken cancellationToken)

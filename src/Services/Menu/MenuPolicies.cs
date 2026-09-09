@@ -62,6 +62,8 @@ public sealed class MenuSortService(AppDbContext db, IAppClock clock)
 {
     public async Task SortAsync(MenuSortRequest request, string actorId, CancellationToken ct)
     {
+        if (request.Items is null || request.Categories is null || request.Sets is null || request.PricingRules is null)
+            throw new BusinessException("排序資料不可為空。", "MENU_SORT_INVALID");
         await using var connection = await db.CreateOpenConnectionAsync(ct);
         await using var tx = await connection.BeginTransactionAsync(ct);
         var rows = new List<MenuPolicies.SortRow>();

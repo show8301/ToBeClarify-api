@@ -9,7 +9,7 @@ using ToBeClarify.Api.Models.Entities;
 namespace ToBeClarify.Api.Services.Menu;
 
 public sealed record MenuOrderSnapshot(IReadOnlyList<MenuLineSnapshot> Lines,
-    IReadOnlyList<MenuRuleSnapshot> Rules, int PrepaidMealCredit, int BaseNominationFee, int SegmentMinutes);
+    IReadOnlyList<MenuRuleSnapshot> Rules, int PrepaidMealCredit, int BaseNominationFee, int SegmentMinutes, int RemainingMealCredit);
 
 public sealed class MenuQuoteService(AppDbContext db, IAppClock clock)
 {
@@ -127,8 +127,8 @@ public sealed class MenuQuoteService(AppDbContext db, IAppClock clock)
                     !policy.EventCategories.Concat(components.SelectMany(x => x.EventCategories)).Distinct().Order().SequenceEqual(line.EventCategories)) throw Changed();
             }
         }
-        var settings = await connection.QuerySingleAsync<OrderingSettingsRow>(new CommandDefinition(
-            "SELECT MINIMUM_MEAL_CREDIT AS MinimumMealCredit, BASE_NOMINATION_FEE AS BaseNominationFee, SEGMENT_MINUTES AS SegmentMinutes FROM ORDERING_SETTINGS WHERE ID='default' FOR UPDATE;", transaction: tx, cancellationToken: ct));
+        var settings = await connection.QuerySingleOrDefaultAsync<OrderingSettingsRow>(new CommandDefinition(
+            "SELECT MINIMUM_MEAL_CREDIT AS MinimumMealCredit, BASE_NOMINATION_FEE AS BaseNominationFee, SEGMENT_MINUTES AS SegmentMinutes FROM ORDERING_SETTINGS WHERE ID='default' FOR UPDATE;", transaction: tx, cancellationToken: ct)) ?? new OrderingSettingsRow { SegmentMinutes = 20 };
         if (settings.BaseNominationFee != snapshot.BaseNominationFee || settings.SegmentMinutes != snapshot.SegmentMinutes) throw Changed();
         var rules = await connection.QueryAsync<PricingRuleRow>(new CommandDefinition(
             "SELECT ID AS Id,TITLE AS Title,DESCRIPTION AS Description,PRICE_TEXT AS PriceText,POLICY_JSON AS PolicyJson FROM PRICING_RULES WHERE IS_ENABLED=TRUE ORDER BY SORT_ORDER,CREATED_AT FOR UPDATE;", transaction: tx, cancellationToken: ct));

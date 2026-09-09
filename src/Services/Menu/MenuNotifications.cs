@@ -30,7 +30,7 @@ public sealed record MenuNotificationDelivery(string Id, MenuNotificationMessage
     DateTimeOffset CreatedAt, DateTimeOffset ExpiresAt, DateTimeOffset? ReadAt);
 public sealed record MenuNotificationInbox(IReadOnlyList<MenuNotificationDelivery> Items, int UnreadCount);
 
-public sealed class MenuNotifications(AppDbContext db, IAppClock clock)
+public sealed class MenuNotifications(AppDbContext db, IAppClock clock, NotificationSounds sounds)
 {
     public static string Account(ClaimsPrincipal user) => user.FindFirst(AdminAuthConstants.UserIdClaimType)?.Value ?? throw new UnauthorizedAccessException();
     private static string Owner(ClaimsPrincipal user, bool broadcast)
@@ -70,7 +70,10 @@ public sealed class MenuNotifications(AppDbContext db, IAppClock clock)
         var row=await connection.QuerySingleAsync<SettingsRow>(new CommandDefinition("SELECT OWNER_KEY AS OwnerKey,REVISION AS Revision,RULES_JSON AS RulesJson FROM NOTIFICATION_SETTINGS WHERE OWNER_KEY=@Owner FOR UPDATE;",new {Owner=owner},tx,cancellationToken:ct));
         if(row.Revision!=request.ExpectedRevision) throw new ConflictException("通知設定已變更，請重新載入比對草稿。","NOTIFICATION_REVISION_CONFLICT");
         foreach(var rule in request.Rules.Where(x=>x.SoundId is not null))
+        {
             await NotificationSounds.ValidateAccessAsync(connection,tx,rule.SoundId!,user,broadcast,ct);
+            _ = await sounds.ContentAsync(user,rule.SoundId!,ct);
+        }
         var json=JsonSerializer.Serialize(request.Rules,MenuPolicies.Json);
         await connection.ExecuteAsync(new CommandDefinition("UPDATE NOTIFICATION_SETTINGS SET REVISION=REVISION+1,RULES_JSON=@Json,UPDATED_AT=@Now,UPDATED_BY=@Actor WHERE OWNER_KEY=@Owner;",new {Owner=owner,Json=json,Now=clock.LocalDateTime,Actor=actor},tx,cancellationToken:ct));
         await connection.ExecuteAsync(new CommandDefinition("INSERT INTO NOTIFICATION_AUDIT (ID,ACTOR_ACCOUNT_ID,ACTION_TYPE,ENTITY_ID,BEFORE_JSON,AFTER_JSON,CREATED_AT) VALUES (@Id,@Actor,'settings.updated',@Owner,@Before,@After,@Now);",new {Id=Guid.NewGuid().ToString(),Actor=actor,Owner=owner,Before=row.RulesJson,After=json,Now=clock.LocalDateTime},tx,cancellationToken:ct));
@@ -96,7 +99,7 @@ public sealed class MenuNotifications(AppDbContext db, IAppClock clock)
                         .Select(x=>(x,key=="broadcast",entry.Revision)));
             if(matches.Count==0) continue;
             var isBroadcast=matches.Any(x=>x.Broadcast);
-            var chosen=isBroadcast?matches.Where(x=>x.Broadcast).OrderBy(x=>x.Rule.Id,StringComparer.Ordinal).First().Rule:matches.FirstOrDefault(x=>x.Rule.SoundId is not null).Rule;
+            var chosen=isBroadcast?matches.Where(x=>x.Broadcast).OrderByDescending(x=>x.Rule.RuleType=="champagne_order_received").ThenBy(x=>x.Rule.Id,StringComparer.Ordinal).First().Rule:matches.FirstOrDefault(x=>x.Rule.SoundId is not null).Rule;
             var mode=isBroadcast?"banner":matches.Any(x=>x.Rule.PopupMode=="sticky")?"sticky":matches.Any(x=>x.Rule.PopupMode=="toast")?"toast":"none";
             var text=order.StoreConfirmationStatus=="pending"?"待店內確認":order.Status=="confirmed"?"已成立":"已提交，等待指名確認";
             deliveries.Add(new(user.Id,new(order.Id,champagne?"收到香檳塔點餐訂單":"收到點餐訂單",$"訂單 {order.OrderNumber} · {text}",mode,chosen?.SoundId,isBroadcast,
@@ -116,10 +119,23 @@ public sealed class MenuNotifications(AppDbContext db, IAppClock clock)
         var deliveries=JsonSerializer.Deserialize<PlannedDelivery[]>(row.PayloadJson,MenuPolicies.Json)!;
         foreach(var delivery in deliveries)
         {
+            var user=await connection.QuerySingleOrDefaultAsync<UserRow>(new CommandDefinition("SELECT ID AS Id,STAFF_MEMBER_ID AS StaffId FROM ADMIN_USERS WHERE ID=@Id AND IS_ACTIVE=TRUE;",new{Id=delivery.AccountId},tx,cancellationToken:ct));
+            if(user is null) continue;
+            var latest=await connection.QueryAsync<SettingsRow>(new CommandDefinition("SELECT OWNER_KEY AS OwnerKey,REVISION AS Revision,RULES_JSON AS RulesJson FROM NOTIFICATION_SETTINGS WHERE OWNER_KEY IN @Owners;",new{Owners=new[]{"broadcast","staff:"+user.StaffId}},tx,cancellationToken:ct));
+            var matches=latest.SelectMany(setting=>MenuPolicies.Read<MenuNotificationRule[]>(setting.RulesJson)
+                .Where(rule=>rule.IsEnabled&&delivery.Content.MatchedRules.Contains($"{(setting.OwnerKey=="broadcast"?"broadcast":"personal")}:{rule.Id}:{setting.Revision}"))
+                .Select(rule=>(Rule:rule,Broadcast:setting.OwnerKey=="broadcast"))).ToArray();
+            if(matches.Length==0) continue;
+            var broadcasts=matches.Where(x=>x.Broadcast).OrderByDescending(x=>x.Rule.RuleType=="champagne_order_received").ThenBy(x=>x.Rule.Id,StringComparer.Ordinal).ToArray();
+            var content=delivery.Content with {
+                IsBroadcast=broadcasts.Length>0,
+                PopupMode=broadcasts.Length>0?"banner":matches.Any(x=>x.Rule.PopupMode=="sticky")?"sticky":matches.Any(x=>x.Rule.PopupMode=="toast")?"toast":"none",
+                SoundId=broadcasts.Length>0?broadcasts[0].Rule.SoundId:matches.FirstOrDefault(x=>x.Rule.SoundId is not null).Rule?.SoundId
+            };
             // Canceled orders remain history, but are never presented as actionable new work.
             var active=await connection.ExecuteScalarAsync<bool>(new CommandDefinition("SELECT COUNT(*)>0 FROM ORDERS WHERE ID=@Id AND ORDER_STATUS NOT IN ('cancelled','canceled','expired');",new{Id=delivery.Content.OrderId},tx,cancellationToken:ct));
             await connection.ExecuteAsync(new CommandDefinition("INSERT IGNORE INTO NOTIFICATION_DELIVERIES (ID,SOURCE_KEY,RECIPIENT_ACCOUNT_ID,PAYLOAD_JSON,CREATED_AT,EXPIRES_AT) VALUES (@Id,@Source,@Account,@Payload,@Created,@Expires);",
-                new{Id=Guid.NewGuid().ToString(),Source=row.SourceKey,Account=delivery.AccountId,Payload=JsonSerializer.Serialize(delivery.Content,MenuPolicies.Json),Created=row.CreatedAt,Expires=active?row.CreatedAt.AddMinutes(15):clock.LocalDateTime},tx,cancellationToken:ct));
+                new{Id=Guid.NewGuid().ToString(),Source=row.SourceKey,Account=delivery.AccountId,Payload=JsonSerializer.Serialize(content,MenuPolicies.Json),Created=row.CreatedAt,Expires=active?row.CreatedAt.AddMinutes(15):clock.LocalDateTime},tx,cancellationToken:ct));
         }
         await connection.ExecuteAsync(new CommandDefinition("UPDATE NOTIFICATION_OUTBOX SET PROCESSED_AT=@Now WHERE ID=@Id;",new{Now=clock.LocalDateTime,row.Id},tx,cancellationToken:ct));
         await tx.CommitAsync(ct);
@@ -129,6 +145,8 @@ public sealed class MenuNotifications(AppDbContext db, IAppClock clock)
     {
         await using var connection=await db.CreateOpenConnectionAsync(ct);
         var args=new{Account=Account(user),Since=clock.LocalDateTime.AddDays(-30),Now=clock.LocalDateTime};
+        if(!await connection.ExecuteScalarAsync<bool>(new CommandDefinition("SELECT COUNT(*)>0 FROM ADMIN_USERS WHERE ID=@Account AND IS_ACTIVE=TRUE;",args,cancellationToken:ct))) throw new UnauthorizedAccessException();
+        await connection.ExecuteAsync(new CommandDefinition("UPDATE NOTIFICATION_DELIVERIES D LEFT JOIN ORDERS O ON O.ID=JSON_UNQUOTE(JSON_EXTRACT(D.PAYLOAD_JSON,'$.orderId')) SET D.EXPIRES_AT=@Now WHERE D.RECIPIENT_ACCOUNT_ID=@Account AND D.EXPIRES_AT>@Now AND (O.ID IS NULL OR O.ORDER_STATUS IN ('cancelled','canceled','expired','completed'));",args,cancellationToken:ct));
         var rows=await connection.QueryAsync<DeliveryRow>(new CommandDefinition("SELECT ID AS Id,PAYLOAD_JSON AS PayloadJson,CREATED_AT AS CreatedAt,EXPIRES_AT AS ExpiresAt,READ_AT AS ReadAt FROM NOTIFICATION_DELIVERIES WHERE RECIPIENT_ACCOUNT_ID=@Account AND CREATED_AT>=@Since ORDER BY CREATED_AT DESC,ID DESC LIMIT 100;",args,cancellationToken:ct));
         var count=await connection.ExecuteScalarAsync<int>(new CommandDefinition("SELECT COUNT(*) FROM NOTIFICATION_DELIVERIES WHERE RECIPIENT_ACCOUNT_ID=@Account AND CREATED_AT>=@Since AND EXPIRES_AT>@Now AND READ_AT IS NULL;",args,cancellationToken:ct));
         DateTimeOffset Time(DateTime x)=>new(x,TimeSpan.FromHours(8));
@@ -153,7 +171,7 @@ public sealed class MenuNotificationWorker(IServiceScopeFactory scopes,ILogger<M
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if(!config.GetValue<bool>("Notifications:Enabled")) return;
-        using var timer=new PeriodicTimer(TimeSpan.FromSeconds(15));
+        using var timer=new PeriodicTimer(TimeSpan.FromSeconds(5));
         while(await timer.WaitForNextTickAsync(stoppingToken))
         {
             try { using var scope=scopes.CreateScope(); var service=scope.ServiceProvider.GetRequiredService<MenuNotifications>(); for(var i=0;i<100&&await service.DispatchOneAsync(stoppingToken);i++){} }

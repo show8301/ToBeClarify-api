@@ -65,6 +65,8 @@ public sealed class NotificationSounds(AppDbContext db,IConfiguration config,IAp
             await tx.CommitAsync(ct);
             return new(id,name.Trim(),system?systemCode:null,(int)Math.Ceiling(duration*1000));
         }
+        catch(MySqlException ex) when(ex.Number==1062)
+        {if(File.Exists(final))File.Delete(final);throw new ConflictException("系統音效代碼已存在，請使用其他代碼。","NOTIFICATION_SOUND_DUPLICATED");}
         catch {if(File.Exists(final))File.Delete(final);throw;}
         finally {if(File.Exists(temporary))File.Delete(temporary);}
     }
