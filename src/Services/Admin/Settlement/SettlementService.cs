@@ -25,9 +25,11 @@ public sealed class SettlementService : ISettlementService
     public async Task<SettlementOverviewDto> GetOverviewAsync(DateOnly businessDate, int sessionNo,
         CancellationToken cancellationToken)
     {
+        ValidateDate(businessDate);
+        if (sessionNo < 1) throw new BusinessException("營業時段必須大於零。", "SETTLEMENT_SESSION_INVALID");
+        // Reading an unsaved date returns a preview; only write operations create a run.
         var run = await _repository.GetRunAsync(businessDate, sessionNo, cancellationToken)
-            ?? await _repository.GetOrCreateRunAsync(businessDate, sessionNo, "normal", null,
-                "system", _clock.LocalDateTime, cancellationToken);
+            ?? new SettlementRunRow { BusinessDate = businessDate.ToDateTime(TimeOnly.MinValue), SessionNo = sessionNo };
         var rule = await GetRuleForRunAsync(run, businessDate, cancellationToken);
         var source = await _repository.GetSourceDataAsync(run.Id, businessDate, cancellationToken);
         if (run.Status == "finalized" && source.Results.Count > 0)
@@ -77,6 +79,10 @@ public sealed class SettlementService : ISettlementService
     {
         ValidateDate(request.BusinessDate);
         var dayType = request.DayType is "event" ? "event" : "normal";
+        ValidateInputs(request);
+        if (!await _repository.StaffMembersExistAsync(
+            request.StaffInputs.Select(input => input.StaffId.Trim()).Distinct(StringComparer.Ordinal).ToArray(), cancellationToken))
+            throw new BusinessException("結算人員不存在，請重新載入員工清單。", "SETTLEMENT_STAFF_NOT_FOUND");
         var run = await _repository.GetRunAsync(request.BusinessDate, request.SessionNo, cancellationToken);
         var rule = run is null
             ? await _repository.GetEffectiveRuleAsync(dayType, request.BusinessDate, cancellationToken)
@@ -86,7 +92,6 @@ public sealed class SettlementService : ISettlementService
         run ??= await _repository.GetOrCreateRunAsync(request.BusinessDate, request.SessionNo, dayType, rule.Id,
             ActorId(actor), _clock.LocalDateTime, cancellationToken);
         EnsureEditable(run);
-        ValidateInputs(request);
         await _repository.SaveInputsAsync(run.Id, new SaveInputsData
         {
             PublicTipAmount = request.PublicTipAmount,
@@ -165,6 +170,8 @@ public sealed class SettlementService : ISettlementService
         var actorStaffId = actor.FindFirstValue(AdminAuthConstants.StaffMemberIdClaimType);
         if (actorRole == AdminRole.Clerk && !string.Equals(actorStaffId, request.StaffId.Trim(), StringComparison.Ordinal))
             throw new UnauthorizedException();
+        if (!await _repository.StaffMembersExistAsync([request.StaffId.Trim()], cancellationToken))
+            throw new BusinessException("補打卡人員不存在，請重新載入員工清單。", "SETTLEMENT_STAFF_NOT_FOUND");
         var dayType = request.DayType is "normal" ? "normal" : "event";
         var rule = await _repository.GetEffectiveRuleAsync(dayType, request.BusinessDate, cancellationToken)
             ?? throw new BusinessException("找不到該營業日生效的結算規則。", "SETTLEMENT_RULE_NOT_FOUND");
