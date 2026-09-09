@@ -2,7 +2,7 @@
 
 > 目的：把 `STAFF-NOTIFICATION-FEATURE.md` 第 9.2 節的驗收案例、migration、環境依賴與回退邊界集中記錄。
 >
-> 目前狀態：程式與文件完成；`20260909_04`–`20260909_09` 已套用正式 MariaDB，尚未完成部署、正式音效交付或人工驗收。此文件的「程式路徑已核對」不等於線上功能通過。
+> 目前狀態：程式與文件完成；`20260909_04`–`20260909_09` 已套用正式 MariaDB，API production 與 Web dev 已完成部署；仍待正式音效、通知環境設定與人工驗收。此文件的「程式路徑已核對」不等於線上功能通過。
 
 ## 1. 發布前外部前置
 
@@ -12,8 +12,8 @@
 | `Notifications:Enabled` | 待環境確認 | 未啟用時 capabilities 應回報 disabled，不可宣稱通知可用 |
 | FFprobe／FFmpeg | 待環境確認 | `Notifications:FFprobePath`／`FFmpegPath`；無法解析時保留上傳停用狀態 |
 | 三個 system sound | 待資產交付 | `order_chime`、`time_reminder`、`store_broadcast` 的實際檔案、MIME、備份與可播放性 |
-| Web dev 發布 | 尚未授權 | 必須先推 `dev`，等待使用者確認 `www-dev.marchgroup.net` |
-| API 發布 | 尚未授權 | 僅 build 不代表已部署；production 需另行明確授權 |
+| Web dev 發布 | 已完成 | `ec0931494e976bf36a86352298f2a8db9f4b1c0f`；IIS deployment 與 `www-dev.marchgroup.net/api/health` HTTP 200 |
+| API 發布 | 已完成 | `579d566e1c47efe9f48ec2381a3b2c1c9f41e813`；IIS deployment success，`/api/client/menu` HTTP 200／`contractVersion=2` |
 
 ## 2. 18 條驗收案例追蹤
 
@@ -54,4 +54,4 @@
 - Web 型別：`node node_modules/typescript/bin/tsc --noEmit`。
 - Web build：`node node_modules/vinext/dist/cli.js build`。
 - 靜態檢查：API／Web `git diff --check`。
-- 本次未執行：自動化測試、API／SSE 實連線、瀏覽器操作、部署；本次已完成資料庫唯讀核對與 04–09 migration apply。
+- 本次未執行：自動化測試、API／SSE 實連線、瀏覽器操作、Web production promotion；本次已完成資料庫唯讀核對、04–09 migration apply、API production 與 Web dev deployment。

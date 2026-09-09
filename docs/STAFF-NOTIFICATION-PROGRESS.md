@@ -4,18 +4,18 @@
 >
 > 主規格：[v2.0](STAFF-NOTIFICATION-FEATURE.md)
 >
-> 初始化：2026-09-09。S00–S14 程式與文件工作已完成；目前仍待資料庫套用、環境設定、真實音檔、人工驗收與發布授權。
+> 初始化：2026-09-09。S00–S14 程式與文件已完成；正式 MariaDB migration、API production 與 Web dev 已發布，仍待真實音檔、環境 flag 與人工驗收。
 
 ## 目前接續點
 
-- 下一段：無；等待人工驗收、環境套 migration 與發布授權。
+- 下一段：無；等待真實音檔／環境設定與人工驗收。
 - 目前進行中：無。
-- 下一個最小動作：依 `STAFF-NOTIFICATION-RELEASE-CHECKLIST.md` 逐項確認環境、migration、音檔與 18 條驗收案例；收到授權後才進行 dev 發布。
+- 下一個最小動作：依 `STAFF-NOTIFICATION-RELEASE-CHECKLIST.md` 確認通知 flag、FFprobe／FFmpeg、三個系統音效與 18 條人工驗收案例；Web production 仍須等待 dev 驗證確認後依規則另行 promotion。
 - 本次已完成：S11–S14 一次整合完成 change log／cursor／分頁／SSE、前端增量同步與跨分頁接手、音效軟刪除生命週期，以及發布前文件與驗收清單。
 - 程式開發：S00 前已有兩種通知基礎；本計畫已完成 S01 API／Web 相容層、S02 規則版本契約、S03 可靠派送、S04 指名提交來源、S05 指名時間排程、S06 營業時間排程、S07 個人設定 UI、S08 廣播設定／手動發送、S09 確認／撤回／緊急互動、S10 重複／堆積 episode、S11 cursor／分頁／SSE、S12 前端同步／呈現、S13 音效生命週期與 S14 整合文件。
 - 背景工作：無本計畫啟動的背景開發工作。
-- 發布狀態：本地程式尚未推送；正式 MariaDB 已依序套用 `20260909_04`–`20260909_09`，API／Web 發布仍在本次流程中。
-- 本次驗證：S11–S14 完成後重新執行 API `dotnet build --no-restore`、Web `node node_modules/typescript/bin/tsc --noEmit`、Web `node node_modules/vinext/dist/cli.js build` 與 API／Web `git diff --check`；結果記錄於最新交接紀錄。未執行自動化測試、資料庫查詢、migration 套用或部署。
+- 發布狀態：正式 MariaDB 已依序套用 `20260909_04`–`20260909_09`；API production `579d566` 與 Web dev `ec09314` 已由 CI／IIS 成功發布；Web production 尚未 promotion。
+- 本次驗證：API／Web build、Web lint、IIS deploy job 與公開 HTTP 可用性均完成；Web dev health 回報 SHA `ec09314`，API `/api/client/menu` 回 HTTP 200／`contractVersion=2`。未執行自動化測試、瀏覽器流程或 Web production promotion。
 
 ## 階段追蹤
 
@@ -99,16 +99,16 @@
   - S12：前端依 capabilities 使用 SSE v2，重連帶 cursor、失敗降級 polling；以 Web Locks 或 BroadcastChannel peer election 選單主分頁，跨分頁同步 inbox／presentation 去重與 critical 恢復；首次 baseline 不重播歷史，收件匣支援「載入更多」，401／登出清理串流、播放與狀態。
   - S13：音效加入 `IS_ACTIVE`／`VERSION`／`SHA256_HASH`／更新與刪除時間；個人音效可由擁有者軟刪除，基礎三種 system code 不可刪，開發者可管理額外 system code；刪除前檢查設定、待發 payload、有效 delivery 引用，新增 DELETE API 與 UI。
   - S14：更新使用者說明，建立 18 條驗收與發布回退 checklist，清楚區分程式完成、migration／音檔／FFmpeg／flag／部署與人工驗收狀態。
-- 未完成／未宣稱：三個真實系統音檔尚未上傳或核對，API／Web 發布與線上人工驗收尚在本次流程中；未執行自動化測試、實際 SSE／瀏覽器人工驗收。
+- 未完成／未宣稱：三個真實系統音檔尚未上傳或核對，通知 flag／FFprobe／FFmpeg 尚未取得線上設定證據；未執行自動化測試、實際 SSE／瀏覽器人工驗收，Web production 依規則等待 dev 確認。
 - 契約／設計決策：change sequence 由 singleton row lock 在寫入交易內配置，避免以裸自增值推論提交順序；歷史 pageToken 與增量 cursor 分離；SSE 仍保留 inbox 事件供舊客戶端；音效刪除只做 soft delete，不刪除檔案或資料列；未來發現 cursor 過期一律 snapshot resync，不回播歷史音效。
 - migration 檔案及套用狀態：`20260909_04_notification_outbox_reliability.sql` 至 `20260909_09_notification_sound_lifecycle.sql` 已於 2026-09-10 依序套用至正式 MariaDB `tobeclarify`；帳號權限與 schema 唯讀核對成功。套用過程將 06／07 新表調整為既有通知表使用的 `utf8mb4_general_ci`，未使用破壞性 SQL。
 - 已執行驗證：API `dotnet build ToBeClarify.Api.csproj --no-restore` 成功（0 警告、0 錯誤）；Web `node node_modules/typescript/bin/tsc --noEmit` 成功；Web `node node_modules/vinext/dist/cli.js build` 成功；API／Web `git diff --check` 成功（僅既有 LF／CRLF 轉換警告，無 whitespace error）。
 - 未執行驗收與原因：依專案規則只做 build／typecheck／靜態檢查；未執行自動化測試、DB 查詢、migration apply、API 實連線、SSE 實連線、瀏覽器／Playwright 或部署。
 - 已知風險：`NOTIFICATIONS:Enabled` 預設與 FFprobe／FFmpeg 外部設定仍需環境確認；實際三個音檔、備份與 MIME／解析結果尚未核對；若 migration 尚未套用，SSE v2、音效清單新欄位與刪除生命週期不可啟用；Web 變更仍需依 Web dev promotion flow 發布並取得使用者運作確認。
 - 背景工作：無。
-- 下一個最小動作：提交並推送 API `main`、Web `dev`，等待 CI／IIS 狀態與 health check；再依音效與人工驗收結果確認通知功能。
-- 下一段前置是否滿足：S11–S14 程式與 DB schema 前置已滿足；真實音檔、FFmpeg／flag、部署與人工驗收仍待本次流程完成。
-- 發布／外部寫入：已使用核准的 DB 帳號套用 04–09 新增式 migration；Git push／CI 部署尚未完成。
+- 下一個最小動作：完成音效／flag／FFmpeg 的環境確認與人工驗收；若 Web dev 驗證通過，再依規則建立 `dev` → `main` promotion。
+- 下一段前置是否滿足：S11–S14 程式、DB schema、API production 與 Web dev deployment 已滿足；真實音檔、線上通知設定與人工驗收仍待完成。
+- 發布／外部寫入：已使用核准的 DB 帳號套用 04–09 migration；已推送 Web `dev`、API `main` 並由 CI／IIS 完成發布與 health check。
 
 ### S00｜2026-09-09｜已完成
 
