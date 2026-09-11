@@ -12,8 +12,8 @@
 | `Notifications:Enabled` | 待環境確認 | 未啟用時 capabilities 應回報 disabled，不可宣稱通知可用 |
 | .NET MP3 parser | 已完成 | API 內建 MPEG Layer III frame parser；不需 FFprobe／FFmpeg 環境設定 |
 | 三個 system sound | 待資產交付 | `order_chime`、`time_reminder`、`store_broadcast` 的實際檔案、MIME、備份與可播放性 |
-| Web dev 發布 | 已完成 | `ec0931494e976bf36a86352298f2a8db9f4b1c0f`；IIS deployment 與 `www-dev.marchgroup.net/api/health` HTTP 200 |
-| API 發布 | 已完成 | `579d566e1c47efe9f48ec2381a3b2c1c9f41e813`；IIS deployment success，`/api/client/menu` HTTP 200／`contractVersion=2` |
+| Web dev 發布 | 已完成 | `5d5ed19ebb78bce2cf2601b679bde6f31038ebad`；workflow `34637174343` 成功，`www-dev.marchgroup.net/api/health` HTTP 200 且回報相同 deployment SHA |
+| API 發布 | 已完成 | `78adcee4fd6acd9e75f24832c96fd2a013c522f2`；workflow `34637250687` 成功，`/api/client/menu` HTTP 200／`contractVersion=2` |
 
 ## 2. 18 條驗收案例追蹤
 
