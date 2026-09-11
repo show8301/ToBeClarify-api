@@ -23,7 +23,7 @@ public sealed class MenuNotificationsController(MenuNotifications notifications,
         supportsSourcePayload=true,
         supportsCursor=true,
         supportsAcknowledgement=true,
-        soundUploadConfigured=!string.IsNullOrWhiteSpace(config["Notifications:FFprobePath"])&&!string.IsNullOrWhiteSpace(config["Notifications:FFmpegPath"])
+        soundUploadConfigured=true
     });
     [HttpGet("stream")]
     public async Task Stream(CancellationToken ct)

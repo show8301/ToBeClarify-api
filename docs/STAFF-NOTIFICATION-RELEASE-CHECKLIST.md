@@ -2,7 +2,7 @@
 
 > 目的：把 `STAFF-NOTIFICATION-FEATURE.md` 第 9.2 節的驗收案例、migration、環境依賴與回退邊界集中記錄。
 >
-> 目前狀態：程式與文件完成；`20260909_04`–`20260909_09` 已套用正式 MariaDB，API production 與 Web dev 已完成部署；仍待正式音效、通知環境設定與人工驗收。此文件的「程式路徑已核對」不等於線上功能通過。
+> 目前狀態：程式與文件完成；`20260909_04`–`20260909_09` 已套用正式 MariaDB，API production 與 Web production 已完成部署；MP3 parser 已改為 API 內建，仍待正式音效、通知環境設定與人工驗收。此文件的「程式路徑已核對」不等於線上功能通過。
 
 ## 1. 發布前外部前置
 
@@ -10,7 +10,7 @@
 |---|---|---|
 | API migration 依序套用 | 已完成 | `20260909_04`–`20260909_09` 已依序套用；06／07 新通知表使用既有 `utf8mb4_general_ci`，不可由應用啟動自動套用 |
 | `Notifications:Enabled` | 待環境確認 | 未啟用時 capabilities 應回報 disabled，不可宣稱通知可用 |
-| FFprobe／FFmpeg | 待環境確認 | `Notifications:FFprobePath`／`FFmpegPath`；無法解析時保留上傳停用狀態 |
+| .NET MP3 parser | 已完成 | API 內建 MPEG Layer III frame parser；不需 FFprobe／FFmpeg 環境設定 |
 | 三個 system sound | 待資產交付 | `order_chime`、`time_reminder`、`store_broadcast` 的實際檔案、MIME、備份與可播放性 |
 | Web dev 發布 | 已完成 | `ec0931494e976bf36a86352298f2a8db9f4b1c0f`；IIS deployment 與 `www-dev.marchgroup.net/api/health` HTTP 200 |
 | API 發布 | 已完成 | `579d566e1c47efe9f48ec2381a3b2c1c9f41e813`；IIS deployment success，`/api/client/menu` HTTP 200／`contractVersion=2` |

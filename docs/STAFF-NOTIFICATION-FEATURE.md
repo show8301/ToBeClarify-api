@@ -1,6 +1,6 @@
 # 店員提醒通知功能開發規格
 
-> 版本：2.0｜修訂日期：2026-09-09
+> 版本：2.0｜修訂日期：2026-09-12
 >
 > 狀態：以新版菜單與通知程式為基礎的增量開發規格。下述「已實作」表示本機程式存在，不代表 migration 已套用或正式環境已啟用。
 >
@@ -18,7 +18,7 @@
 - 店內廣播採置頂橫幅；只有緊急廣播可使用需確認的 Modal。
 - 規則用「＋新增規則」建立；同類型可新增不同參數，N = 0 有效。
 - 系統提供開發者上傳的三種預設音效；音效與規則為多對一關係，可持續增加音效種類，不能硬編碼為三個選項。
-- 音效首選 Ogg/Opus，支援 MP3；最長 5 秒、最多 1 MiB（1,048,576 bytes，介面可標示約 1 MB）。
+- 音效只接受 MP3；最長 5 秒、最多 1 MiB（1,048,576 bytes，介面可標示約 1 MB）。
 - 音效檔放媒體儲存，資料庫存 metadata／sound id，沿用獨立音效表；SSE 即時通知，增量輪詢備援。
 - 本期不提供 Web Push、關閉網站後的背景送達、Email、手機簡訊或外接廣播硬體控制。
 
@@ -34,7 +34,7 @@
 - API HEAD：9b70c4c64ab9e0aa2c73ad6e3bb51b6dfff412ae。
 - Web 已改為 app／features／lib 架構，舊 src/admin 路徑不再適用。
 - 本次為程式與 migration 靜態檢視，未執行測試、未操作線上訂單、未確認正式環境設定或音檔。
-- appsettings.json 中 Notifications:Enabled 預設 false，FFprobePath／FFmpegPath 為空；環境覆寫值及三個真實音檔是否已上傳，須於發布時確認。
+- appsettings.json 中 Notifications:Enabled 預設 false；音效上傳使用內建 .NET MP3 parser，不再需要 FFprobePath／FFmpegPath。三個真實音檔是否已上傳，仍須於發布時確認。
 
 程式查核入口：[通知服務](../src/Services/Menu/MenuNotifications.cs)、[音效服務](../src/Services/Menu/NotificationSounds.cs)、[通知 API](../src/Controllers/Admin/MenuNotificationsController.cs)、[訂單快照](../src/Services/Menu/MenuQuoteService.cs)、[套餐分類合併](../src/Services/Client/Menu/MenuService.cs)、[前端通知中心](../../ToBeClarify-web/features/admin/notifications/AdminNotificationCenter.tsx)、[菜單分類編輯](../../ToBeClarify-web/features/admin/menu/MenuPolicyEditors.tsx)。
 
@@ -83,7 +83,7 @@
 | 收件匣 | 帳號收件，近 30 天最新 100 筆，15 分鐘有效期、已讀、取消／完成失效 | 分頁、增量 cursor、撤回、已知道 |
 | SSE | 每 5 秒送整份 inbox，約 50 秒結束連線；Web catch-all proxy 特別轉送串流 | 可重播 id/cursor、穩定重連與增量同步 |
 | 前端備援 | SSE error 後轉 15 秒整份輪詢；Web Locks／BroadcastChannel 主分頁、localStorage 去重 | 單一訂閱主頁、接手補漏、快取清理 |
-| 音效 | 系統／個人上傳、授權讀取、FFprobe 檢查與 FFmpeg 解碼、5 秒／1 MiB | 刪除／引用保護、三個系統音檔交付確認 |
+| 音效 | 系統／個人上傳、授權讀取、.NET MP3 frame parser、5 秒／1 MiB | 刪除／引用保護、三個系統音檔交付確認 |
 | 廣播 | 所有有效後台帳號，包含無 staff 管理者；系統音效、廣播合併優先 | 受眾選擇、優先級、定時、手動、緊急確認、撤回 |
 
 已存在的 API／SQL 保持相容，不能把以上項目重新建成第二套服務。
@@ -99,7 +99,7 @@
 7. **首次登入跳過所有既有廣播**：目前 baseline 全標記已呈現；加入 requiresAck 後，尚有效未確認廣播必須另行恢復。
 8. **最新 100 筆不是完整歷史**：未讀總數可能大於清單，既有按鈕是「目前清單全部已讀」。保留文案，另增歷史分頁與真正截至序號全部已讀。
 9. **音效 metadata 不走 MEDIA_ASSETS**：目前獨立 NOTIFICATION_SOUNDS.FILE_NAME，受保護 content endpoint；保留已完成隔離，不強迫遷移到圖片媒體表。
-10. **主題程式已實作不等於已啟用**：capabilities、worker feature flag、解析器配置、DB migration、真實音檔各自核對；不能只以有 UI 判定可送達。
+10. **主題程式已實作不等於已啟用**：capabilities、worker feature flag、DB migration、真實音檔各自核對；不能只以有 UI 判定可送達。
 
 ## 3. 設定位置與互動
 
@@ -238,9 +238,9 @@
 
 ### 6.2 驗證與存取
 
-- 允許 .ogg（Opus）與 .mp3；0 < duration ≤ 5 秒、size ≤ 1,048,576 bytes。44.1／48 kHz 與單聲道為建議值，非額外拒收條件。
-- 前端先預覽，後端必須用受限資源的音訊解析器驗證實際 codec、可解碼性與時長；MIME／副檔名／簽章不足以證明 5 秒限制。
-- 沿用已實作的 FFprobe／FFmpeg 檢查，不新增另一套解析器，不轉檔；不得信任客戶端送出的 duration。限制解析時間／記憶體、上傳速率，拒絕損壞與偽裝內容。
+- 只允許 .mp3；0 < duration ≤ 5 秒、size ≤ 1,048,576 bytes。44.1／48 kHz 與單聲道為建議值，非額外拒收條件。
+- 前端先預覽，後端使用內建 .NET MP3 frame parser 驗證實際 MPEG Layer III frame 序列與時長；MIME／副檔名／簽章不足以證明 5 秒限制。
+- 不轉檔、不信任客戶端送出的 duration；parser 只讀取已限制大小的暫存檔，拒絕損壞、截斷、錯誤 frame header 與偽裝內容。
 - 檔案先暫存驗證後再原子公開；metadata 寫入失敗可回收未引用檔案，避免儲存半成品。
 - 音效讀取使用已授權的 /api/admin/notifications/sounds/{id}/content；個人音效只有擁有者可讀，系統音效供有效後台帳號讀。
 - 維持專用 sound endpoint 授權與獨立目錄，驗證匿名 media endpoint 無法藉音效 id 或路徑讀取。現有音效不登錄 MEDIA_ASSETS，不為本功能擴大匿名媒體權限。
@@ -406,7 +406,7 @@ legacy message 的 orderId 對既有訂單保持字串；新增來源可為 null
 2. 第 2.1 節 self/staff/all 已確認；第 2.2 節香檳塔已有正式來源。依現有 policy／訂單快照直接沿用，不再將這兩項列為待確認，也不另造分類。
 3. 依第 9.1 節批次擴充，保持現有原子儲存、音效庫、訂單 outbox、SSE／輪詢可用；本規格的目標行為不能誤標為已完成。
 4. 加入廣播與管理權限、撤回／確認、多分頁去重及可恢復的背景任務，按第 9 節驗收並同步使用者說明。
-5. 發布前確認三個音檔、香檳塔分類、後端解析器與 SSE 的 IIS 設定均就緒；未交付項目必須列為未完成。
+5. 發布前確認三個音檔、香檳塔分類、SSE 的 IIS 設定均就緒；MP3 parser 隨 API 程式交付，未交付項目必須列為未完成。
 6. Web 程式／設定一律先推 dev 到 www-dev.marchgroup.net；等使用者確認運作正確後，才以 dev → main 手動 PR 推廣相同已驗證 commit。禁止 feature branch 直接進 main。
 7. API dev 僅建置、沒有測試主機；API main 才部署正式。不得將「Web dev 發布」解讀成 API 正式發布授權，需規劃相容 migration／feature flag 與正式發布時點。
 8. migration 不由應用啟動自動套用；直接 SQL 帳號不可 DELETE／DROP／TRUNCATE。功能可用 flag 回退，保留通知歷史及音效資料。

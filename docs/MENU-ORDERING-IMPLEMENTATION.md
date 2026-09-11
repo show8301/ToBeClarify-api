@@ -41,7 +41,7 @@
 - `/admin/notifications` 提供規則、收件匣、已讀、音效啟用及桌面通知權限。音效必須由使用者點擊後啟用，無法繞過瀏覽器播放限制。
 - 使用 SSE；Web 同源代理對通知串流停用緩衝。串流失敗後以 15 秒輪詢維持同步，worker 每 5 秒處理 outbox。背景分頁／裝置節流仍會影響實際延遲。
 - 同帳號分頁使用 Web Locks／BroadcastChannel 選出提示與播音分頁，並記錄展示去重。初次登入載入收件匣，不重播離線期間音效。
-- 音檔驗證：MP3 或 Ogg/Opus、最多 1 MiB、最多五秒、單一可解碼音軌。個人音效依 StaffMemberId 授權，廣播只能選系統音效。
+- 音檔驗證：只接受 MP3，最多 1 MiB、最多五秒，使用 API 內建 .NET MP3 frame parser。個人音效依 StaffMemberId 授權，廣播只能選系統音效。
 - 音效使用獨立私人檔案與 metadata 表，透過驗證身分的端點讀取；不會進入公開圖片清理機制。規則啟用前檢查音效權限及檔案存在。
 
 ## 與通知 v1.1 的範圍關係
@@ -60,7 +60,7 @@
    - `db/migrations/20260909_03_notification_sounds.sql`
 4. migration 使用既有 MariaDB 相容語法，不自動回填商品分類或改寫既有金額。不要在新 API 執行期間移除欄位／資料表。本次已確認正式資料庫為 MariaDB 11.2.2，三份 migration 均成功套用。
 5. 部署新 API 時先保留 `Notifications:Enabled=false` 與 `Menu:RequireQuote=false`。這段相容期仍接受舊正式 Web 的無報價提交，新 Web 則一律走報價確認；避免分開發布造成舊站無法點餐。先確認 v2 菜單／報價契約與資料，再準備音效。
-6. 設定 `Notifications:FFprobePath`、`Notifications:FFmpegPath` 為受維護的音訊工具絕對路徑；API 身分需要執行權限，並可寫入 `Media:RootPath/notification-sounds`。
+6. 確認 API 身分可寫入 `Media:RootPath/notification-sounds`；音效格式與時長由內建 .NET MP3 parser 驗證，不需另行安裝音訊工具。
 7. 開發者在音效庫上傳系統音效（建議代碼 `order_chime`、`time_reminder`、`store_broadcast`）；管理者標記真實商品並儲存廣播規則後，再開啟 `Notifications:Enabled=true`、重新啟動 API。
 8. Web 仍只透過 `dev → main` 手動 PR 晉升。API 沒有測試環境，本次依使用者要求直接由已建置成功的 `dev` 推送 `main`；新版 Web 正式上線後，把 API `Menu:RequireQuote=true`，結束相容期並啟用無報價提交的強制拒絕；回退到舊 Web 前須先關閉此開關。
 

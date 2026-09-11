@@ -4,18 +4,18 @@
 >
 > 主規格：[v2.0](STAFF-NOTIFICATION-FEATURE.md)
 >
-> 初始化：2026-09-09。S00–S14 程式與文件已完成；正式 MariaDB migration、API production 與 Web dev 已發布，仍待真實音檔、環境 flag 與人工驗收。
+> 初始化：2026-09-09。S00–S14 程式與文件已完成；正式 MariaDB migration、API production 與 Web production 已發布。2026-09-12 已完成音效上傳改為 MP3 only + API 內建 .NET parser 的程式變更，尚待發布與人工驗收。
 
 ## 目前接續點
 
 - 下一段：無；等待真實音檔／環境設定與人工驗收。
 - 目前進行中：無。
-- 下一個最小動作：依 `STAFF-NOTIFICATION-RELEASE-CHECKLIST.md` 確認通知 flag、FFprobe／FFmpeg、三個系統音效與 18 條人工驗收案例；Web production 仍須等待 dev 驗證確認後依規則另行 promotion。
+- 下一個最小動作：依 Web `dev` → 使用者確認 → `main`、API `main` 發布流程發布 MP3 only + .NET parser 版本，再確認通知 flag、三個系統音效、Media 寫入權限與 18 條人工驗收案例。
 - 本次已完成：S11–S14 一次整合完成 change log／cursor／分頁／SSE、前端增量同步與跨分頁接手、音效軟刪除生命週期，以及發布前文件與驗收清單。
 - 程式開發：S00 前已有兩種通知基礎；本計畫已完成 S01 API／Web 相容層、S02 規則版本契約、S03 可靠派送、S04 指名提交來源、S05 指名時間排程、S06 營業時間排程、S07 個人設定 UI、S08 廣播設定／手動發送、S09 確認／撤回／緊急互動、S10 重複／堆積 episode、S11 cursor／分頁／SSE、S12 前端同步／呈現、S13 音效生命週期與 S14 整合文件。
 - 背景工作：無本計畫啟動的背景開發工作。
-- 發布狀態：正式 MariaDB 已依序套用 `20260909_04`–`20260909_09`；API production `579d566` 與 Web dev `ec09314` 已由 CI／IIS 成功發布；Web production 尚未 promotion。
-- 本次驗證：API／Web build、Web lint、IIS deploy job 與公開 HTTP 可用性均完成；Web dev health 回報 SHA `ec09314`，API `/api/client/menu` 回 HTTP 200／`contractVersion=2`。未執行自動化測試、瀏覽器流程或 Web production promotion。
+- 發布狀態：正式 MariaDB 已依序套用 `20260909_04`–`20260909_09`；API production 與 Web production 已由 CI／IIS 成功發布；本次 MP3 parser 變更尚未發布。
+- 本次驗證：API build 成功（0 警告／0 錯誤）；Web typecheck、Vinext production build 與 ESLint 成功（0 errors、25 個既有 img warnings）；API／Web diff check 成功。未執行自動化測試、瀏覽器流程或本次變更的 production promotion。
 
 ## 階段追蹤
 
@@ -45,7 +45,7 @@
 - rule schemaVersion／ruleRevision／fingerprint：S01 起使用 `schemaVersion: 2`；每條 rule 的 `ruleRevision` 由伺服器維護，新增／條件變更遞增；`fingerprint` 為規則型別加正規化 target、targetStaffId、offsetMinutes、觸發條件的穩定雜湊，忽略 popup／sound／sort。個人與 broadcast owner 共用格式。
 - payloadVersion／sourceType／action：新 payload 使用 `payloadVersion: 2`。`sourceType` 固定初始值：`order_submitted`、`nomination_submitted`、`nomination_schedule`、`business_schedule`、`broadcast_manual`、`broadcast_emergency`、`order_backlog`。`action` 固定初始值：`view_order`、`view_nomination`、`open_notifications`、`acknowledge`；未知 action 必須降級為收件匣而非建立錯誤連結。既有 order payload 保留 `orderId`。
 - 舊 payload 預設／舊客戶端寫入限制：沒有版本／來源欄位的既有 payload 預設 `payloadVersion: 1`、`sourceType: order_submitted`、`action: view_order`。舊 DTO 可以讀舊資料；當設定含 schemaVersion 2 欄位時，舊客戶端不得覆蓋整組設定，API 回傳 `NOTIFICATION_SCHEMA_UPGRADE_REQUIRED`。
-- capabilities 開放條件：保留既有 `enabled`、`ruleTypes`、`delivery`、`soundUploadConfigured`；新增能力只在對應 API／migration／背景 worker／Web renderer 均已完成後列入 scope-specific capabilities。S07 已列入 `personalRuleTypes` 八類個人規則；S09 完成 delivery ack、逐來源撤回、receipts 與緊急 renderer，API 宣告 `supportsAcknowledgement=true`，但啟用前仍須先套用 `20260909_06_notification_acknowledgement.sql`。環境 `Notifications:Enabled=false`、FFprobePath／FFmpegPath 空值，不能宣稱服務已啟用或音效上傳已可用。
+- capabilities 開放條件：保留既有 `enabled`、`ruleTypes`、`delivery`、`soundUploadConfigured`；新增能力只在對應 API／migration／背景 worker／Web renderer 均已完成後列入 scope-specific capabilities。S07 已列入 `personalRuleTypes` 八類個人規則；S09 完成 delivery ack、逐來源撤回、receipts 與緊急 renderer，API 宣告 `supportsAcknowledgement=true`，但啟用前仍須先套用 `20260909_06_notification_acknowledgement.sql`。環境 `Notifications:Enabled=false` 時不能宣稱通知服務已啟用；內建 MP3 parser 不再有 FFprobePath／FFmpegPath 設定依賴。
 - 通知寫入集中入口與後續 change log 整合點：訂單使用 `OrderingRepository.CreateOrderAsync` 交易內呼叫 `MenuNotifications.EnqueueAsync`；所有 delivery、read、ack、withdraw、expire 變更集中在 MenuNotifications service 的 repository 寫入入口，S11 再接 `NOTIFICATION_CHANGES`。不可在前端補寫通知或另建平行 outbox。
 - 時間 schedule identity／revision 與 dueAt：S05/S06 使用 `scheduleKey = {sourceType}:{entityId}:{ruleId}:{ruleRevision}:{offsetMinutes}:{scheduleRevision}:{dueAtUtc}`；`scheduleRevision` 由指名／營業時段變更遞增，`dueAt` 由 API `IAppClock` 與 Asia/Taipei 業務日期計算。舊提交事件不建立 schedule。
 - migration 依賴、編號與相容策略：沿用已存在的 `20260909_02_menu_notifications.sql`、`20260909_03_notification_sounds.sql`，不修改已發布 migration；S03 使用 `20260909_04_notification_outbox_reliability.sql`，S05 使用 `20260909_05_notification_schedules.sql`，S09 使用 `20260909_06_notification_acknowledgement.sql`，S10 使用新增的 `20260909_07_notification_repeats.sql`；後續 S11 使用 `20260909_08_notification_changes.sql`、S13 使用 `20260909_09_notification_sound_lifecycle.sql`。migration 不由啟動自動套用，先 API 相容、再 Web 能力協商。
@@ -55,7 +55,7 @@
 | 項目 | 狀態 | 證據／下一步 |
 |---|---|---|
 | 三個真實系統音檔 | 未查核 | 原始碼只有 system code／上傳機制，S13／S14 確認檔案與備份 |
-| FFprobe／FFmpeg 環境配置 | 未配置於目前 appsettings.json | `Notifications:FFprobePath`／`FFmpegPath` 目前為空；S13／S14 依環境覆寫與部署設定確認 |
+| .NET MP3 parser | 已完成於程式 | API 內建 MPEG Layer III frame parser；不需 FFprobe／FFmpeg 環境設定，發布後以實際 MP3 上傳確認 |
 | DB migration 套用 | 本計畫未套用 | 記錄每份檔案與目標環境 |
 | API／Web 相容版本 | S00 已定義相容方向 | API 先保留 legacy payload／inbox；Web 依 capabilities 啟用 v2，S01 與 S11 落地 |
 | Web dev 發布 | 未執行 | 依使用者發布指示 |
@@ -66,6 +66,21 @@
 ## 每段交接紀錄
 
 新增紀錄時保留歷史；最新精確停點同時更新上方「目前接續點」。
+
+### MP3 only + .NET parser｜2026-09-12｜程式完成，待發布
+
+- 狀態：API／Web 程式與文件變更完成，尚未發布。
+- 本段目標：移除音效上傳對 FFprobe／FFmpeg 的依賴，改為只接受 MP3，使用 API 內建 .NET MPEG Layer III frame parser 檢查 frame 序列與時長。
+- API／Web：API `codex/menu-ordering-integration`；Web `codex/menu-ordering-ready`。
+- 本段檔案變更：API 新增 `src/Services/Menu/Mp3AudioParser.cs`；更新 `src/Services/Menu/NotificationSounds.cs`、`src/Controllers/Admin/MenuNotificationsController.cs`、`appsettings.json` 與通知規格／使用說明／發布文件；Web 更新 `features/admin/notifications/AdminNotificationCenter.tsx`。
+- 已完成：上傳副檔名與 MIME 流程改為 MP3；大小上限維持 1 MiB；parser 讀取 ID3 metadata、MPEG Layer III frame header、bitrate／sample rate／padding 與總時長；拒絕無 frame、截斷 frame、錯誤 frame header、非法尾段與超過 5 秒音效；音效輸出仍使用 `audio/mpeg`。
+- 設計決策：保留 `soundUploadConfigured` capability 欄位以維持 Web contract，但內建 parser 不需環境設定；`Notifications:Enabled` 仍只控制通知 worker／SSE，不控制 parser 可用性。
+- migration／DB：無新增或修改 migration；不需 DB 異動。
+- 已執行驗證：API `dotnet build ToBeClarify.Api.csproj --no-restore` 成功（0 警告／0 錯誤）；Web `node node_modules/typescript/bin/tsc --noEmit`、`node node_modules/vinext/dist/cli.js build`、`node node_modules/eslint/bin/eslint.js . --ignore-pattern dist --ignore-pattern .next` 成功；Web lint 只有既有 25 個 `<img>` warnings；API／Web `git diff --check` 成功。
+- 未執行：自動化測試、瀏覽器操作、正式音檔上傳、正式 API／Web deployment；依部署規則 Web 需先 dev，API 需由 main 發布。
+- 已知限制：內建 parser 驗證 MP3 frame 結構與時長，不是完整聲學解碼器；正式驗收仍需以實際 MP3 上傳、試聽及權限／Media 目錄寫入確認。
+- 下一個最小動作：提交 API／Web 變更，先發布 Web dev 與 API production，完成一個 MP3 上傳人工驗收後再依規則推廣 Web main。
+- 發布／外部寫入：本段尚未 push、未套 migration、未部署、未上傳音效。
 
 ### 範本：Sxx｜日期｜完成或中斷
 

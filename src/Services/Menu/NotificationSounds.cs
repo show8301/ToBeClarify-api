@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using System.Globalization;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -62,31 +60,27 @@ public sealed class NotificationSounds(AppDbContext db,IConfiguration config,IAp
         if(!system&&string.IsNullOrWhiteSpace(staff)) throw new BusinessException("需要關聯店員身分。","NOTIFICATION_STAFF_REQUIRED");
         if(string.IsNullOrWhiteSpace(name)||name.Trim().Length>80 || (system&&!System.Text.RegularExpressions.Regex.IsMatch(systemCode!,"^[a-z][a-z0-9_]{0,59}$"))) throw new BusinessException("音效名稱或系統代碼無效。","NOTIFICATION_SOUND_INVALID");
         var extension=Path.GetExtension(file.FileName).ToLowerInvariant();
-        if(file.Length is <=0 or >1048576 || extension is not (".ogg" or ".mp3")) throw new BusinessException("請上傳最多 1 MiB 的 Ogg/Opus 或 MP3。","NOTIFICATION_SOUND_INVALID");
-        var probe=config["Notifications:FFprobePath"];var decoder=config["Notifications:FFmpegPath"];
-        if(string.IsNullOrWhiteSpace(probe)||string.IsNullOrWhiteSpace(decoder)) throw new BusinessException("音效解析器尚未配置，請由開發者設定 FFprobePath 與 FFmpegPath。","NOTIFICATION_DECODER_REQUIRED");
+        if(file.Length is <=0 or >1048576 || extension!=".mp3") throw new BusinessException("請上傳最多 1 MiB 的 MP3 音效。","NOTIFICATION_SOUND_INVALID");
         Directory.CreateDirectory(Root);
         var id=Guid.NewGuid().ToString();var temporary=Path.Combine(Root,id+".upload");var final=Path.Combine(Root,id+extension);
         try
         {
             await using(var output=new FileStream(temporary,FileMode.CreateNew,FileAccess.Write,FileShare.None))
             {await file.CopyToAsync(output,ct);if(output.Length>1048576)throw new BusinessException("音效超過大小限制。","NOTIFICATION_SOUND_INVALID");}
-            var json=await RunAsync(probe,["-v","error","-show_entries","format=duration:stream=codec_name,codec_type","-of","json",temporary],ct);
-            using var document=JsonDocument.Parse(json);
-            var streams=document.RootElement.GetProperty("streams").EnumerateArray().ToArray();
-            var duration=double.Parse(document.RootElement.GetProperty("format").GetProperty("duration").GetString()!,CultureInfo.InvariantCulture);
-            if(streams.Length!=1||streams[0].GetProperty("codec_type").GetString()!="audio"||streams[0].GetProperty("codec_name").GetString()!=(extension==".ogg"?"opus":"mp3")||!double.IsFinite(duration)||duration<=0||duration>5)
-                throw new BusinessException("音效必須可解碼且不超過 5 秒（Ogg/Opus 或 MP3）。","NOTIFICATION_SOUND_INVALID");
-            await RunAsync(decoder,["-v","error","-xerror","-threads","1","-i",temporary,"-t","6","-f","null","-"],ct);
+            Mp3AudioInfo info;
+            try { info=Mp3AudioParser.Parse(await File.ReadAllBytesAsync(temporary,ct)); }
+            catch(InvalidDataException) { throw new BusinessException("音效必須是可辨識且不超過 5 秒的 MP3。","NOTIFICATION_SOUND_INVALID"); }
+            if(info.DurationSeconds>5)
+                throw new BusinessException("音效必須是可辨識且不超過 5 秒的 MP3。","NOTIFICATION_SOUND_INVALID");
             File.Move(temporary,final);
             await using var hashStream=File.OpenRead(final);
             var hash=Convert.ToHexString(await SHA256.HashDataAsync(hashStream,ct));
             await using var connection=await db.CreateOpenConnectionAsync(ct);
             await using var tx=await connection.BeginTransactionAsync(ct);
-            await connection.ExecuteAsync(new CommandDefinition("INSERT INTO NOTIFICATION_SOUNDS (ID,OWNER_STAFF_ID,SYSTEM_CODE,NAME,FILE_NAME,MIME_TYPE,DURATION_MS,IS_ACTIVE,VERSION,SHA256_HASH,CREATED_AT,UPDATED_AT) VALUES (@Id,@Staff,@Code,@Name,@File,@Mime,@Duration,TRUE,1,@Hash,@Now,@Now);",new{Id=id,Staff=system?null:staff,Code=system?systemCode:null,Name=name.Trim(),File=id+extension,Mime=extension==".ogg"?"audio/ogg":"audio/mpeg",Duration=(int)Math.Ceiling(duration*1000),Hash=hash,Now=clock.LocalDateTime},tx,cancellationToken:ct));
+            await connection.ExecuteAsync(new CommandDefinition("INSERT INTO NOTIFICATION_SOUNDS (ID,OWNER_STAFF_ID,SYSTEM_CODE,NAME,FILE_NAME,MIME_TYPE,DURATION_MS,IS_ACTIVE,VERSION,SHA256_HASH,CREATED_AT,UPDATED_AT) VALUES (@Id,@Staff,@Code,@Name,@File,@Mime,@Duration,TRUE,1,@Hash,@Now,@Now);",new{Id=id,Staff=system?null:staff,Code=system?systemCode:null,Name=name.Trim(),File=id+extension,Mime="audio/mpeg",Duration=(int)Math.Ceiling(info.DurationSeconds*1000),Hash=hash,Now=clock.LocalDateTime},tx,cancellationToken:ct));
             await connection.ExecuteAsync(new CommandDefinition("INSERT INTO NOTIFICATION_AUDIT (ID,ACTOR_ACCOUNT_ID,ACTION_TYPE,ENTITY_ID,CREATED_AT) VALUES (@Id,@Actor,'sound.uploaded',@Sound,@Now);",new{Id=Guid.NewGuid().ToString(),Actor=MenuNotifications.Account(user),Sound=id,Now=clock.LocalDateTime},tx,cancellationToken:ct));
             await tx.CommitAsync(ct);
-            return new(id,name.Trim(),system?systemCode:null,(int)Math.Ceiling(duration*1000))
+            return new(id,name.Trim(),system?systemCode:null,(int)Math.Ceiling(info.DurationSeconds*1000))
             {
                 IsActive=true,Version=1,CanDelete=!system||(role=="developer"&&!BaseSystemCodes.Contains(systemCode!)),
             };
@@ -141,20 +135,6 @@ public sealed class NotificationSounds(AppDbContext db,IConfiguration config,IAp
     }
     private static NotificationSoundDto ToDto(SoundRow row,bool canDelete)
         => new(row.Id,row.Name,row.SystemCode,row.DurationMs){IsActive=row.IsActive,Version=row.Version,CanDelete=canDelete};
-    private static async Task<string> RunAsync(string executable,string[] arguments,CancellationToken ct)
-    {
-        using var process=new Process{StartInfo=new ProcessStartInfo(executable){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true}};
-        foreach(var argument in arguments)process.StartInfo.ArgumentList.Add(argument);
-        using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct);timeout.CancelAfter(TimeSpan.FromSeconds(10));
-        try
-        {
-            process.Start();var output=process.StandardOutput.ReadToEndAsync(timeout.Token);var error=process.StandardError.ReadToEndAsync(timeout.Token);
-            await process.WaitForExitAsync(timeout.Token);await error;
-            if(process.ExitCode!=0)throw new BusinessException("無法解析或解碼音效。","NOTIFICATION_SOUND_INVALID");
-            return await output;
-        }
-        catch(OperationCanceledException){if(!process.HasExited)process.Kill(true);throw;}
-    }
     private sealed class SoundFile{public string FileName{get;set;}="";public string Mime{get;set;}="";}
     private sealed class SoundRow
     {
