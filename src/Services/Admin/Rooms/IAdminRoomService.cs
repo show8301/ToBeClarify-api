@@ -8,6 +8,7 @@ public interface IAdminRoomService
     Task<IReadOnlyList<AdminRoomDto>> GetRoomsAsync(CancellationToken cancellationToken);
     Task<AdminRoomDto> SaveRoomAsync(string? id, SaveRoomRequest request, ClaimsPrincipal actor,
         CancellationToken cancellationToken);
+    Task DeleteRoomAsync(string id, ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<RoomProfitSharingSettingsDto> GetProfitSharingSettingsAsync(CancellationToken cancellationToken);
     Task<RoomProfitSharingSettingsDto> SaveProfitSharingSettingsAsync(SaveRoomProfitSharingSettingsRequest request,
         ClaimsPrincipal actor, CancellationToken cancellationToken);
