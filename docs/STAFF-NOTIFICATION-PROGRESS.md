@@ -4,18 +4,18 @@
 >
 > 主規格：[v2.0](STAFF-NOTIFICATION-FEATURE.md)
 >
-> 初始化：2026-09-09。S00–S14 程式與文件已完成；正式 MariaDB migration、API production 與 Web production 已發布。2026-09-12 已完成音效上傳改為 MP3 only + API 內建 .NET parser，並將通知中心新版 UI 發布至 Web dev；目前等待使用者測試確認後再推廣 Web main。
+> 初始化：2026-09-09。S00–S14 程式與文件已完成；正式 MariaDB migration、API production 與 Web production 已發布。2026-09-12 已完成音效上傳改為 MP3 only + API 內建 .NET parser，通知中心新版 UI 已先發布 Web dev 並由使用者確認畫面，之後已依規則推廣 Web main production。
 
 ## 目前接續點
 
-- 下一段：無；等待使用者確認 Web dev 的通知中心畫面與操作。
+- 下一段：無；S00–S14 與通知中心新版 UI 的 Web production 發布已完成。
 - 目前進行中：無。
-- 下一個最小動作：完成參考圖新版通知中心的桌面／手機／深色模式人工畫面驗收；使用者確認後依 `dev` → `main` 手動 PR 推廣 Web。API MP3 parser 已發布至 production。
-- 本次已完成：依「通知中心修改.png」改為本裝置狀態列、規則清單／單一編輯區、音效庫表格與上傳視窗；保留八種個人規則、廣播權限、草稿／版本衝突與既有 MP3 only 契約，並完成 Web dev／API production 發布。
+- 下一個最小動作：依發布檢查表進行正式環境的通知、音效資產與人工操作驗收；尚未驗收的項目仍不可宣稱線上功能全部通過。
+- 本次已完成：依「通知中心修改.png」改為本裝置狀態列、規則清單／單一編輯區、音效庫表格與上傳視窗；保留八種個人規則、廣播權限、草稿／版本衝突與既有 MP3 only 契約，並完成 Web dev 確認、Web production／API production 發布。
 - 程式開發：S00 前已有兩種通知基礎；本計畫已完成 S01 API／Web 相容層、S02 規則版本契約、S03 可靠派送、S04 指名提交來源、S05 指名時間排程、S06 營業時間排程、S07 個人設定 UI、S08 廣播設定／手動發送、S09 確認／撤回／緊急互動、S10 重複／堆積 episode、S11 cursor／分頁／SSE、S12 前端同步／呈現、S13 音效生命週期與 S14 整合文件。
 - 背景工作：無本計畫啟動的背景開發工作。
-- 發布狀態：正式 MariaDB 已依序套用 `20260909_04`–`20260909_09`；API `78adcee` 已由 CI／IIS 發布至 production；Web `5d5ed19` 已由 CI／IIS 發布至 `www-dev.marchgroup.net`；Web main 尚未推廣。
-- 本次驗證：Web typecheck、Vinext production build 與 ESLint 成功（0 errors、25 個既有 img warnings）；Web dev workflow `34637174343`、API production workflow `34637250687` 成功；Web `/api/health` HTTP 200 且 deploymentSha 為 `5d5ed19`，API `/api/client/menu` HTTP 200，受保護的通知 capabilities 未登入回 HTTP 401。未執行自動化測試或瀏覽器流程；畫面／互動人工驗收仍待使用者確認。
+- 發布狀態：正式 MariaDB 已依序套用 `20260909_04`–`20260909_09`；API `1f3debb` 已由 CI／IIS 發布至 production；Web `5d5ed19` 已由 CI／IIS 發布至 `www-dev.marchgroup.net`，並透過 PR `#49` 合併為 Web main `c7785d3b`，由 workflow `34639969994` 發布至 production。
+- 本次驗證：Web typecheck、Vinext production build 與 ESLint 成功（0 errors、25 個既有 img warnings）；Web dev workflow `34637174343`、Web production workflow `34639969994`、API production workflow `34637807750` 成功；正式 Web `/api/health` HTTP 200 且 deploymentSha 為 `c7785d3b0051396ea3327d8f4293f38928645ebf`，`/admin/notifications` HTTP 200，API `/api/client/menu` HTTP 200，受保護的通知 capabilities 未登入回 HTTP 401。未執行自動化測試或瀏覽器流程；未完成項目仍依發布檢查表進行人工驗收。
 
 ## 階段追蹤
 

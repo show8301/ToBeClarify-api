@@ -13,7 +13,8 @@
 | .NET MP3 parser | 已完成 | API 內建 MPEG Layer III frame parser；不需 FFprobe／FFmpeg 環境設定 |
 | 三個 system sound | 待資產交付 | `order_chime`、`time_reminder`、`store_broadcast` 的實際檔案、MIME、備份與可播放性 |
 | Web dev 發布 | 已完成 | `5d5ed19ebb78bce2cf2601b679bde6f31038ebad`；workflow `34637174343` 成功，`www-dev.marchgroup.net/api/health` HTTP 200 且回報相同 deployment SHA |
-| API 發布 | 已完成 | `78adcee4fd6acd9e75f24832c96fd2a013c522f2`；workflow `34637250687` 成功，`/api/client/menu` HTTP 200／`contractVersion=2` |
+| API 發布 | 已完成 | `1f3debb4cd3720f117a9d891cbb09d78083c2ddd`；workflow `34637807750` 成功，`/api/client/menu` HTTP 200／`contractVersion=2` |
+| Web production 發布 | 已完成 | PR `#49`（`dev → main`）由 `nick800608` 合併；main `c7785d3b0051396ea3327d8f4293f38928645ebf`；workflow `34639969994` 成功，正式 `/api/health` HTTP 200 且 deployment SHA 相同 |
 
 ## 2. 18 條驗收案例追蹤
 
@@ -54,4 +55,4 @@
 - Web 型別：`node node_modules/typescript/bin/tsc --noEmit`。
 - Web build：`node node_modules/vinext/dist/cli.js build`。
 - 靜態檢查：API／Web `git diff --check`。
-- 本次未執行：自動化測試、API／SSE 實連線、瀏覽器操作、Web production promotion；本次已完成資料庫唯讀核對、04–09 migration apply、API production 與 Web dev deployment。
+- 本次未執行：自動化測試、API／SSE 實連線、瀏覽器操作；本次已完成資料庫唯讀核對、04–09 migration apply、API production、Web dev deployment 與 Web production promotion。
