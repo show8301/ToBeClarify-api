@@ -10,12 +10,12 @@
 
 - 下一段：無；等待真實音檔／環境設定與人工驗收。
 - 目前進行中：無。
-- 下一個最小動作：依 Web `dev` → 使用者確認 → `main`、API `main` 發布流程發布 MP3 only + .NET parser 版本，再確認通知 flag、三個系統音效、Media 寫入權限與 18 條人工驗收案例。
-- 本次已完成：S11–S14 一次整合完成 change log／cursor／分頁／SSE、前端增量同步與跨分頁接手、音效軟刪除生命週期，以及發布前文件與驗收清單。
+- 下一個最小動作：完成參考圖新版通知中心的桌面／手機／深色模式人工畫面驗收，再依 Web `dev` → 使用者確認 → `main`、API `main` 發布流程發布。MP3 only parser 與新版 UI 皆尚未發布。
+- 本次已完成：依「通知中心修改.png」改為本裝置狀態列、規則清單／單一編輯區、音效庫表格與上傳視窗；保留八種個人規則、廣播權限、草稿／版本衝突與既有 MP3 only 契約。
 - 程式開發：S00 前已有兩種通知基礎；本計畫已完成 S01 API／Web 相容層、S02 規則版本契約、S03 可靠派送、S04 指名提交來源、S05 指名時間排程、S06 營業時間排程、S07 個人設定 UI、S08 廣播設定／手動發送、S09 確認／撤回／緊急互動、S10 重複／堆積 episode、S11 cursor／分頁／SSE、S12 前端同步／呈現、S13 音效生命週期與 S14 整合文件。
 - 背景工作：無本計畫啟動的背景開發工作。
 - 發布狀態：正式 MariaDB 已依序套用 `20260909_04`–`20260909_09`；API production 與 Web production 已由 CI／IIS 成功發布；本次 MP3 parser 變更尚未發布。
-- 本次驗證：API build 成功（0 警告／0 錯誤）；Web typecheck、Vinext production build 與 ESLint 成功（0 errors、25 個既有 img warnings）；API／Web diff check 成功。未執行自動化測試、瀏覽器流程或本次變更的 production promotion。
+- 本次驗證：Web typecheck、Vinext production build、ESLint 成功（0 errors、25 個既有 img warnings）；修改的通知元件 lint 無警告。未執行自動化測試或部署；本機畫面預覽遭 computer-use 工具中止（無法可靠判定瀏覽器網址），未完成畫面／互動驗收。前一段 API parser build 已成功，本次未改 API 執行程式。
 
 ## 階段追蹤
 
@@ -66,6 +66,19 @@
 ## 每段交接紀錄
 
 新增紀錄時保留歷史；最新精確停點同時更新上方「目前接續點」。
+
+### 通知中心參考圖改版｜2026-09-12｜程式完成，待畫面驗收／發布
+
+- Web 本地提交：`5d5ed19`（基於 MP3-only UI 提交 `cab73dd`）；API parser 前置提交為 `8077cb6`。此改版提交只包含前端及樣式。
+- 依使用者提供的「通知中心修改.png」重組通知中心頁面；側邊導覽沿用共用後台，不新增圖片中的示意規則或變更通知業務定義。
+- Web 新增 `NotificationWorkspace.tsx`、`NotificationSoundLibrary.tsx` 與 `styles/admin/layers/70-notifications.css`；更新 `AdminNotificationCenter.tsx` 與 styles 入口。API 僅更新本進度檔及使用說明，無 DB 異動。
+- 左側：規則名稱／條件搜尋、啟用狀態篩選、類型新增選單、目前規則選取、啟用開關、20 條容量限制（新增與複製都受限）。
+- 右側：單一規則編輯，保留 popup／sound／target／N／broadcast audience／重複／堆積欄位；複製、移除、個人規則排序、放棄與整組儲存。切換規則保留草稿，移除最後一條後仍可儲存；儲存中禁止欄位修改，409 保留草稿。
+- 音效庫：搜尋、播放／停止、mm:ss 時長、更多操作、依 canDelete 授權刪除；上傳收進共用可及性 dialog，MP3／1 MiB 前端檢查，5 秒由 API 驗證。系統代碼欄位僅 developer 顯示。
+- 樣式：依圖採淺紫藍色調與卡片雙欄；1100px 以下改單欄、600px 以下調整操作列；具深色模式、鍵盤焦點及 reduced-motion 樣式。
+- 驗證：Web typecheck／production build／完整 lint 通過（25 個既有 img warnings）；未執行自動化測試。準備本機記憶體示範資料頁，但 computer-use 因無法辨識瀏覽器網址而中止，未取得頁面截圖／互動證據；示範 server 已停止。
+- 尚待人工驗收：桌面／手機／深色模式，新增與複製選取、搜尋篩選、刪除最後一條後儲存、409 草稿保留、上傳對話框與音效播放狀態。
+- 未 push／部署／上傳音效／異動線上設定。後續先 Web dev，再由使用者確認後開 `dev → main` PR。
 
 ### MP3 only + .NET parser｜2026-09-12｜程式完成，待發布
 
