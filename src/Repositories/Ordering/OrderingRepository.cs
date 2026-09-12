@@ -96,6 +96,9 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
     public Task<OrderSessionRow?> GetSessionByTokenHashAsync(string tokenHash, CancellationToken cancellationToken)
         => GetSessionAsync("S.`ACCESS_TOKEN_HASH` = @Value", tokenHash, cancellationToken);
 
+    public Task<OrderSessionRow?> GetSessionByShortCodeHashAsync(string shortCodeHash, CancellationToken cancellationToken)
+        => GetSessionAsync("S.`SHORT_CODE_HASH` = @Value", shortCodeHash, cancellationToken);
+
     public async Task<OrderSessionRow?> GetSessionByGameIdAsync(string gameId, DateOnly businessDate, CancellationToken cancellationToken)
     {
         const string sql = $"""
@@ -117,10 +120,10 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
     {
         const string sql = """
             INSERT INTO `CUSTOMER_ORDER_SESSIONS`
-                (`ID`, `GAME_ID`, `CUSTOMER_NAME`, `BUSINESS_DATE`, `ACCESS_TOKEN_HASH`, `RECOVERY_CODE_HASH`,
+                (`ID`, `GAME_ID`, `CUSTOMER_NAME`, `BUSINESS_DATE`, `ACCESS_TOKEN_HASH`, `SHORT_CODE_HASH`, `RECOVERY_CODE_HASH`,
                  `MAX_NOMINATED_STAFF`, `PREPAID_MEAL_CREDIT`, `REMAINING_MEAL_CREDIT`, `SESSION_STATUS`,
                  `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
-            VALUES (@Id, @GameId, @CustomerName, @BusinessDate, @AccessTokenHash, @RecoveryCodeHash,
+            VALUES (@Id, @GameId, @CustomerName, @BusinessDate, @AccessTokenHash, @ShortCodeHash, @RecoveryCodeHash,
                     @MaxNominatedStaff, @PrepaidMealCredit, @RemainingMealCredit, 'active',
                     @CreatedAt, @ActorId, @CreatedAt, @ActorId);
             INSERT INTO `ORDER_AUDIT_LOG`
@@ -131,23 +134,29 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
         await connection.ExecuteAsync(new CommandDefinition(sql, new
         {
             session.Id, session.GameId, session.CustomerName,
-            BusinessDate = session.BusinessDate.Date, session.AccessTokenHash, session.RecoveryCodeHash,
+            BusinessDate = session.BusinessDate.Date, session.AccessTokenHash, session.ShortCodeHash, session.RecoveryCodeHash,
             session.MaxNominatedStaff, session.PrepaidMealCredit, session.RemainingMealCredit,
             session.CreatedAt, ActorId = actorId, AuditId = NewId(), AfterJson = JsonSerializer.Serialize(session)
         }, cancellationToken: cancellationToken));
     }
 
-    public async Task RotateSessionCredentialsAsync(string sessionId, string tokenHash, string? recoveryCodeHash, DateTime now, CancellationToken cancellationToken)
+    public async Task RotateSessionCredentialsAsync(string sessionId, string tokenHash, string? recoveryCodeHash,
+        string? shortCodeHash, DateTime now, CancellationToken cancellationToken)
     {
         const string sql = """
             UPDATE `CUSTOMER_ORDER_SESSIONS`
             SET `ACCESS_TOKEN_HASH` = @TokenHash,
                 `RECOVERY_CODE_HASH` = COALESCE(@RecoveryCodeHash, `RECOVERY_CODE_HASH`),
+                `SHORT_CODE_HASH` = COALESCE(@ShortCodeHash, `SHORT_CODE_HASH`),
                 `LAST_ACCESSED_AT` = @Now, `UPDATED_AT` = @Now
             WHERE `ID` = @SessionId;
             """;
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
-        await connection.ExecuteAsync(new CommandDefinition(sql, new { SessionId = sessionId, TokenHash = tokenHash, RecoveryCodeHash = recoveryCodeHash, Now = now },
+        await connection.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            SessionId = sessionId, TokenHash = tokenHash, RecoveryCodeHash = recoveryCodeHash,
+            ShortCodeHash = shortCodeHash, Now = now
+        },
             cancellationToken: cancellationToken));
     }
 
@@ -1913,7 +1922,8 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
     private const string SessionColumns = """
         S.`ID` AS Id, S.`GAME_ID` AS GameId, S.`CUSTOMER_NAME` AS CustomerName,
         S.`BUSINESS_DATE` AS BusinessDate, S.`ACCESS_TOKEN_HASH` AS AccessTokenHash,
-        S.`RECOVERY_CODE_HASH` AS RecoveryCodeHash, S.`MAX_NOMINATED_STAFF` AS MaxNominatedStaff,
+        S.`SHORT_CODE_HASH` AS ShortCodeHash, S.`RECOVERY_CODE_HASH` AS RecoveryCodeHash,
+        S.`MAX_NOMINATED_STAFF` AS MaxNominatedStaff,
         S.`PREPAID_MEAL_CREDIT` AS PrepaidMealCredit, S.`REMAINING_MEAL_CREDIT` AS RemainingMealCredit,
         S.`SESSION_STATUS` AS SessionStatus, S.`LAST_ACCESSED_AT` AS LastAccessedAt, S.`CREATED_AT` AS CreatedAt
         """;

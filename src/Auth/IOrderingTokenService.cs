@@ -5,6 +5,7 @@ public sealed record OrderTokenPayload(string SessionId, string GameId, DateOnly
 public interface IOrderingTokenService
 {
     string Create(string sessionId, string gameId, DateOnly businessDate);
+    string CreateShortCode();
     OrderTokenPayload Read(string token);
     string Hash(string value);
     string CreateRecoveryCode();

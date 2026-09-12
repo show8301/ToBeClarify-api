@@ -62,6 +62,7 @@ public class OrderSessionRow
     public string CustomerName { get; set; } = string.Empty;
     public DateTime BusinessDate { get; set; }
     public string AccessTokenHash { get; set; } = string.Empty;
+    public string? ShortCodeHash { get; set; }
     public string RecoveryCodeHash { get; set; } = string.Empty;
     public int MaxNominatedStaff { get; set; }
     public int PrepaidMealCredit { get; set; }
