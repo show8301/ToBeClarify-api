@@ -1,63 +1,31 @@
-using ToBeClarify.Api.Exceptions;
-using ToBeClarify.Api.Infrastructure;
 using ToBeClarify.Api.Models.Dtos;
-using ToBeClarify.Api.Repositories.Client.Guestbook;
 using ToBeClarify.Api.Services.Client.Shared;
 
 namespace ToBeClarify.Api.Services.Client.Guestbook;
 
-public sealed class GuestbookService : IGuestbookService
+// Compatibility facade: legacy write routes use the same validation and cooldown.
+public sealed class GuestbookService(GuestbookBoardService board, ToBeClarify.Api.Repositories.Client.Guestbook.IGuestbookRepository repository) : IGuestbookService
 {
-    private readonly IGuestbookRepository _repository;
-    private readonly IAppClock _clock;
-
-    public GuestbookService(IGuestbookRepository repository, IAppClock clock)
+    public async Task<GuestbookPageDto> GetGuestbookCommentsAsync(int page, int pageSize, CancellationToken ct)
     {
-        _repository = repository;
-        _clock = clock;
+        if (page < 1 || page > 100000 || pageSize is < 1 or > 100)
+            throw new ToBeClarify.Api.Exceptions.BusinessException("分頁參數不正確。", "INVALID_PAGE");
+        var count = await repository.CountGuestbookCommentsAsync(ct);
+        var rows = await repository.GetGuestbookCommentsAsync((page - 1) * pageSize, pageSize, ct);
+        var replies = await repository.GetGuestbookRepliesAsync(rows.Select(row => row.Id).ToArray(), ct);
+        return new(page, pageSize, count, ClientContentMappings.MapGuestbookComments(rows, replies));
     }
-
-    public async Task<GuestbookPageDto> GetGuestbookCommentsAsync(int page, int pageSize, CancellationToken cancellationToken)
+    public async Task<GuestbookCommentDto> GetGuestbookCommentAsync(string id, CancellationToken ct)
     {
-        if (page < 1) throw new BusinessException("Page must be at least 1.", "INVALID_PAGE");
-        if (pageSize is < 1 or > 100) throw new BusinessException("Page size must be between 1 and 100.", "INVALID_PAGE_SIZE");
-        var totalTask = _repository.CountGuestbookCommentsAsync(cancellationToken);
-        var commentsTask = _repository.GetGuestbookCommentsAsync((page - 1) * pageSize, pageSize, cancellationToken);
-        await Task.WhenAll(totalTask, commentsTask);
-        var comments = await commentsTask;
-        var replies = await _repository.GetGuestbookRepliesAsync(comments.Select(row => row.Id).ToArray(), cancellationToken);
-        return new GuestbookPageDto(page, pageSize, await totalTask, ClientContentMappings.MapGuestbookComments(comments, replies));
+        var row = await repository.GetGuestbookCommentAsync(id, ct)
+            ?? throw new ToBeClarify.Api.Exceptions.NotFoundException("找不到留言。", "GUESTBOOK_NOT_FOUND");
+        var replies = await repository.GetGuestbookRepliesAsync([id], ct);
+        return ClientContentMappings.MapGuestbookComments([row], replies)[0];
     }
-
-    public async Task<GuestbookCommentDto> GetGuestbookCommentAsync(string id, CancellationToken cancellationToken)
-    {
-        var row = await _repository.GetGuestbookCommentAsync(ClientContentMappings.RequiredId(id), cancellationToken)
-            ?? throw new NotFoundException("Guestbook comment not found.", "GUESTBOOK_COMMENT_NOT_FOUND");
-        var replies = await _repository.GetGuestbookRepliesAsync([row.Id], cancellationToken);
-        return ClientContentMappings.MapGuestbookComments([row], replies).Single();
-    }
-
-    public async Task<GuestbookCommentDto> CreateGuestbookCommentAsync(CreateGuestbookCommentRequest request, CancellationToken cancellationToken)
-    {
-        var id = Guid.NewGuid().ToString();
-        var displayName = ClientContentMappings.CleanUserText(request.DisplayName, 60, "INVALID_DISPLAY_NAME");
-        var content = ClientContentMappings.CleanUserText(request.Content, 5000, "INVALID_CONTENT");
-        var userToken = ClientContentMappings.HashUserToken(ClientContentMappings.OptionalUserText(request.UserToken, 120, "INVALID_USER_TOKEN"));
-        var now = _clock.LocalDateTime;
-        await _repository.InsertGuestbookCommentAsync(id, displayName, userToken, content, now, cancellationToken);
-        return new GuestbookCommentDto(id, displayName, content, false, ClientContentMappings.ToTaiwanOffset(now), Array.Empty<GuestbookReplyDto>());
-    }
-
-    public async Task<GuestbookReplyDto> CreateGuestbookReplyAsync(string commentId, CreateGuestbookReplyRequest request, CancellationToken cancellationToken)
-    {
-        var parentId = ClientContentMappings.RequiredId(commentId);
-        var id = Guid.NewGuid().ToString();
-        var displayName = ClientContentMappings.CleanUserText(request.DisplayName, 60, "INVALID_DISPLAY_NAME");
-        var content = ClientContentMappings.CleanUserText(request.Content, 5000, "INVALID_CONTENT");
-        var userToken = ClientContentMappings.HashUserToken(ClientContentMappings.OptionalUserText(request.UserToken, 120, "INVALID_USER_TOKEN"));
-        var now = _clock.LocalDateTime;
-        var created = await _repository.InsertGuestbookReplyAsync(id, parentId, displayName, userToken, content, now, cancellationToken);
-        if (!created) throw new NotFoundException("Guestbook comment not found.", "GUESTBOOK_COMMENT_NOT_FOUND");
-        return new GuestbookReplyDto(id, displayName, content, ClientContentMappings.ToTaiwanOffset(now));
-    }
+    public async Task<GuestbookCommentDto> CreateGuestbookCommentAsync(CreateGuestbookCommentRequest request, CancellationToken ct)
+        => Map(await board.Create(null, new GuestbookWrite { DisplayName = request.DisplayName, Content = request.Content, Website = request.Website }, ct));
+    public async Task<GuestbookReplyDto> CreateGuestbookReplyAsync(string id, CreateGuestbookReplyRequest request, CancellationToken ct)
+        => MapReply(await board.Create(id, new GuestbookWrite { DisplayName = request.DisplayName, Content = request.Content, Website = request.Website }, ct));
+    private static GuestbookCommentDto Map(GuestbookMessage m) => new(m.Id, m.DisplayName, m.Content, m.IsPinned, ClientContentMappings.ToTaiwanOffset(m.CreatedAt), []);
+    private static GuestbookReplyDto MapReply(GuestbookMessage m) => new(m.Id, m.DisplayName, m.Content, ClientContentMappings.ToTaiwanOffset(m.CreatedAt));
 }
