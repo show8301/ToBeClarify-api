@@ -9,6 +9,8 @@ namespace ToBeClarify.Api.Auth;
 
 public sealed class OrderingTokenService : IOrderingTokenService
 {
+    private const string ShortCodeAlphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    private const int ShortCodeLength = 8;
     private readonly byte[] _encryptionKey;
     private readonly byte[] _hashKey;
     private readonly string _publicWebBaseUrl;
@@ -42,6 +44,14 @@ public sealed class OrderingTokenService : IOrderingTokenService
         Buffer.BlockCopy(tag, 0, packed, 13, tag.Length);
         Buffer.BlockCopy(ciphertext, 0, packed, 29, ciphertext.Length);
         return WebEncoders.Base64UrlEncode(packed);
+    }
+
+    public string CreateShortCode()
+    {
+        Span<char> code = stackalloc char[ShortCodeLength];
+        for (var index = 0; index < code.Length; index++)
+            code[index] = ShortCodeAlphabet[RandomNumberGenerator.GetInt32(ShortCodeAlphabet.Length)];
+        return new string(code);
     }
 
     public OrderTokenPayload Read(string token)

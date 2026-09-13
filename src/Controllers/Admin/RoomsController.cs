@@ -29,6 +29,15 @@ public sealed class RoomsController : ControllerBase
         string id, SaveRoomRequest request, CancellationToken cancellationToken)
         => Ok(ApiResponse<AdminRoomDto>.Ok(await _service.SaveRoomAsync(id, request, User, cancellationToken)));
 
+    [HttpDelete("rooms/{id}")]
+    [Authorize(Policy = "AdminManager")]
+    [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ApiResponse<bool>>> DeleteRoom(string id, CancellationToken cancellationToken)
+    {
+        await _service.DeleteRoomAsync(id, User, cancellationToken);
+        return Ok(ApiResponse<bool>.Ok(true));
+    }
+
     [HttpGet("payroll/room-profit-sharing")]
     [Authorize(Policy = "AdminManager")]
     public async Task<ActionResult<ApiResponse<RoomProfitSharingSettingsDto>>> GetProfitSharing(

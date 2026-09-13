@@ -96,6 +96,44 @@ public sealed class RoomAdminRepository : DapperRepositoryBase, IRoomAdminReposi
         }
     }
 
+    public async Task<bool> HasActiveRoomServiceOrdersAsync(string roomId, CancellationToken cancellationToken)
+    {
+        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        return await connection.QuerySingleAsync<bool>(new CommandDefinition("""
+            SELECT EXISTS (
+                SELECT 1
+                FROM `ROOM_SERVICE_ORDERS`
+                WHERE `ROOM_ID` = @RoomId
+                  AND `ORDER_STATUS` IN ('scheduled', 'in_service')
+            );
+            """, new { RoomId = roomId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task DeleteRoomAsync(string roomId, string actorId, DateTime now,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            await connection.ExecuteAsync(new CommandDefinition(
+                "DELETE FROM `ROOM_PHOTO_ITEMS` WHERE `ROOM_ID` = @RoomId;",
+                new { RoomId = roomId }, transaction, cancellationToken: cancellationToken));
+
+            var affected = await connection.ExecuteAsync(new CommandDefinition(
+                "DELETE FROM `ROOMS` WHERE `ID` = @RoomId;",
+                new { RoomId = roomId }, transaction, cancellationToken: cancellationToken));
+            if (affected == 0) throw new InvalidOperationException("Room not found.");
+
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
     public Task<RoomProfitSharingSettingsRow?> GetProfitSharingSettingsAsync(CancellationToken cancellationToken)
         => QuerySingleOrDefaultAsync<RoomProfitSharingSettingsRow>("""
             SELECT `ID` AS Id, `COMMON_ROOM_STAFF_PERCENTAGE` AS CommonRoomStaffPercentage,

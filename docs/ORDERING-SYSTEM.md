@@ -4,7 +4,7 @@
 
 ## Deployment order
 
-1. Apply `db/migrations/20260830_01_ordering_system.sql`, then `20260830_02_business_hours_and_order_transitions.sql`, `20260830_03_tip_presets.sql`, `20260831_01_business_day_override.sql`, `20260831_02_operational_business_periods.sql`, `20260906_01_room_service.sql`, and finally `20260906_02_customer_room_ordering.sql` to the target MySQL/MariaDB database. The room migrations are additive: the first creates the room catalogue and availability ledger, while the second links customer order items to that ledger with nullable order identifiers and lookup indexes. They do not use `DELETE`, `DROP`, or `TRUNCATE`.
+1. Apply `db/migrations/20260830_01_ordering_system.sql`, then `20260830_02_business_hours_and_order_transitions.sql`, `20260830_03_tip_presets.sql`, `20260831_01_business_day_override.sql`, `20260831_02_operational_business_periods.sql`, `20260906_01_room_service.sql`, `20260906_02_customer_room_ordering.sql`, and finally `20260912_01_ordering_short_codes.sql` to the target MySQL/MariaDB database. The room migrations are additive: the first creates the room catalogue and availability ledger, while the second links customer order items to that ledger with nullable order identifiers and lookup indexes. They do not use `DELETE`, `DROP`, or `TRUNCATE`.
 2. Set `OrderingToken__Secret` to a random secret of at least 32 characters. Keep it stable across deployments; changing it invalidates every active customer link.
 3. Set `OrderingToken__PublicWebBaseUrl` to the customer order page, for example `https://www-dev.marchgroup.net/order` while the Web is in the test environment.
 4. Merge the release into `main`. The API workflow may build `dev` and pull requests for verification, but it deploys only from `main` to the single production IIS environment using `API_DEPLOY_PATH` and `API_HEALTHCHECK_URL`. There is currently no API test-environment deployment.
@@ -17,7 +17,7 @@ The migration is deliberately not applied by application startup. This repositor
 
 All responses use the normal `ApiResponse<T>` envelope.
 
-- `POST /api/client/ordering/access` validates an encrypted order token against its session. The token proves that the customer was admitted; wall-clock schedule boundaries no longer revoke it.
+- `POST /api/client/ordering/access` validates either the encrypted order token or the short bearer code against its session. The token proves that the customer was admitted; wall-clock schedule boundaries no longer revoke it.
 - `POST /api/client/ordering/recover` rotates a token after game ID plus the six-digit staff assistance code are verified.
 - `GET /api/client/ordering/catalog` returns the menu, staff-first service catalog and current operating settings.
 - `GET /api/client/ordering/orders` returns all orders for the token's session.
@@ -29,6 +29,7 @@ All admin roles may read customer sessions and orders, create/reissue sessions, 
 
 - `/api/admin/order-sessions` creates and searches today's customer sessions.
 - `/api/admin/order-sessions/{id}/reissue` rotates the URL and six-digit assistance code.
+- New or reissued sessions return a short `/order?code=...` URL. The API stores only its hash; legacy long URLs remain valid.
 - `PUT /api/admin/order-sessions/{id}` may switch the session between `active` and `readonly`. Customer departure should use `readonly`: the link keeps order-history access but cannot submit more items until staff reopens it.
 - `/api/admin/order-sessions/{id}/orders` lists one customer's orders.
 - `POST /api/admin/business-period/open` performs the explicit “open now” action for a business date and records the projected close. Scheduled hours are used only as the initial suggestion.

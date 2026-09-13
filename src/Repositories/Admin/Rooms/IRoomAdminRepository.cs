@@ -14,6 +14,8 @@ public interface IRoomAdminRepository
         string? ownerStaffId, int segmentPrice, bool isActive, int sortOrder,
         IReadOnlyList<SaveRoomPhotoRequest> photos, string actorId, DateTime now,
         CancellationToken cancellationToken);
+    Task<bool> HasActiveRoomServiceOrdersAsync(string roomId, CancellationToken cancellationToken);
+    Task DeleteRoomAsync(string roomId, string actorId, DateTime now, CancellationToken cancellationToken);
 
     Task<RoomProfitSharingSettingsRow?> GetProfitSharingSettingsAsync(CancellationToken cancellationToken);
     Task SaveProfitSharingSettingsAsync(int commonPercentage, int dedicatedPercentage, string actorId,

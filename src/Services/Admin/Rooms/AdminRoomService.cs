@@ -15,12 +15,15 @@ public sealed class AdminRoomService : IAdminRoomService
     private readonly IRoomAdminRepository _repository;
     private readonly IAppClock _clock;
     private readonly MediaUrlService _mediaUrls;
+    private readonly AdminMediaUploadService _mediaUpload;
 
-    public AdminRoomService(IRoomAdminRepository repository, IAppClock clock, MediaUrlService mediaUrls)
+    public AdminRoomService(IRoomAdminRepository repository, IAppClock clock, MediaUrlService mediaUrls,
+        AdminMediaUploadService mediaUpload)
     {
         _repository = repository;
         _clock = clock;
         _mediaUrls = mediaUrls;
+        _mediaUpload = mediaUpload;
     }
 
     public async Task<IReadOnlyList<AdminRoomDto>> GetRoomsAsync(CancellationToken cancellationToken)
@@ -66,6 +69,35 @@ public sealed class AdminRoomService : IAdminRoomService
         var row = await _repository.GetRoomAsync(entityId, cancellationToken)
             ?? throw new NotFoundException("Room not found after saving.", "ROOM_NOT_FOUND");
         return await MapRoomAsync(row, Math.Max(1, await _repository.GetSegmentMinutesAsync(cancellationToken)), cancellationToken);
+    }
+
+    public async Task DeleteRoomAsync(string id, ClaimsPrincipal actor, CancellationToken cancellationToken)
+    {
+        EnsureManager(actor);
+        var roomId = Required(id, "ROOM_ID_REQUIRED");
+        if (await _repository.GetRoomAsync(roomId, cancellationToken) is null)
+            throw new NotFoundException("Room not found.", "ROOM_NOT_FOUND");
+        if (await _repository.HasActiveRoomServiceOrdersAsync(roomId, cancellationToken))
+            throw new ConflictException(
+                "The room has scheduled or in-service orders and cannot be deleted.",
+                "ROOM_HAS_ACTIVE_SERVICE_ORDERS");
+
+        var mediaIds = (await _repository.GetRoomPhotosAsync(roomId, cancellationToken))
+            .Select(photo => photo.MediaId)
+            .Where(mediaId => !string.IsNullOrWhiteSpace(mediaId))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        try
+        {
+            await _repository.DeleteRoomAsync(roomId, ActorId(actor), _clock.LocalDateTime, cancellationToken);
+        }
+        catch (InvalidOperationException)
+        {
+            throw new NotFoundException("Room not found.", "ROOM_NOT_FOUND");
+        }
+
+        if (mediaIds.Length > 0)
+            await _mediaUpload.CleanupUnreferencedAsync(mediaIds, actor, cancellationToken);
     }
 
     public async Task<RoomProfitSharingSettingsDto> GetProfitSharingSettingsAsync(CancellationToken cancellationToken)

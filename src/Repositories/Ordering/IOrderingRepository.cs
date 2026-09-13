@@ -24,8 +24,10 @@ public interface IOrderingRepository
     Task<OrderSessionRow?> GetSessionByIdAsync(string id, CancellationToken cancellationToken);
     Task<OrderSessionRow?> GetSessionByGameIdAsync(string gameId, DateOnly businessDate, CancellationToken cancellationToken);
     Task<OrderSessionRow?> GetSessionByTokenHashAsync(string tokenHash, CancellationToken cancellationToken);
+    Task<OrderSessionRow?> GetSessionByShortCodeHashAsync(string shortCodeHash, CancellationToken cancellationToken);
     Task CreateSessionAsync(OrderSessionRow session, string actorId, CancellationToken cancellationToken);
-    Task RotateSessionCredentialsAsync(string sessionId, string tokenHash, string? recoveryCodeHash, DateTime now, CancellationToken cancellationToken);
+    Task RotateSessionCredentialsAsync(string sessionId, string tokenHash, string? recoveryCodeHash,
+        string? shortCodeHash, DateTime now, CancellationToken cancellationToken);
     Task UpdateSessionAsync(string sessionId, string? customerName, int? maxNominatedStaff, int? remainingMealCredit,
         string? status, string actorId, string actorRole, DateTime now, CancellationToken cancellationToken);
     Task<MenuProductRow?> GetMenuProductAsync(string referenceId, string kind, CancellationToken cancellationToken);

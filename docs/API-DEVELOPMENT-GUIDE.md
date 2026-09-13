@@ -462,6 +462,7 @@ resize 使用 `ResizeMode.Max`，會維持比例，不會強制裁成指定長�
 | GET | `/api/client/rooms/status?from=...&to=...` | Anonymous | 取得啟用包廂在指定時間範圍的 `available`、`reserved` 或 `occupied` 狀態 |
 | GET | `/api/admin/rooms` | 所有後台角色 | 取得包廂完整管理資料與目前節數設定 |
 | POST/PUT | `/api/admin/rooms[/{id}]` | 所有後台角色 | 新增／更新包廂、簡介、詳細說明、照片與啟用排序；clerk 不能修改價格或歸屬 |
+| DELETE | `/api/admin/rooms/{id}` | developer / manager | 刪除包廂與照片關聯；有排程中或服務中的包廂訂單時回傳 409 `ROOM_HAS_ACTIVE_SERVICE_ORDERS`，歷史服務紀錄保留 |
 | GET/PUT | `/api/admin/payroll/room-profit-sharing` | developer / manager | 讀取／設定店內共用與店員專屬包廂的店員分潤百分比 |
 | GET | `/api/admin/room-orders?businessDate=...&status=...` | 所有後台角色 | 查詢包廂服務訂單；此服務只提供後台店員操作 |
 | POST | `/api/admin/room-orders` | 所有後台角色 | 依包廂、營業日、開始時間與節數建立店員／後台服務訂單；價格與結束時間由 API 計算，重疊時段會回傳 409 `ROOM_ORDER_CONFLICT` |
@@ -565,6 +566,8 @@ resize 使用 `ResizeMode.Max`，會維持比例，不會強制裁成指定長�
 - Push 到 `dev` 或指向 `dev` 的 pull request：僅執行 CI build，不部署；API 目前沒有獨立測試環境。
 - Push 到 `main`：完成 build 後，由 self-hosted Windows X64 runner 部署到唯一的正式 IIS 環境。
 - `workflow_dispatch`：只有從 `main` 執行時才會進行正式 build + deploy；其他分支不會部署。
+
+整體需求所稱的「測試環境」是 Web 的 `dev` 測試站 `https://www-dev.marchgroup.net`。API 沒有獨立測試站，因此同一個測試環境部署請求中，API 直接依正式發布流程由 `main` 部署至 `https://api.marchgroup.net`；API `dev` 僅供建置與 artifact 驗證，不作為 API 功能驗收環境。
 - 同一 ref 新 run 會取消前一個尚未完成的 run。
 - publish artifact 保留 7 天。
 

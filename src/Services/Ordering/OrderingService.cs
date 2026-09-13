@@ -53,6 +53,7 @@ public sealed class OrderingService : IOrderingService
             throw new BusinessException("此顧客今天已有點餐碼，請使用尋回功能。", "ORDER_SESSION_EXISTS");
         var id = NewId();
         var token = _tokens.Create(id, gameId, day);
+        var shortCode = _tokens.CreateShortCode();
         var recoveryCode = _tokens.CreateRecoveryCode();
         var now = _clock.LocalDateTime;
         var row = new OrderSessionRow
@@ -62,6 +63,7 @@ public sealed class OrderingService : IOrderingService
             CustomerName = string.IsNullOrWhiteSpace(request.CustomerName) ? gameId : request.CustomerName.Trim(),
             BusinessDate = day.ToDateTime(TimeOnly.MinValue),
             AccessTokenHash = _tokens.Hash(token),
+            ShortCodeHash = _tokens.Hash(shortCode),
             RecoveryCodeHash = _tokens.Hash(recoveryCode),
             MaxNominatedStaff = request.MaxNominatedStaff ?? 1,
             PrepaidMealCredit = settings.MinimumMealCredit,
@@ -70,7 +72,7 @@ public sealed class OrderingService : IOrderingService
             CreatedAt = now
         };
         await _repository.CreateSessionAsync(row, ActorId(actor), cancellationToken);
-        return Issued(row, token, recoveryCode);
+        return Issued(row, token, shortCode, recoveryCode);
     }
 
     public async Task<OrderSessionIssuedDto> RotateSessionCredentialsAsync(string sessionId, ClaimsPrincipal actor,
@@ -83,10 +85,11 @@ public sealed class OrderingService : IOrderingService
         if (period?.SettledAt is not null)
             throw new BusinessException("此營業日已完成結算，點餐碼只能查看既有訂單。", "BUSINESS_PERIOD_SETTLED");
         var token = _tokens.Create(session.Id, session.GameId, DateOnly.FromDateTime(session.BusinessDate));
+        var shortCode = _tokens.CreateShortCode();
         var recoveryCode = _tokens.CreateRecoveryCode();
         await _repository.RotateSessionCredentialsAsync(session.Id, _tokens.Hash(token), _tokens.Hash(recoveryCode),
-            _clock.LocalDateTime, cancellationToken);
-        return Issued(session, token, recoveryCode);
+            _tokens.Hash(shortCode), _clock.LocalDateTime, cancellationToken);
+        return Issued(session, token, shortCode, recoveryCode);
     }
 
     public async Task<OrderSessionDto> UpdateSessionAsync(string sessionId, UpdateOrderSessionRequest request,
@@ -105,7 +108,7 @@ public sealed class OrderingService : IOrderingService
     {
         var session = await ValidateTokenAsync(token, cancellationToken);
         await _repository.RotateSessionCredentialsAsync(session.Id, session.AccessTokenHash, null,
-            _clock.LocalDateTime, cancellationToken);
+            null, _clock.LocalDateTime, cancellationToken);
         return new OrderSessionAccessDto(MapSession(session), MapSettings(await _repository.GetSettingsAsync(cancellationToken)),
             await ResolveSessionBusinessContextAsync(session, cancellationToken));
     }
@@ -125,9 +128,10 @@ public sealed class OrderingService : IOrderingService
         if (!CryptographicOperations.FixedTimeEquals(expected, provided))
             throw new BusinessException("店員協助碼不正確。", "ORDER_RECOVERY_CODE_INVALID");
         var token = _tokens.Create(session.Id, session.GameId, day);
+        var shortCode = _tokens.CreateShortCode();
         await _repository.RotateSessionCredentialsAsync(session.Id, _tokens.Hash(token), null,
-            _clock.LocalDateTime, cancellationToken);
-        return Issued(session, token, request.RecoveryCode);
+            _tokens.Hash(shortCode), _clock.LocalDateTime, cancellationToken);
+        return Issued(session, token, shortCode, request.RecoveryCode);
     }
 
     public async Task<OrderCatalogDto> GetCatalogAsync(string token, CancellationToken cancellationToken)
@@ -709,13 +713,23 @@ public sealed class OrderingService : IOrderingService
     {
         if (string.IsNullOrWhiteSpace(token))
             throw new BusinessException("缺少點餐碼。", "ORDER_TOKEN_REQUIRED");
-        var payload = _tokens.Read(token.Trim());
-        var session = await _repository.GetSessionByTokenHashAsync(_tokens.Hash(token.Trim()), cancellationToken)
-            ?? throw new BusinessException("點餐碼已失效或已重新補發。", "ORDER_TOKEN_REVOKED");
-        if (!string.Equals(session.Id, payload.SessionId, StringComparison.Ordinal) ||
-            !string.Equals(session.GameId, payload.GameId, StringComparison.Ordinal) ||
-            payload.BusinessDate != DateOnly.FromDateTime(session.BusinessDate))
-            throw new BusinessException("點餐碼資料不一致。", "ORDER_TOKEN_MISMATCH");
+        var normalized = token.Trim();
+        OrderSessionRow session;
+        try
+        {
+            var payload = _tokens.Read(normalized);
+            session = await _repository.GetSessionByTokenHashAsync(_tokens.Hash(normalized), cancellationToken)
+                ?? throw new BusinessException("點餐碼已失效或已重新補發。", "ORDER_TOKEN_REVOKED");
+            if (!string.Equals(session.Id, payload.SessionId, StringComparison.Ordinal) ||
+                !string.Equals(session.GameId, payload.GameId, StringComparison.Ordinal) ||
+                payload.BusinessDate != DateOnly.FromDateTime(session.BusinessDate))
+                throw new BusinessException("點餐碼資料不一致。", "ORDER_TOKEN_MISMATCH");
+        }
+        catch (BusinessException exception) when (exception.ErrorCode == "ORDER_TOKEN_INVALID")
+        {
+            session = await _repository.GetSessionByShortCodeHashAsync(_tokens.Hash(normalized), cancellationToken)
+                ?? throw new BusinessException("點餐碼已失效或已重新補發。", "ORDER_TOKEN_REVOKED");
+        }
         EnsureAccessible(session);
         return session;
     }
@@ -1022,8 +1036,8 @@ public sealed class OrderingService : IOrderingService
             ClientContentMappings.ToTaiwanOffset(row.EndsAt), ClientContentMappings.ToTaiwanOffset(row.ExpiresAt),
             row.Reason, row.UpdatedBy, ClientContentMappings.ToTaiwanOffset(row.UpdatedAt));
 
-    private OrderSessionIssuedDto Issued(OrderSessionRow row, string token, string recoveryCode)
-        => new(MapSession(row), token, _tokens.BuildOrderUrl(token), recoveryCode);
+    private OrderSessionIssuedDto Issued(OrderSessionRow row, string token, string shortCode, string recoveryCode)
+        => new(MapSession(row), token, _tokens.BuildOrderUrl(shortCode), recoveryCode);
 
     private static string ActorId(ClaimsPrincipal actor)
         => actor.FindFirstValue(AdminAuthConstants.UserIdClaimType)
