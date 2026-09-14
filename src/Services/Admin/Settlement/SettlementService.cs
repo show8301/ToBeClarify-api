@@ -478,8 +478,9 @@ public sealed class SettlementService : ISettlementService
     private static void ApplyCashSnapshot(SettlementRunRow run, IReadOnlyList<SettlementResultLineRow> results)
     {
         var calculatedGross = run.GrossRevenue;
-        var factor = calculatedGross <= 0 ? 0 : Math.Max(0, run.NetCash / calculatedGross);
-        if (calculatedGross <= 0 && run.NetCash > 0) factor = 1;
+        var allocatableCash = Math.Max(0, run.NetCash - run.RetainedAmount);
+        var factor = calculatedGross <= 0 ? 0 : allocatableCash / calculatedGross;
+        if (calculatedGross <= 0 && allocatableCash > 0) factor = 1;
         run.GrossRevenue = calculatedGross * factor;
         run.DesignatedRevenueBase *= factor;
         run.DedicatedRoomGross *= factor;
