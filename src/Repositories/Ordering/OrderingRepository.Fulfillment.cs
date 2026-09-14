@@ -162,7 +162,7 @@ public sealed partial class OrderingRepository
                            SERVICE_DURATION_MINUTES AS PurchasedMinutes, ADDON_STATUS AS Status
                     FROM ORDER_SERVICE_ADDONS WHERE ORDER_ID=@OrderId;
                     """, new { OrderId = orderId }, tx, cancellationToken: ct));
-                unit.Kind = "addon"; unit.RelatedId = addon.RelatedId; unit.NomineeId = addon.NomineeId; unit.StaffId = addon.StaffId;
+                unit.Kind = "addon"; unit.RelatedId = addon.RelatedId; unit.StaffId = addon.StaffId;
                 unit.PurchasedMinutes = addon.PurchasedMinutes;
                 var parentSchedule = await connection.QuerySingleOrDefaultAsync<ScheduleRow>(new CommandDefinition("""
                     SELECT N.REQUESTED_STARTS_AT AS StartsAt,N.REQUESTED_SERVICE_ENDS_AT AS EndsAt
@@ -514,7 +514,8 @@ public sealed partial class OrderingRepository
                 SELECT EXISTS(SELECT 1 FROM ORDER_SERVICE_ADDONS A JOIN ORDER_NOMINEES N ON N.ID=A.PARENT_NOMINEE_ID
                     WHERE A.ID=@RelatedId AND N.CONFIRMATION_STATUS='confirmed'
                     AND DATE_ADD(GREATEST(COALESCE((SELECT MAX(F.SCHEDULED_ENDS_AT) FROM ORDER_FULFILLMENT_UNITS F
-                        WHERE F.NOMINEE_ID=N.ID AND F.KIND='addon' AND F.UNIT_STATUS IN ('waiting','accepted','in_service')),
+                        JOIN ORDER_SERVICE_ADDONS EXISTING ON EXISTING.ID=F.RELATED_ID
+                        WHERE EXISTING.PARENT_NOMINEE_ID=N.ID AND F.KIND='addon' AND F.UNIT_STATUS IN ('waiting','accepted','in_service')),
                         N.REQUESTED_STARTS_AT),@Now),INTERVAL A.SERVICE_DURATION_MINUTES MINUTE)<=N.REQUESTED_SERVICE_ENDS_AT);
                 """, new { unit.RelatedId, Now = now }, tx, cancellationToken: ct));
             if (!valid) throw new BusinessException("原服務剩餘時間或進度已變更，請先協調加購。", "ADDON_PARENT_INACTIVE");

@@ -1453,8 +1453,8 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
                 throw new BusinessException("原指名已不在可加購狀態。", "ADDON_PARENT_INACTIVE");
             var existingAddonEnd = await connection.ExecuteScalarAsync<DateTime?>(new CommandDefinition("""
                 SELECT MAX(F.SCHEDULED_ENDS_AT)
-                FROM ORDER_FULFILLMENT_UNITS F
-                WHERE F.NOMINEE_ID=@NomineeId AND F.KIND='addon'
+                FROM ORDER_FULFILLMENT_UNITS F JOIN ORDER_SERVICE_ADDONS A ON A.ID=F.RELATED_ID
+                WHERE A.PARENT_NOMINEE_ID=@NomineeId AND F.KIND='addon'
                   AND F.UNIT_STATUS NOT IN ('cancelled','completed');
                 """, new { NomineeId = addon.ParentNomineeId }, transaction, cancellationToken: cancellationToken));
             var effectiveStart = parent.StartsAt > addon.SubmittedAt ? parent.StartsAt : addon.SubmittedAt;
