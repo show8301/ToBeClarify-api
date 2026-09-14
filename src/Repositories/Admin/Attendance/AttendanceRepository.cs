@@ -160,9 +160,19 @@ public sealed class AttendanceRepository(AppDbContext dbContext)
             if (end <= now && active > 0)
             {
                 await connection.ExecuteAsync(new CommandDefinition("""
-                    UPDATE STAFF_DAILY_WORK_MODES SET STOP_ACCEPTING_NEW_ORDERS=TRUE,UPDATED_AT=@Now,UPDATED_BY='system:attendance'
-                    WHERE STAFF_MEMBER_ID=@StaffId AND BUSINESS_DATE=@BusinessDate;
-                    """, new {StaffId=plan.StaffId, BusinessDate=plan.BusinessDate.Date, Now=now}, cancellationToken:ct));
+                    INSERT INTO STAFF_DAILY_WORK_MODES
+                        (ID,STAFF_MEMBER_ID,BUSINESS_DATE,IS_WORKING,SCHEDULED_ROLES_JSON,ACTIVE_ROLES_JSON,
+                         STOP_ACCEPTING_NEW_ORDERS,CREATED_AT,CREATED_BY,UPDATED_AT,UPDATED_BY)
+                    SELECT @ModeId,@StaffId,@BusinessDate,COALESCE(D.IS_WORKING,TRUE),
+                           COALESCE(D.SCHEDULED_ROLES_JSON,'[\"service\"]'),
+                           COALESCE(D.ACTIVE_ROLES_JSON,'[\"service\"]'),TRUE,
+                           @Now,'system:attendance',@Now,'system:attendance'
+                    FROM STAFF_MEMBERS M
+                    LEFT JOIN STAFF_DAILY_WORK_MODES D
+                      ON D.STAFF_MEMBER_ID=M.ID AND D.BUSINESS_DATE=@BusinessDate
+                    WHERE M.ID=@StaffId
+                    ON DUPLICATE KEY UPDATE STOP_ACCEPTING_NEW_ORDERS=TRUE,UPDATED_AT=@Now,UPDATED_BY='system:attendance';
+                    """, new {ModeId=Guid.NewGuid().ToString("D"), StaffId=plan.StaffId, BusinessDate=plan.BusinessDate.Date, Now=now}, cancellationToken:ct));
             }
             else if (end <= now)
                 await InsertScheduledAsync(connection, plan, start.Value, end.Value, (int)Math.Floor((end.Value-start.Value).TotalMinutes), StableOp(plan.Id, "e"), now, ct);
@@ -191,10 +201,9 @@ public sealed class AttendanceRepository(AppDbContext dbContext)
         var rows = source.OrderBy(x=>x.EventAt).ToArray();
         var start = PlanTime(plan.BusinessDate, plan.StartTime); var end = PlanTime(plan.BusinessDate, plan.EndTime);
         if (start is not null && end is not null && end <= start) end = end.Value.AddDays(1);
-        var manual = rows.LastOrDefault(x=>x.EventType=="manual_interval");
         var actualStart = rows.Where(x=>x.EventType is "clock_in" or "manual_interval").Select(x=>x.EventAt).OrderBy(x=>x).FirstOrDefault();
         var actualEnd = rows.Where(x=>x.EventType is "clock_out" or "manual_interval").Select(x=>x.EventEndAt ?? x.EventAt).OrderByDescending(x=>x).FirstOrDefault();
-        var worked = manual?.MinutesDelta ?? rows.Where(x=>x.EventType is "clock_out" or "scheduled_end").Sum(x=>x.MinutesDelta);
+        var worked = CalculateWorkedMinutes(rows);
         var adjustments = rows.Where(x=>x.EventType=="adjustment").Sum(x=>x.MinutesDelta);
         var open = rows.Any(x=>x.EventType=="clock_in" && !rows.Any(y=>y.BaseEventId==x.Id));
         return new SummaryRow(plan, start, end, actualStart == default ? null : actualStart, actualEnd == default ? null : actualEnd,
@@ -213,6 +222,48 @@ public sealed class AttendanceRepository(AppDbContext dbContext)
         => new(x.Id, x.StaffId, x.BusinessDate.ToString("yyyy-MM-dd"), x.DutyPlanId, x.EventType,
             Offset(x.EventAt), x.EventEndAt is { } end ? Offset(end) : null, x.Source, x.MinutesDelta,
             x.BaseEventId, x.OperationId, x.Reason, Offset(x.CreatedAt));
+
+    private static int CalculateWorkedMinutes(IEnumerable<EventRow> source)
+    {
+        var rows = source.ToArray();
+        var intervals = new List<(DateTime Start, DateTime End)>();
+        var manual = rows.Where(x => x.EventType == "manual_interval" && x.EventEndAt is not null)
+            .Select(x => (x.EventAt, x.EventEndAt!.Value)).ToArray();
+        if (manual.Length > 0)
+            intervals.AddRange(manual);
+        else
+        {
+            var clockIns = rows.Where(x => x.EventType == "clock_in")
+                .ToDictionary(x => x.Id, x => x.EventAt, StringComparer.Ordinal);
+            intervals.AddRange(rows.Where(x => x.EventType == "clock_out" && x.BaseEventId is not null && clockIns.ContainsKey(x.BaseEventId))
+                .Select(x => (clockIns[x.BaseEventId!], x.EventAt)));
+            if (intervals.Count == 0)
+                intervals.AddRange(rows.Where(x => x.EventType == "scheduled_end" && x.MinutesDelta > 0)
+                    .Select(x => (x.EventAt.AddMinutes(-x.MinutesDelta), x.EventAt)));
+        }
+        var total = 0d;
+        DateTime? mergedStart = null;
+        DateTime? mergedEnd = null;
+        foreach (var interval in intervals.Where(x => x.End > x.Start).OrderBy(x => x.Start).ThenBy(x => x.End))
+        {
+            if (mergedStart is null)
+            {
+                mergedStart = interval.Start;
+                mergedEnd = interval.End;
+            }
+            else if (interval.Start <= mergedEnd)
+                mergedEnd = interval.End > mergedEnd ? interval.End : mergedEnd;
+            else
+            {
+                total += (mergedEnd!.Value - mergedStart.Value).TotalMinutes;
+                mergedStart = interval.Start;
+                mergedEnd = interval.End;
+            }
+        }
+        if (mergedStart is not null) total += (mergedEnd!.Value - mergedStart.Value).TotalMinutes;
+        return Math.Max(0, (int)Math.Floor(total));
+    }
+
     private static DateTimeOffset Offset(DateTime value) => new(DateTime.SpecifyKind(value, DateTimeKind.Unspecified), TimeSpan.FromHours(8));
 
     private sealed class PlanRow { public string Id {get;set;}=""; public string StaffId {get;set;}=""; public string DisplayName {get;set;}=""; public DateTime BusinessDate {get;set;} public TimeSpan? StartTime {get;set;} public TimeSpan? EndTime {get;set;} public bool IsWorking {get;set;} public string ApprovalStatus {get;set;}=""; }

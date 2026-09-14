@@ -181,9 +181,18 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
                    CASE WHEN EXISTS (SELECT 1 FROM `STAFF_ATTENDANCE_EVENTS` E WHERE E.`STAFF_MEMBER_ID`=I.`STAFF_ID`
                                      AND E.`BUSINESS_DATE`=@BusinessDate
                                      AND E.`EVENT_TYPE` IN ('clock_out','scheduled_end','manual_interval','adjustment'))
-                        THEN COALESCE((SELECT SUM(E2.`MINUTES_DELTA`) FROM `STAFF_ATTENDANCE_EVENTS` E2
-                                       WHERE E2.`STAFF_MEMBER_ID`=I.`STAFF_ID` AND E2.`BUSINESS_DATE`=@BusinessDate
-                                         AND E2.`EVENT_TYPE` IN ('clock_out','scheduled_end','manual_interval','adjustment')), 0)
+                        THEN COALESCE((CASE WHEN EXISTS (SELECT 1 FROM `STAFF_ATTENDANCE_EVENTS` E0
+                                                         WHERE E0.`STAFF_MEMBER_ID`=I.`STAFF_ID` AND E0.`BUSINESS_DATE`=@BusinessDate
+                                                           AND E0.`EVENT_TYPE`='manual_interval')
+                                           THEN (SELECT SUM(E1.`MINUTES_DELTA`) FROM `STAFF_ATTENDANCE_EVENTS` E1
+                                                 WHERE E1.`STAFF_MEMBER_ID`=I.`STAFF_ID` AND E1.`BUSINESS_DATE`=@BusinessDate
+                                                   AND E1.`EVENT_TYPE`='manual_interval')
+                                           ELSE (SELECT SUM(E2.`MINUTES_DELTA`) FROM `STAFF_ATTENDANCE_EVENTS` E2
+                                                 WHERE E2.`STAFF_MEMBER_ID`=I.`STAFF_ID` AND E2.`BUSINESS_DATE`=@BusinessDate
+                                                   AND E2.`EVENT_TYPE` IN ('clock_out','scheduled_end')) END), 0)
+                             + COALESCE((SELECT SUM(E3.`MINUTES_DELTA`) FROM `STAFF_ATTENDANCE_EVENTS` E3
+                                         WHERE E3.`STAFF_MEMBER_ID`=I.`STAFF_ID` AND E3.`BUSINESS_DATE`=@BusinessDate
+                                           AND E3.`EVENT_TYPE`='adjustment'), 0)
                         ELSE I.`ACTUAL_MINUTES` END AS ActualMinutes, I.`ACTIVITY_HOURS` AS ActivityHours,
                    CASE WHEN EXISTS (SELECT 1 FROM `STAFF_ATTENDANCE_EVENTS` E WHERE E.`STAFF_MEMBER_ID`=I.`STAFF_ID`
                                      AND E.`BUSINESS_DATE`=@BusinessDate AND E.`SOURCE` IN ('scheduled','manual'))

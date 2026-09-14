@@ -226,11 +226,14 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
     }
 
     public async Task<StaffNominationRow?> GetStaffNominationAsync(string staffId, DateOnly businessDate,
-        CancellationToken cancellationToken)
+        bool requireApprovedPlan, CancellationToken cancellationToken)
     {
         const string sql = """
             SELECT M.`ID` AS StaffId, M.`DISPLAY_NAME` AS StaffName,
-                   COALESCE(P.`IS_WORKING`, COALESCE(SC.`IS_WORKING`, TRUE)) AS IsWorkingToday,
+                   CASE WHEN @RequireApprovedPlan = TRUE
+                        THEN COALESCE(P.`IS_WORKING`, FALSE) AND P.`START_TIME` IS NOT NULL AND P.`END_TIME` IS NOT NULL
+                             AND COALESCE(D.`IS_WORKING`, TRUE) AND COALESCE(D.`STOP_ACCEPTING_NEW_ORDERS`, FALSE) = FALSE
+                        ELSE COALESCE(P.`IS_WORKING`, COALESCE(SC.`IS_WORKING`, TRUE)) END AS IsWorkingToday,
                    M.`IS_NOMINATABLE` AS StaffIsNominatable, M.`BUFFER_MINUTES` AS BufferMinutes
             FROM `STAFF_MEMBERS` M
             LEFT JOIN `STAFF_SCHEDULES` SC
@@ -238,12 +241,15 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
             LEFT JOIN `STAFF_DUTY_PLANS` P
                    ON P.`STAFF_MEMBER_ID` = M.`ID` AND P.`BUSINESS_DATE` = @BusinessDate
                   AND P.`APPROVAL_STATUS` = 'approved'
+            LEFT JOIN `STAFF_DAILY_WORK_MODES` D
+                   ON D.`STAFF_MEMBER_ID` = M.`ID` AND D.`BUSINESS_DATE` = @BusinessDate
             WHERE M.`ID` = @StaffId AND M.`IS_ACTIVE` = TRUE LIMIT 1;
             """;
         return await QuerySingleOrDefaultAsync<StaffNominationRow>(sql, new
         {
             StaffId = staffId,
-            BusinessDate = businessDate.ToDateTime(TimeOnly.MinValue)
+            BusinessDate = businessDate.ToDateTime(TimeOnly.MinValue),
+            RequireApprovedPlan = requireApprovedPlan
         }, cancellationToken);
     }
 

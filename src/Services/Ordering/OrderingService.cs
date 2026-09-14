@@ -220,15 +220,10 @@ public sealed partial class OrderingService : IOrderingService
         {
             var staffId = Required(line.StaffId, "STAFF_ID_REQUIRED");
             var mode = line.Mode == "companionship" ? "companionship" : "service";
-            var staff = await _repository.GetStaffNominationAsync(staffId, businessDate, cancellationToken);
+            var staff = await _repository.GetStaffNominationAsync(staffId, businessDate,
+                session.FlowVersion >= 2, cancellationToken);
             if (staff is null || !staff.IsWorkingToday || !staff.StaffIsNominatable)
                 throw new BusinessException("此店員目前無法指名。", "NOMINATION_UNAVAILABLE");
-            if (session.FlowVersion >= 2)
-            {
-                var eligible = await _staffService.GetStaffAsync(null, cancellationToken, businessDate);
-                if (!eligible.Any(candidate => candidate.Id == staffId && candidate.IsWorkingToday && candidate.IsNominatable))
-                    throw new BusinessException("此店員尚未到班或已停止接新單。", "NOMINATION_UNAVAILABLE");
-            }
             StaffOfferRow? offer = null;
             if (mode == "service")
             {

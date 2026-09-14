@@ -22,8 +22,8 @@ public sealed partial class OrderingRepository
             var eligible = await connection.ExecuteScalarAsync<int?>(new CommandDefinition("""
                 SELECT CASE WHEN M.IS_ACTIVE=TRUE AND M.IS_NOMINATABLE=TRUE
                     AND P.IS_WORKING=TRUE AND P.APPROVAL_STATUS='approved'
-                    AND @Now>=TIMESTAMP(P.BUSINESS_DATE,P.START_TIME)
-                    AND @Now<TIMESTAMP(P.BUSINESS_DATE,P.END_TIME)
+                    AND @RequestedAt>=TIMESTAMP(P.BUSINESS_DATE,P.START_TIME)
+                    AND @RequestedAt<TIMESTAMP(P.BUSINESS_DATE,P.END_TIME)
                         + INTERVAL (CASE WHEN P.END_TIME<=P.START_TIME THEN 1 ELSE 0 END) DAY
                     AND COALESCE(D.IS_WORKING,TRUE)=TRUE
                     AND COALESCE(D.STOP_ACCEPTING_NEW_ORDERS,FALSE)=FALSE THEN 1 ELSE 0 END
@@ -31,7 +31,7 @@ public sealed partial class OrderingRepository
                 LEFT JOIN STAFF_DUTY_PLANS P ON P.STAFF_MEMBER_ID=M.ID AND P.BUSINESS_DATE=S.BUSINESS_DATE
                 LEFT JOIN STAFF_DAILY_WORK_MODES D ON D.STAFF_MEMBER_ID=M.ID AND D.BUSINESS_DATE=S.BUSINESS_DATE
                 WHERE S.ID=@SessionId FOR UPDATE
-                """, new { nominee.StaffId, order.SessionId, Now=order.SubmittedAt }, tx, cancellationToken:ct));
+                """, new { nominee.StaffId, order.SessionId, RequestedAt=nominee.StartsAt }, tx, cancellationToken:ct));
             if (eligible != 1)
                 throw new ConflictException("店員班表或接單狀態已變更，請重新選擇。", "NOMINATION_UNAVAILABLE");
         }
