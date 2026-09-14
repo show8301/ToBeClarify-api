@@ -382,8 +382,6 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
             throw new BusinessException("目前已非營業中。", "BUSINESS_PERIOD_NOT_OPEN");
         if(action is "reopen" or "settle" && before.PeriodStatus!="closed")
             throw new BusinessException("需先關店。", "BUSINESS_PERIOD_NOT_CLOSED");
-        if(action=="settle" && before.FlowVersion>=2)
-            throw new BusinessException("分項接待的薪資串接尚未開放；未決費用可結轉，請保留分潤。", "SETTLEMENT_FLOW_NOT_READY");
         if(action=="reopen" && await connection.ExecuteScalarAsync<int>(new CommandDefinition("SELECT COUNT(*) FROM BUSINESS_PERIODS WHERE PERIOD_STATUS='open' AND ID<>@Id",before,transaction,cancellationToken:cancellationToken))>0)
             throw new BusinessException("已有其他營業日開店，無法同時重開。", "BUSINESS_PERIOD_ALREADY_ACTIVE");
         if(action is "close" or "settle")

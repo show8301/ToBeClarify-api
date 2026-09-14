@@ -1,7 +1,10 @@
 using System.Data;
 using Dapper;
 using ToBeClarify.Api.Infrastructure;
+using ToBeClarify.Api.Models.Dtos;
 using ToBeClarify.Api.Models.Entities;
+using ToBeClarify.Api.Exceptions;
+using System.Text.Json;
 using ToBeClarify.Api.Repositories.Shared;
 
 namespace ToBeClarify.Api.Repositories.Admin.Settlement;
@@ -233,6 +236,32 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
             LEFT JOIN `STAFF_MEMBERS` M ON M.`ID` = B.`STAFF_ID`
             WHERE B.`SETTLEMENT_ID` = @SettlementId
             ORDER BY B.`REQUESTED_AT` DESC;
+
+            SELECT MAX(S.`BUSINESS_PERIOD_ID`) AS BusinessPeriodId,
+                   COALESCE(SUM(CASE WHEN F.`KIND`='cash_receipt' THEN F.`AMOUNT` ELSE 0 END), 0) AS CashReceived,
+                   COALESCE(SUM(CASE WHEN F.`KIND`='cash_refund' THEN F.`AMOUNT` ELSE 0 END), 0) AS CashRefunded,
+                   COALESCE(SUM(CASE WHEN F.`KIND`='cash_receipt' THEN F.`AMOUNT` WHEN F.`KIND`='cash_refund' THEN -F.`AMOUNT` ELSE 0 END), 0) AS NetCash,
+                   COALESCE(SUM(CASE WHEN F.`HOLD_SCOPE` <> 'none' AND F.`KIND`='cash_receipt' THEN F.`AMOUNT` WHEN F.`HOLD_SCOPE` <> 'none' AND F.`KIND`='cash_refund' THEN -F.`AMOUNT` ELSE 0 END), 0) AS RetainedAmount,
+                   COALESCE(SUM(CASE WHEN F.`ALLOCATION_STATUS`='pending' OR F.`CASH_PERIOD_ID` IS NULL AND F.`KIND` IN ('cash_receipt','cash_refund') THEN 1 ELSE 0 END), 0) AS PendingFinanceCount,
+                   COALESCE(MAX(F.`VERSION`), 0) AS SourceVersion,
+                   MAX(F.`UPDATED_AT`) AS LatestRecordedAt,
+                   CAST(COUNT(F.`ID`) > 0 AS UNSIGNED) AS HasCashRecords
+            FROM `ORDERING_FINANCE_RECORDS` F
+            INNER JOIN `CUSTOMER_ORDER_SESSIONS` S ON S.`ID` = F.`SESSION_ID`
+            WHERE S.`BUSINESS_DATE` = @BusinessDate;
+
+            SELECT MAX(P.`ID`) AS BusinessPeriodId, COALESCE(MAX(P.`PERIOD_STATUS`), 'scheduled') AS PeriodStatus,
+                   COALESCE(MAX(P.`INTAKE_MODE`), 'staff_only') AS IntakeMode,
+                   MAX(P.`ACTUAL_CLOSED_AT`) AS ActualClosedAt, MAX(P.`SETTLED_AT`) AS SettledAt,
+                   (SELECT COUNT(DISTINCT O.`ID`) FROM `ORDERS` O
+                    INNER JOIN `CUSTOMER_ORDER_SESSIONS` S2 ON S2.`ID`=O.`SESSION_ID`
+                    WHERE S2.`BUSINESS_DATE`=@BusinessDate
+                      AND O.`ORDER_STATUS` IN ('submitted','partially_confirmed','needs_reschedule','confirmed','in_service')) AS UnfinishedOrderCount,
+                   (SELECT COUNT(*) FROM `ORDER_FULFILLMENT_UNITS` U
+                    INNER JOIN `ORDERS` O2 ON O2.`ID`=U.`ORDER_ID`
+                    INNER JOIN `CUSTOMER_ORDER_SESSIONS` S3 ON S3.`ID`=O2.`SESSION_ID`
+                    WHERE S3.`BUSINESS_DATE`=@BusinessDate AND U.`UNIT_STATUS`='in_service') AS ActiveServiceCount
+            FROM `BUSINESS_PERIODS` P WHERE P.`BUSINESS_DATE`=@BusinessDate;
             """;
 
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
@@ -249,9 +278,11 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
         var staffInputs = (await multi.ReadAsync<SettlementStaffInputRow>()).AsList();
         var results = (await multi.ReadAsync<SettlementResultLineRow>()).AsList();
         var attendanceBackfillRequests = (await multi.ReadAsync<SettlementAttendanceBackfillRow>()).AsList();
+        var cash = await multi.ReadFirstOrDefaultAsync<SettlementCashSummaryRow>() ?? new SettlementCashSummaryRow();
+        var period = await multi.ReadFirstOrDefaultAsync<SettlementPeriodSummaryRow>() ?? new SettlementPeriodSummaryRow();
         return new SettlementSourceData { Orders = orders, Items = items, Nominees = nominees, Tips = tips,
             Rooms = rooms, Addons = addons, Admissions = admissions, StaffInputs = staffInputs, Results = results,
-            AttendanceBackfillRequests = attendanceBackfillRequests };
+            AttendanceBackfillRequests = attendanceBackfillRequests, Cash = cash, Period = period };
     }
 
     public async Task SaveInputsAsync(string settlementId, SaveInputsData inputs, string actorId, DateTime now,
@@ -316,6 +347,10 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
                 `COMPANY_REVENUE` = @CompanyRevenue, `SERVICE_MANAGER_POOL` = @ServiceManagerPool,
                 `BACKSTAGE_POOL` = @BackstagePool, `COMPANY_INCOME` = @CompanyIncome,
                 `ACTIVITY_NET_REVENUE` = @ActivityNetRevenue, `STATUS` = 'calculated',
+                `BUSINESS_PERIOD_ID` = @BusinessPeriodId, `SOURCE_VERSION` = @SourceVersion,
+                `SOURCE_CUTOFF_AT` = @SourceCutoffAt, `CASH_RECEIVED` = @CashReceived,
+                `CASH_REFUNDED` = @CashRefunded, `NET_CASH` = @NetCash,
+                `RETAINED_AMOUNT` = @RetainedAmount, `PENDING_FINANCE_COUNT` = @PendingFinanceCount,
                 `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId
             WHERE `ID` = @SettlementId;
             """, new { SettlementId = settlementId, calculation.Run.RuleVersionId,
@@ -323,9 +358,12 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
                 calculation.Run.GrossRevenue, calculation.Run.DesignatedRevenueBase,
                 calculation.Run.DedicatedRoomGross, calculation.Run.DedicatedRoomOwnerShare,
                 calculation.Run.DedicatedRoomCompanyRemainder, calculation.Run.PublicRoomUnassignedRevenue,
-                calculation.Run.AdmissionRevenue, calculation.Run.MealRevenue, calculation.Run.CompanyRevenue,
-                calculation.Run.ServiceManagerPool, calculation.Run.BackstagePool, calculation.Run.CompanyIncome,
-                calculation.Run.ActivityNetRevenue, Now = now, ActorId = actorId }, transaction,
+                 calculation.Run.AdmissionRevenue, calculation.Run.MealRevenue, calculation.Run.CompanyRevenue,
+                 calculation.Run.ServiceManagerPool, calculation.Run.BackstagePool, calculation.Run.CompanyIncome,
+                 calculation.Run.ActivityNetRevenue, calculation.Run.BusinessPeriodId,
+                 calculation.Run.SourceVersion, calculation.Run.SourceCutoffAt, calculation.Run.CashReceived,
+                 calculation.Run.CashRefunded, calculation.Run.NetCash, calculation.Run.RetainedAmount,
+                 calculation.Run.PendingFinanceCount, Now = now, ActorId = actorId }, transaction,
             cancellationToken: cancellationToken));
 
         foreach (var result in calculation.Results)
@@ -539,6 +577,91 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
         => await QuerySingleOrDefaultAsync<int?>("SELECT `TOTAL_AMOUNT` FROM `ORDERS` WHERE `ID` = @OrderId LIMIT 1;",
             new { OrderId = orderId }, cancellationToken);
 
+    public async Task<SettlementPaymentEventRow> RecordPaymentAsync(string settlementId,
+        SettlementPayoutRequest request, string actorId, DateTime now, CancellationToken cancellationToken)
+    {
+        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var prior = await connection.QuerySingleOrDefaultAsync<SettlementPaymentEventRow>(new CommandDefinition("""
+            SELECT ID AS Id, SETTLEMENT_ID AS SettlementId, STAFF_ID AS StaffId, EVENT_KIND AS EventKind,
+                   AMOUNT AS Amount, OPERATION_ID AS OperationId, REASON AS Reason, CREATED_AT AS CreatedAt,
+                   CREATED_BY AS CreatedBy FROM SETTLEMENT_PAYMENT_EVENTS WHERE OPERATION_ID=@OperationId;
+            """, new { request.OperationId }, transaction, cancellationToken: cancellationToken));
+        if (prior is not null)
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return prior;
+        }
+        if (await connection.ExecuteScalarAsync<int>(new CommandDefinition(
+                "SELECT COUNT(*) FROM STAFF_MEMBERS WHERE ID=@StaffId", new { request.StaffId }, transaction,
+                cancellationToken: cancellationToken)) == 0)
+            throw new BusinessException("支付對象不存在。", "SETTLEMENT_STAFF_NOT_FOUND");
+        var row = new SettlementPaymentEventRow
+        {
+            Id = Guid.NewGuid().ToString("D"), SettlementId = settlementId, StaffId = request.StaffId.Trim(),
+            EventKind = request.EventKind, Amount = request.Amount, OperationId = request.OperationId.Trim(),
+            Reason = request.Reason.Trim(), CreatedAt = now, CreatedBy = actorId
+        };
+        await connection.ExecuteAsync(new CommandDefinition("""
+            INSERT INTO SETTLEMENT_PAYMENT_EVENTS
+                (ID, SETTLEMENT_ID, STAFF_ID, EVENT_KIND, AMOUNT, OPERATION_ID, REASON, CREATED_AT, CREATED_BY)
+            VALUES (@Id,@SettlementId,@StaffId,@EventKind,@Amount,@OperationId,@Reason,@CreatedAt,@CreatedBy);
+            INSERT INTO SETTLEMENT_AUDIT_LOG
+                (ID, SETTLEMENT_ID, ACTION_TYPE, AFTER_JSON, REASON, ACTOR_ID, CREATED_AT)
+            VALUES (@AuditId,@SettlementId,'settlement_payment',@AfterJson,@Reason,@ActorId,@CreatedAt);
+            """, new { row.Id, row.SettlementId, row.StaffId, row.EventKind, row.Amount, row.OperationId,
+                row.Reason, row.CreatedAt, row.CreatedBy, AuditId = Guid.NewGuid().ToString("D"),
+                AfterJson = JsonSerializer.Serialize(row), ActorId = actorId }, transaction,
+            cancellationToken: cancellationToken));
+        await transaction.CommitAsync(cancellationToken);
+        return row;
+    }
+
+    public async Task<SettlementCorrectionEventRow> RecordCorrectionAsync(string settlementId,
+        SettlementCorrectionRequest request, string actorId, DateTime now, CancellationToken cancellationToken)
+    {
+        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var prior = await connection.QuerySingleOrDefaultAsync<SettlementCorrectionEventRow>(new CommandDefinition("""
+            SELECT ID AS Id, SETTLEMENT_ID AS SettlementId, CORRECTION_OF_ID AS CorrectionOfId,
+                   SOURCE_KIND AS SourceKind, SOURCE_ID AS SourceId, STAFF_ID AS StaffId,
+                   AMOUNT_DELTA AS AmountDelta, STATUS AS Status, OPERATION_ID AS OperationId,
+                   REASON AS Reason, CREATED_AT AS CreatedAt, CREATED_BY AS CreatedBy
+            FROM SETTLEMENT_CORRECTION_EVENTS WHERE OPERATION_ID=@OperationId;
+            """, new { request.OperationId }, transaction, cancellationToken: cancellationToken));
+        if (prior is not null)
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return prior;
+        }
+        var correction = new SettlementCorrectionEventRow
+        {
+            Id = Guid.NewGuid().ToString("D"), SettlementId = settlementId,
+            CorrectionOfId = request.SourceId, SourceKind = request.SourceKind.Trim(),
+            SourceId = request.SourceId, StaffId = string.IsNullOrWhiteSpace(request.StaffId) ? null : request.StaffId.Trim(),
+            AmountDelta = request.AmountDelta, Status = "open", OperationId = request.OperationId.Trim(),
+            Reason = request.Reason.Trim(), CreatedAt = now, CreatedBy = actorId
+        };
+        await connection.ExecuteAsync(new CommandDefinition("""
+            INSERT INTO SETTLEMENT_CORRECTION_EVENTS
+                (ID, SETTLEMENT_ID, CORRECTION_OF_ID, SOURCE_KIND, SOURCE_ID, STAFF_ID, AMOUNT_DELTA,
+                 STATUS, OPERATION_ID, REASON, CREATED_AT, CREATED_BY)
+            VALUES (@Id,@SettlementId,@CorrectionOfId,@SourceKind,@SourceId,@StaffId,@AmountDelta,
+                    @Status,@OperationId,@Reason,@CreatedAt,@CreatedBy);
+            UPDATE SETTLEMENT_RUNS SET CORRECTION_VERSION=CORRECTION_VERSION+1,
+                UPDATED_AT=@CreatedAt, UPDATED_BY=@CreatedBy WHERE ID=@SettlementId;
+            INSERT INTO SETTLEMENT_AUDIT_LOG
+                (ID, SETTLEMENT_ID, ACTION_TYPE, AFTER_JSON, REASON, ACTOR_ID, CREATED_AT)
+            VALUES (@AuditId,@SettlementId,'settlement_correction',@AfterJson,@Reason,@CreatedBy,@CreatedAt);
+            """, new { correction.Id, correction.SettlementId, correction.CorrectionOfId, correction.SourceKind,
+                correction.SourceId, correction.StaffId, correction.AmountDelta, correction.Status,
+                correction.OperationId, correction.Reason, correction.CreatedAt, correction.CreatedBy,
+                AuditId = Guid.NewGuid().ToString("D"), AfterJson = JsonSerializer.Serialize(correction) }, transaction,
+            cancellationToken: cancellationToken));
+        await transaction.CommitAsync(cancellationToken);
+        return correction;
+    }
+
     private const string RunSelectSql = """
         SELECT `ID` AS Id, `BUSINESS_DATE` AS BusinessDate, `SESSION_NO` AS SessionNo,
                `DAY_TYPE` AS DayType, `STATUS` AS Status, `RULE_VERSION_ID` AS RuleVersionId,
@@ -554,7 +677,13 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
                `COMPANY_REVENUE` AS CompanyRevenue, `SERVICE_MANAGER_POOL` AS ServiceManagerPool,
                `BACKSTAGE_POOL` AS BackstagePool, `COMPANY_INCOME` AS CompanyIncome,
                `ACTIVITY_NET_REVENUE` AS ActivityNetRevenue, `FINALIZED_AT` AS FinalizedAt,
-               `FINALIZED_BY` AS FinalizedBy
+               `FINALIZED_BY` AS FinalizedBy, `BUSINESS_PERIOD_ID` AS BusinessPeriodId,
+               `SOURCE_VERSION` AS SourceVersion, `SOURCE_CUTOFF_AT` AS SourceCutoffAt,
+               `CASH_RECEIVED` AS CashReceived, `CASH_REFUNDED` AS CashRefunded,
+               `NET_CASH` AS NetCash, `RETAINED_AMOUNT` AS RetainedAmount,
+               `PENDING_FINANCE_COUNT` AS PendingFinanceCount,
+               `CORRECTS_SETTLEMENT_ID` AS CorrectsSettlementId,
+               `CORRECTION_VERSION` AS CorrectionVersion
         FROM `SETTLEMENT_RUNS`
         """;
 }

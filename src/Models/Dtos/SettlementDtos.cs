@@ -54,7 +54,17 @@ public sealed record SettlementRunDto(
     int ActivityExpense,
     decimal? CompanyShareHours,
     bool ActivityHoursConfirmed,
-    DateTime? FinalizedAt);
+    DateTime? FinalizedAt,
+    string? BusinessPeriodId = null,
+    long SourceVersion = 0,
+    DateTime? SourceCutoffAt = null,
+    decimal CashReceived = 0,
+    decimal CashRefunded = 0,
+    decimal NetCash = 0,
+    decimal RetainedAmount = 0,
+    int PendingFinanceCount = 0,
+    string? CorrectsSettlementId = null,
+    int CorrectionVersion = 0);
 
 public sealed record SettlementSummaryDto(
     decimal GrossRevenue,
@@ -73,7 +83,12 @@ public sealed record SettlementSummaryDto(
     decimal TotalPayroll,
     decimal CompanySubsidy,
     int OrderCount = 0,
-    int SessionCount = 0);
+    int SessionCount = 0,
+    decimal CashReceived = 0,
+    decimal CashRefunded = 0,
+    decimal NetCash = 0,
+    decimal RetainedAmount = 0,
+    int PendingFinanceCount = 0);
 
 public sealed record SettlementStaffInputDto(
     string StaffId,
@@ -137,7 +152,24 @@ public sealed record SettlementOverviewDto(
     IReadOnlyList<SettlementStaffInputDto> StaffInputs,
     IReadOnlyList<SettlementResultLineDto> Results,
     IReadOnlyList<SettlementAnomalyDto> Anomalies,
-    IReadOnlyList<SettlementAttendanceBackfillDto> AttendanceBackfillRequests = null!);
+    IReadOnlyList<SettlementAttendanceBackfillDto> AttendanceBackfillRequests = null!,
+    SettlementWorkflowDto? Workflow = null);
+
+public sealed record SettlementWorkflowDto(
+    string? BusinessPeriodId,
+    string PeriodStatus,
+    string IntakeMode,
+    int UnfinishedOrderCount,
+    int ActiveServiceCount,
+    decimal CashReceived,
+    decimal CashRefunded,
+    decimal NetCash,
+    decimal RetainedAmount,
+    int PendingFinanceCount,
+    bool CanStopNewOrders,
+    bool CanClose,
+    bool CanFinalize,
+    bool CanCarryForward);
 
 public sealed class SaveSettlementInputsRequest
 {
@@ -210,3 +242,40 @@ public sealed class SettlementOrderAdjustmentRequest
     [Required, StringLength(1000, MinimumLength = 1)] public string Reason { get; init; } = string.Empty;
     [StringLength(1000)] public string? Note { get; init; }
 }
+
+public sealed class SettlementCloseRequest
+{
+    [Required] public DateOnly BusinessDate { get; init; }
+    [StringLength(80)] public string? OperationId { get; init; }
+    [StringLength(1000)] public string? Reason { get; init; }
+}
+
+public sealed class SettlementPayoutRequest
+{
+    [Required] public DateOnly BusinessDate { get; init; }
+    [Range(1, int.MaxValue)] public int SessionNo { get; init; } = 1;
+    [Required, StringLength(36)] public string StaffId { get; init; } = string.Empty;
+    [Required, RegularExpression("^(payout|recovery)$")] public string EventKind { get; init; } = "payout";
+    [Range(1, long.MaxValue)] public long Amount { get; init; }
+    [Required, StringLength(80, MinimumLength = 8)] public string OperationId { get; init; } = string.Empty;
+    [Required, StringLength(500, MinimumLength = 1)] public string Reason { get; init; } = string.Empty;
+}
+
+public sealed class SettlementCorrectionRequest
+{
+    [Required] public DateOnly BusinessDate { get; init; }
+    [Range(1, int.MaxValue)] public int SessionNo { get; init; } = 1;
+    [Required, StringLength(32)] public string SourceKind { get; init; } = "finance";
+    [StringLength(36)] public string? SourceId { get; init; }
+    [StringLength(36)] public string? StaffId { get; init; }
+    [Range(long.MinValue, long.MaxValue)] public long AmountDelta { get; init; }
+    [Required, StringLength(80, MinimumLength = 8)] public string OperationId { get; init; } = string.Empty;
+    [Required, StringLength(500, MinimumLength = 1)] public string Reason { get; init; } = string.Empty;
+}
+
+public sealed record SettlementPaymentDto(string Id, string SettlementId, string StaffId, string EventKind,
+    long Amount, string OperationId, string Reason, DateTimeOffset CreatedAt, string CreatedBy);
+
+public sealed record SettlementCorrectionDto(string Id, string SettlementId, string? CorrectionOfId,
+    string SourceKind, string? SourceId, string? StaffId, long AmountDelta, string Status,
+    string OperationId, string Reason, DateTimeOffset CreatedAt, string CreatedBy);

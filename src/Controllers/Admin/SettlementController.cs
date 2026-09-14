@@ -50,6 +50,12 @@ public sealed class SettlementController : ControllerBase
         SettlementFinalizeRequest request, CancellationToken cancellationToken)
         => Ok(ApiResponse<SettlementOverviewDto>.Ok(await _service.FinalizeAsync(request, User, cancellationToken)));
 
+    [HttpPost("close")]
+    [Authorize(Policy = "AdminManager")]
+    public async Task<ActionResult<ApiResponse<SettlementOverviewDto>>> Close(
+        SettlementCloseRequest request, CancellationToken cancellationToken)
+        => Ok(ApiResponse<SettlementOverviewDto>.Ok(await _service.CloseAsync(request, User, cancellationToken)));
+
     [HttpPost("reopen")]
     [Authorize(Policy = "AdminManager")]
     public async Task<ActionResult<ApiResponse<SettlementOverviewDto>>> Reopen(
@@ -74,4 +80,14 @@ public sealed class SettlementController : ControllerBase
     public async Task<ActionResult<ApiResponse<SettlementOverviewDto>>> AdjustOrder(
         string orderId, SettlementOrderAdjustmentRequest request, CancellationToken cancellationToken)
         => Ok(ApiResponse<SettlementOverviewDto>.Ok(await _service.SaveOrderAdjustmentAsync(orderId, request, User, cancellationToken)));
+
+    [HttpPost("payments")]
+    public async Task<ActionResult<ApiResponse<SettlementPaymentDto>>> RecordPayment(
+        SettlementPayoutRequest request, CancellationToken cancellationToken)
+        => Ok(ApiResponse<SettlementPaymentDto>.Ok(await _service.RecordPaymentAsync(request, User, cancellationToken)));
+
+    [HttpPost("corrections")]
+    public async Task<ActionResult<ApiResponse<SettlementCorrectionDto>>> RecordCorrection(
+        SettlementCorrectionRequest request, CancellationToken cancellationToken)
+        => Ok(ApiResponse<SettlementCorrectionDto>.Ok(await _service.RecordCorrectionAsync(request, User, cancellationToken)));
 }

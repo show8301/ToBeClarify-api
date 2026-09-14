@@ -17,12 +17,15 @@ public sealed class SettlementService : ISettlementService
     private readonly ISettlementRepository _repository;
     private readonly IAppClock _clock;
     private readonly IBusinessDayContext _businessDays;
+    private readonly IOrderingService _ordering;
 
-    public SettlementService(ISettlementRepository repository, IAppClock clock, IBusinessDayContext businessDays)
+    public SettlementService(ISettlementRepository repository, IAppClock clock, IBusinessDayContext businessDays,
+        IOrderingService ordering)
     {
         _repository = repository;
         _clock = clock;
         _businessDays = businessDays;
+        _ordering = ordering;
     }
 
     public async Task<SettlementOverviewDto> GetOverviewAsync(DateOnly businessDate, int sessionNo,
@@ -112,8 +115,6 @@ public sealed class SettlementService : ISettlementService
     public async Task<SettlementOverviewDto> CalculateAsync(SettlementCalculateRequest request,
         ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
-        if ((await _businessDays.GetForDateAsync(request.BusinessDate, cancellationToken)).FlowVersion >= 2)
-            throw new BusinessException("分項接待的薪資串接尚未開放；費用可持續記錄，未決分潤先保留。", "SETTLEMENT_FLOW_NOT_READY");
         var run = await RequireRunAsync(request.BusinessDate, request.SessionNo, actor, cancellationToken);
         EnsureEditable(run);
         var rule = await GetRuleForRunAsync(run, request.BusinessDate, cancellationToken);
@@ -128,8 +129,18 @@ public sealed class SettlementService : ISettlementService
         ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
         var calculated = await CalculateAsync(request, actor, cancellationToken);
+        var period = await _businessDays.GetForDateAsync(request.BusinessDate, cancellationToken);
+        if (period.BusinessPeriodId is not null && period.PeriodStatus == "open")
+            throw new BusinessException("請先停止新單並完成實際關店，再進行正式結算。", "BUSINESS_PERIOD_NOT_CLOSED");
         if (calculated.Anomalies.Count > 0)
             throw new BusinessException("結算仍有需手動處理的異常，完成處理前不可正式結算。", "SETTLEMENT_REQUIRES_MANUAL_HANDLING");
+        if (period.BusinessPeriodId is not null && period.PeriodStatus == "closed")
+            await _ordering.ApplyBusinessPeriodActionAsync(new BusinessPeriodActionRequest
+            {
+                BusinessDate = request.BusinessDate,
+                Action = "settle",
+                Reason = request.Reason?.Trim() ?? "正式結算"
+            }, actor, cancellationToken);
         await _repository.FinalizeAsync(calculated.Run.Id, ActorId(actor), _clock.LocalDateTime, cancellationToken);
         return await GetOverviewAsync(request.BusinessDate, request.SessionNo, cancellationToken);
     }
@@ -376,6 +387,14 @@ public sealed class SettlementService : ISettlementService
         runCopy.ServiceManagerPool = servicePool;
         runCopy.BackstagePool = backstagePool;
         runCopy.CompanyIncome = companyIncome;
+        runCopy.BusinessPeriodId = source.Period.BusinessPeriodId ?? source.Cash.BusinessPeriodId;
+        runCopy.SourceVersion = source.Cash.SourceVersion;
+        runCopy.SourceCutoffAt = source.Cash.LatestRecordedAt;
+        runCopy.CashReceived = source.Cash.CashReceived;
+        runCopy.CashRefunded = source.Cash.CashRefunded;
+        runCopy.NetCash = source.Cash.NetCash;
+        runCopy.RetainedAmount = Math.Max(0, source.Cash.RetainedAmount);
+        runCopy.PendingFinanceCount = source.Cash.PendingFinanceCount;
 
         var results = run.DayType == "event"
             ? CalculateEventResults(runCopy, source, rule, grossRevenue, anomalies)
@@ -391,12 +410,99 @@ public sealed class SettlementService : ISettlementService
             runCopy.BackstagePool = 0;
             runCopy.CompanyIncome = activityDenominator <= 0 ? 0 : runCopy.ActivityNetRevenue * (run.CompanyShareHours ?? 0) / activityDenominator;
         }
+        if (source.Cash.HasCashRecords)
+            ApplyCashSnapshot(runCopy, results);
         var summary = new SettlementSummaryDto(runCopy.GrossRevenue, runCopy.DesignatedRevenueBase,
             runCopy.DedicatedRoomGross, runCopy.DedicatedRoomOwnerShare, runCopy.DedicatedRoomCompanyRemainder,
             runCopy.PublicRoomUnassignedRevenue, runCopy.AdmissionRevenue, runCopy.MealRevenue, runCopy.CompanyRevenue,
             runCopy.ServiceManagerPool, runCopy.BackstagePool, runCopy.CompanyIncome, runCopy.ActivityNetRevenue,
-            results.Sum(x => x.AfterRounding), results.Sum(x => x.CompanySubsidy));
+            results.Sum(x => x.AfterRounding), results.Sum(x => x.CompanySubsidy),
+            0, 0,
+            runCopy.CashReceived, runCopy.CashRefunded, runCopy.NetCash, runCopy.RetainedAmount,
+            runCopy.PendingFinanceCount);
         return new CalculationResult(runCopy, results, summary, anomalies);
+    }
+
+    public async Task<SettlementOverviewDto> CloseAsync(SettlementCloseRequest request, ClaimsPrincipal actor,
+        CancellationToken cancellationToken)
+    {
+        ValidateDate(request.BusinessDate);
+        var period = await _businessDays.GetForDateAsync(request.BusinessDate, cancellationToken);
+        if (period.BusinessPeriodId is null)
+            throw new BusinessException("本營業日尚未開店，無法關店。", "BUSINESS_PERIOD_NOT_FOUND");
+        if (period.PeriodStatus == "open")
+        {
+            await _ordering.ApplyBusinessPeriodActionAsync(new BusinessPeriodActionRequest
+            {
+                BusinessDate = request.BusinessDate, Action = "set_intake_mode", IntakeMode = "staff_only",
+                Reason = request.Reason?.Trim() ?? "關店前停止新單", OperationId = request.OperationId
+            }, actor, cancellationToken);
+            await _ordering.ApplyBusinessPeriodActionAsync(new BusinessPeriodActionRequest
+            {
+                BusinessDate = request.BusinessDate, Action = "close",
+                Reason = request.Reason?.Trim() ?? "實際關店"
+            }, actor, cancellationToken);
+        }
+        return await GetOverviewAsync(request.BusinessDate, 1, cancellationToken);
+    }
+
+    public async Task<SettlementPaymentDto> RecordPaymentAsync(SettlementPayoutRequest request,
+        ClaimsPrincipal actor, CancellationToken cancellationToken)
+    {
+        ValidateDate(request.BusinessDate);
+        if (request.Amount <= 0 || string.IsNullOrWhiteSpace(request.StaffId) || string.IsNullOrWhiteSpace(request.Reason))
+            throw new BusinessException("支付金額、人員與原因不可為空。", "SETTLEMENT_PAYMENT_INVALID");
+        var run = await RequireRunAsync(request.BusinessDate, request.SessionNo, actor, cancellationToken);
+        if (run.Status != "finalized")
+            throw new BusinessException("請先完成正式結算，才能登記支付或追回。", "SETTLEMENT_PAYMENT_REQUIRES_FINALIZED");
+        var row = await _repository.RecordPaymentAsync(run.Id, request, ActorId(actor), _clock.LocalDateTime, cancellationToken);
+        return new SettlementPaymentDto(row.Id, row.SettlementId, row.StaffId, row.EventKind, row.Amount,
+            row.OperationId, row.Reason, ToOffset(row.CreatedAt), row.CreatedBy);
+    }
+
+    public async Task<SettlementCorrectionDto> RecordCorrectionAsync(SettlementCorrectionRequest request,
+        ClaimsPrincipal actor, CancellationToken cancellationToken)
+    {
+        ValidateDate(request.BusinessDate);
+        if (request.AmountDelta == 0 || string.IsNullOrWhiteSpace(request.SourceKind) || string.IsNullOrWhiteSpace(request.Reason))
+            throw new BusinessException("更正差額、來源與原因不可為空。", "SETTLEMENT_CORRECTION_INVALID");
+        var run = await RequireRunAsync(request.BusinessDate, request.SessionNo, actor, cancellationToken);
+        if (run.Status != "finalized")
+            throw new BusinessException("只有正式結算後的差異需要建立更正版本。", "SETTLEMENT_CORRECTION_REQUIRES_FINALIZED");
+        var row = await _repository.RecordCorrectionAsync(run.Id, request, ActorId(actor), _clock.LocalDateTime, cancellationToken);
+        return new SettlementCorrectionDto(row.Id, row.SettlementId, row.CorrectionOfId, row.SourceKind,
+            row.SourceId, row.StaffId, row.AmountDelta, row.Status, row.OperationId, row.Reason,
+            ToOffset(row.CreatedAt), row.CreatedBy);
+    }
+
+    private static void ApplyCashSnapshot(SettlementRunRow run, IReadOnlyList<SettlementResultLineRow> results)
+    {
+        var calculatedGross = run.GrossRevenue;
+        var factor = calculatedGross <= 0 ? 0 : Math.Max(0, run.NetCash / calculatedGross);
+        if (calculatedGross <= 0 && run.NetCash > 0) factor = 1;
+        run.GrossRevenue = calculatedGross * factor;
+        run.DesignatedRevenueBase *= factor;
+        run.DedicatedRoomGross *= factor;
+        run.DedicatedRoomOwnerShare *= factor;
+        run.DedicatedRoomCompanyRemainder *= factor;
+        run.PublicRoomUnassignedRevenue *= factor;
+        run.AdmissionRevenue *= factor;
+        run.MealRevenue *= factor;
+        run.CompanyRevenue *= factor;
+        run.ServiceManagerPool *= factor;
+        run.BackstagePool *= factor;
+        run.CompanyIncome *= factor;
+        run.ActivityNetRevenue = run.GrossRevenue - run.ActivityExpense;
+        foreach (var result in results)
+        {
+            result.RevenueBase *= factor;
+            result.RevenueShare *= factor;
+            result.PreferredPay = result.Role == "dedicated_room_owner"
+                ? result.RevenueShare : Math.Max(result.BasePay, result.RevenueShare);
+            result.BeforeRounding = result.PreferredPay + result.DesignatedTip + result.PublicTip;
+            result.AfterRounding = checked((int)Math.Ceiling(result.BeforeRounding));
+            result.CompanySubsidy = result.AfterRounding - result.BeforeRounding;
+        }
     }
 
     private static IReadOnlyList<SettlementResultLineRow> CalculateNormalResults(SettlementRunRow run,
@@ -558,14 +664,20 @@ public sealed class SettlementService : ISettlementService
         Status = row.Status, RuleVersionId = row.RuleVersionId, RuleSnapshotJson = row.RuleSnapshotJson,
         PublicTipAmount = row.PublicTipAmount, AdmissionFeeOverride = row.AdmissionFeeOverride,
         AdmissionFeeSnapshot = row.AdmissionFeeSnapshot, ActivityExpense = row.ActivityExpense,
-        CompanyShareHours = row.CompanyShareHours, ActivityHoursConfirmed = row.ActivityHoursConfirmed
+        CompanyShareHours = row.CompanyShareHours, ActivityHoursConfirmed = row.ActivityHoursConfirmed,
+        BusinessPeriodId = row.BusinessPeriodId, SourceVersion = row.SourceVersion,
+        SourceCutoffAt = row.SourceCutoffAt, CashReceived = row.CashReceived,
+        CashRefunded = row.CashRefunded, NetCash = row.NetCash, RetainedAmount = row.RetainedAmount,
+        PendingFinanceCount = row.PendingFinanceCount, CorrectsSettlementId = row.CorrectsSettlementId,
+        CorrectionVersion = row.CorrectionVersion
     };
 
     private static SettlementSummaryDto BuildFinalizedSummary(SettlementRunRow run, IReadOnlyList<SettlementResultLineRow> results)
         => new(run.GrossRevenue, run.DesignatedRevenueBase, run.DedicatedRoomGross, run.DedicatedRoomOwnerShare,
             run.DedicatedRoomCompanyRemainder, run.PublicRoomUnassignedRevenue, run.AdmissionRevenue,
             run.MealRevenue, run.CompanyRevenue, run.ServiceManagerPool, run.BackstagePool, run.CompanyIncome,
-            run.ActivityNetRevenue, results.Sum(x => x.AfterRounding), results.Sum(x => x.CompanySubsidy));
+            run.ActivityNetRevenue, results.Sum(x => x.AfterRounding), results.Sum(x => x.CompanySubsidy), 0, 0,
+            run.CashReceived, run.CashRefunded, run.NetCash, run.RetainedAmount, run.PendingFinanceCount);
 
     private static SettlementOverviewDto MapOverview(SettlementRunRow run, SettlementRuleRow rule,
         SettlementSourceData source, IReadOnlyList<SettlementResultLineRow> results, SettlementSummaryDto summary,
@@ -584,9 +696,17 @@ public sealed class SettlementService : ISettlementService
                     backfill?.Reason, x.AttendanceApprovedBy, x.AttendanceApprovedAt);
             }).ToArray(),
             results.Select(MapResult).ToArray(), anomalies ?? [],
-            source.AttendanceBackfillRequests.Select(x => new SettlementAttendanceBackfillDto(x.Id, x.StaffId,
-                x.StaffName, x.Role, x.RequestedMinutes, x.Reason, x.Status, x.RequestedBy, x.RequestedAt,
-                x.ReviewedBy, x.ReviewedAt, x.ReviewNote)).ToArray());
+             source.AttendanceBackfillRequests.Select(x => new SettlementAttendanceBackfillDto(x.Id, x.StaffId,
+                 x.StaffName, x.Role, x.RequestedMinutes, x.Reason, x.Status, x.RequestedBy, x.RequestedAt,
+                 x.ReviewedBy, x.ReviewedAt, x.ReviewNote)).ToArray(),
+             new SettlementWorkflowDto(source.Period.BusinessPeriodId ?? source.Cash.BusinessPeriodId,
+                 source.Period.PeriodStatus, source.Period.IntakeMode, source.Period.UnfinishedOrderCount,
+                 source.Period.ActiveServiceCount, source.Cash.CashReceived, source.Cash.CashRefunded,
+                 source.Cash.NetCash, source.Cash.RetainedAmount, source.Cash.PendingFinanceCount,
+                 source.Period.PeriodStatus == "open",
+                 source.Period.PeriodStatus == "open" && source.Period.UnfinishedOrderCount == 0,
+                 source.Period.PeriodStatus == "closed" && run.Status != "finalized",
+                 source.Cash.PendingFinanceCount > 0 || source.Period.UnfinishedOrderCount > 0));
 
     private static SettlementRuleDto MapRule(SettlementRuleRow row) => new(row.Id, row.DayType,
         DateOnly.FromDateTime(row.EffectiveFrom), row.DesignatedHourlyRate, row.ServiceManagerHourlyRate,
@@ -597,7 +717,9 @@ public sealed class SettlementService : ISettlementService
     private static SettlementRunDto MapRun(SettlementRunRow row) => new(row.Id, DateOnly.FromDateTime(row.BusinessDate),
         row.SessionNo, row.DayType, row.Status, row.RuleVersionId, row.PublicTipAmount, row.AdmissionFeeOverride,
         row.AdmissionFeeSnapshot, row.ActivityExpense, row.CompanyShareHours, row.ActivityHoursConfirmed,
-        row.FinalizedAt);
+        row.FinalizedAt, row.BusinessPeriodId, row.SourceVersion, row.SourceCutoffAt, row.CashReceived,
+        row.CashRefunded, row.NetCash, row.RetainedAmount, row.PendingFinanceCount,
+        row.CorrectsSettlementId, row.CorrectionVersion);
 
     private static SettlementResultLineDto MapResult(SettlementResultLineRow row) => new(row.StaffId, row.DisplayName,
         row.Role, row.PayableHours, row.HourlyRate, row.BasePay, row.RevenueBase, row.RevenuePercentage,
@@ -616,6 +738,9 @@ public sealed class SettlementService : ISettlementService
         => actor.FindFirstValue(AdminAuthConstants.UserIdClaimType)
             ?? actor.FindFirstValue(ClaimTypes.NameIdentifier)
             ?? throw new UnauthorizedException();
+
+    private static DateTimeOffset ToOffset(DateTime value)
+        => new(DateTime.SpecifyKind(value, DateTimeKind.Unspecified), TimeSpan.FromHours(8));
 
     private static void EnsureEditable(SettlementRunRow run)
     {

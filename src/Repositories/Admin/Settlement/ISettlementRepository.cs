@@ -1,4 +1,5 @@
 using ToBeClarify.Api.Models.Entities;
+using ToBeClarify.Api.Models.Dtos;
 
 namespace ToBeClarify.Api.Repositories.Admin.Settlement;
 
@@ -15,6 +16,8 @@ public sealed class SettlementSourceData
     public IReadOnlyList<SettlementResultLineRow> Results { get; init; } = [];
     public IReadOnlyList<SettlementAttendanceBackfillRow> AttendanceBackfillRequests { get; init; } = [];
     public IReadOnlyList<SettlementRunRow> Runs { get; init; } = [];
+    public SettlementCashSummaryRow Cash { get; init; } = new();
+    public SettlementPeriodSummaryRow Period { get; init; } = new();
 }
 
 public interface ISettlementRepository
@@ -43,6 +46,10 @@ public interface ISettlementRepository
     Task SaveOrderAdjustmentAsync(string settlementId, string orderId, int adjustedAmount, string reason,
         string? note, string actorId, DateTime now, CancellationToken cancellationToken);
     Task<int?> GetOrderTotalAsync(string orderId, CancellationToken cancellationToken);
+    Task<SettlementPaymentEventRow> RecordPaymentAsync(string settlementId, SettlementPayoutRequest request,
+        string actorId, DateTime now, CancellationToken cancellationToken);
+    Task<SettlementCorrectionEventRow> RecordCorrectionAsync(string settlementId, SettlementCorrectionRequest request,
+        string actorId, DateTime now, CancellationToken cancellationToken);
 }
 
 public sealed class SaveInputsData

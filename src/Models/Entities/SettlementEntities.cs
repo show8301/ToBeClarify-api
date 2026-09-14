@@ -49,6 +49,16 @@ public sealed class SettlementRunRow
     public decimal ActivityNetRevenue { get; set; }
     public DateTime? FinalizedAt { get; set; }
     public string? FinalizedBy { get; set; }
+    public string? BusinessPeriodId { get; set; }
+    public long SourceVersion { get; set; }
+    public DateTime? SourceCutoffAt { get; set; }
+    public decimal CashReceived { get; set; }
+    public decimal CashRefunded { get; set; }
+    public decimal NetCash { get; set; }
+    public decimal RetainedAmount { get; set; }
+    public int PendingFinanceCount { get; set; }
+    public string? CorrectsSettlementId { get; set; }
+    public int CorrectionVersion { get; set; }
 }
 
 public sealed class SettlementStaffInputRow
@@ -170,4 +180,57 @@ public sealed class SettlementAdmissionRow
 {
     public int SessionCount { get; set; }
     public string? AdmissionFeeText { get; set; }
+}
+
+public sealed class SettlementCashSummaryRow
+{
+    public string? BusinessPeriodId { get; set; }
+    public decimal CashReceived { get; set; }
+    public decimal CashRefunded { get; set; }
+    public decimal NetCash { get; set; }
+    public decimal RetainedAmount { get; set; }
+    public int PendingFinanceCount { get; set; }
+    public long SourceVersion { get; set; }
+    public DateTime? LatestRecordedAt { get; set; }
+    public bool HasCashRecords { get; set; }
+}
+
+public sealed class SettlementPeriodSummaryRow
+{
+    public string? BusinessPeriodId { get; set; }
+    public string PeriodStatus { get; set; } = "scheduled";
+    public string IntakeMode { get; set; } = "staff_only";
+    public DateTime? ActualClosedAt { get; set; }
+    public DateTime? SettledAt { get; set; }
+    public int UnfinishedOrderCount { get; set; }
+    public int ActiveServiceCount { get; set; }
+}
+
+public sealed class SettlementPaymentEventRow
+{
+    public string Id { get; set; } = string.Empty;
+    public string SettlementId { get; set; } = string.Empty;
+    public string StaffId { get; set; } = string.Empty;
+    public string EventKind { get; set; } = "payout";
+    public long Amount { get; set; }
+    public string OperationId { get; set; } = string.Empty;
+    public string Reason { get; set; } = string.Empty;
+    public DateTime CreatedAt { get; set; }
+    public string CreatedBy { get; set; } = string.Empty;
+}
+
+public sealed class SettlementCorrectionEventRow
+{
+    public string Id { get; set; } = string.Empty;
+    public string SettlementId { get; set; } = string.Empty;
+    public string? CorrectionOfId { get; set; }
+    public string SourceKind { get; set; } = string.Empty;
+    public string? SourceId { get; set; }
+    public string? StaffId { get; set; }
+    public long AmountDelta { get; set; }
+    public string Status { get; set; } = "open";
+    public string OperationId { get; set; } = string.Empty;
+    public string Reason { get; set; } = string.Empty;
+    public DateTime CreatedAt { get; set; }
+    public string CreatedBy { get; set; } = string.Empty;
 }

@@ -24,4 +24,10 @@ public interface ISettlementService
         SettlementAttendanceReviewRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<SettlementOverviewDto> SaveOrderAdjustmentAsync(string orderId, SettlementOrderAdjustmentRequest request,
         ClaimsPrincipal actor, CancellationToken cancellationToken);
+    Task<SettlementOverviewDto> CloseAsync(SettlementCloseRequest request, ClaimsPrincipal actor,
+        CancellationToken cancellationToken);
+    Task<SettlementPaymentDto> RecordPaymentAsync(SettlementPayoutRequest request, ClaimsPrincipal actor,
+        CancellationToken cancellationToken);
+    Task<SettlementCorrectionDto> RecordCorrectionAsync(SettlementCorrectionRequest request, ClaimsPrincipal actor,
+        CancellationToken cancellationToken);
 }
