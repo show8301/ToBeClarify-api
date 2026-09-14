@@ -468,8 +468,8 @@ public sealed partial class OrderingRepository
         var confirmation = action switch { "cancel" => "cancelled", "reschedule" => "waiting", "complete" => "completed", "backfill" when unit.CompletedQuantity > 0 => "completed", _ => "confirmed" };
         await connection.ExecuteAsync(new CommandDefinition("""
             UPDATE ORDER_NOMINEES SET CONFIRMATION_STATUS=@Confirmation,
-                CONFIRMED_AT=CASE WHEN @Action='accept' THEN @Now WHEN @Action='reschedule' THEN NULL ELSE CONFIRMED_AT END,
-                CONFIRMED_BY=CASE WHEN @Action='accept' THEN @ActorId WHEN @Action='reschedule' THEN NULL ELSE CONFIRMED_BY END,
+                CONFIRMED_AT=CASE WHEN @Action IN ('accept','start_now') THEN @Now WHEN @Action='reschedule' THEN NULL ELSE CONFIRMED_AT END,
+                CONFIRMED_BY=CASE WHEN @Action IN ('accept','start_now') THEN @ActorId WHEN @Action='reschedule' THEN NULL ELSE CONFIRMED_BY END,
                 REQUESTED_STARTS_AT=@RequestedStartsAt,REQUESTED_SERVICE_ENDS_AT=@RequestedServiceEndsAt,
                 REQUESTED_BUSY_UNTIL=@RequestedBusyUntil,UPDATED_AT=@Now WHERE ID=@Id;
             """, new { nominee.Id, Confirmation = confirmation, Action = action, Now = now, ActorId = actorId,
