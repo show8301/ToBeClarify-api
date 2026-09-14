@@ -92,6 +92,8 @@ builder.Services.AddScoped<IBusinessDayContext, BusinessDayContextService>();
 builder.Services.AddScoped<BusinessDayPlanService>();
 builder.Services.AddScoped<OrderingFinanceRepository>();
 builder.Services.AddScoped<OrderingFinanceService>();
+builder.Services.AddScoped<ToBeClarify.Api.Repositories.Admin.Attendance.AttendanceRepository>();
+builder.Services.AddScoped<ToBeClarify.Api.Services.Admin.Attendance.AttendanceService>();
 builder.Services.AddScoped<ToBeClarify.Api.Services.Menu.MenuSortService>();
 builder.Services.AddScoped<ToBeClarify.Api.Services.Menu.MenuQuoteService>();
 builder.Services.AddScoped<ToBeClarify.Api.Services.Menu.MenuNotifications>();

@@ -177,9 +177,17 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
 
             SELECT I.`ID` AS Id, I.`SETTLEMENT_ID` AS SettlementId, I.`STAFF_ID` AS StaffId,
                    I.`ROLE` AS Role, M.`DISPLAY_NAME` AS DisplayName, M.`ROLE_TITLE` AS RoleTitle,
-                   M.`IS_ACTIVE` AS IsActive, COALESCE(S.`IS_WORKING`, FALSE) AS IsWorking,
-                   I.`ACTUAL_MINUTES` AS ActualMinutes, I.`ACTIVITY_HOURS` AS ActivityHours,
-                   I.`ATTENDANCE_SOURCE` AS AttendanceSource,
+                   M.`IS_ACTIVE` AS IsActive, COALESCE(P.`IS_WORKING`, S.`IS_WORKING`, FALSE) AS IsWorking,
+                   CASE WHEN EXISTS (SELECT 1 FROM `STAFF_ATTENDANCE_EVENTS` E WHERE E.`STAFF_MEMBER_ID`=I.`STAFF_ID`
+                                     AND E.`BUSINESS_DATE`=@BusinessDate
+                                     AND E.`EVENT_TYPE` IN ('clock_out','scheduled_end','manual_interval','adjustment'))
+                        THEN COALESCE((SELECT SUM(E2.`MINUTES_DELTA`) FROM `STAFF_ATTENDANCE_EVENTS` E2
+                                       WHERE E2.`STAFF_MEMBER_ID`=I.`STAFF_ID` AND E2.`BUSINESS_DATE`=@BusinessDate
+                                         AND E2.`EVENT_TYPE` IN ('clock_out','scheduled_end','manual_interval','adjustment')), 0)
+                        ELSE I.`ACTUAL_MINUTES` END AS ActualMinutes, I.`ACTIVITY_HOURS` AS ActivityHours,
+                   CASE WHEN EXISTS (SELECT 1 FROM `STAFF_ATTENDANCE_EVENTS` E WHERE E.`STAFF_MEMBER_ID`=I.`STAFF_ID`
+                                     AND E.`BUSINESS_DATE`=@BusinessDate AND E.`SOURCE` IN ('scheduled','manual'))
+                        THEN 'clock' ELSE I.`ATTENDANCE_SOURCE` END AS AttendanceSource,
                    I.`ATTENDANCE_REQUEST_ID` AS AttendanceRequestId,
                    I.`ATTENDANCE_APPROVED_BY` AS AttendanceApprovedBy,
                    I.`ATTENDANCE_APPROVED_AT` AS AttendanceApprovedAt,
@@ -188,6 +196,8 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
             FROM `SETTLEMENT_STAFF_INPUTS` I
             INNER JOIN `STAFF_MEMBERS` M ON M.`ID` = I.`STAFF_ID`
             LEFT JOIN `STAFF_SCHEDULES` S ON S.`STAFF_ID` = I.`STAFF_ID` AND S.`WORK_DATE` = @BusinessDate
+            LEFT JOIN `STAFF_DUTY_PLANS` P ON P.`STAFF_MEMBER_ID` = I.`STAFF_ID` AND P.`BUSINESS_DATE` = @BusinessDate
+                AND P.`APPROVAL_STATUS`='approved'
             WHERE I.`SETTLEMENT_ID` = @SettlementId;
 
             SELECT R.`ID` AS Id, R.`SETTLEMENT_ID` AS SettlementId, R.`STAFF_ID` AS StaffId,
