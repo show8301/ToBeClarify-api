@@ -39,16 +39,25 @@ public sealed class AttendanceRepository(AppDbContext dbContext)
             FROM STAFF_DAILY_WORK_MODES WHERE BUSINESS_DATE=@BusinessDate
               AND (@StaffId IS NULL OR STAFF_MEMBER_ID=@StaffId);
             """, new { BusinessDate=businessDate.ToDateTime(TimeOnly.MinValue), StaffId=staffId }, cancellationToken:ct))).ToDictionary(x=>x.StaffId, StringComparer.Ordinal);
-        var active = (await connection.QueryAsync<ActiveRow>(new CommandDefinition("""
-            SELECT N.STAFF_ID AS StaffId, COUNT(*) AS Count
+        var affected = (await connection.QueryAsync<AffectedRow>(new CommandDefinition("""
+            SELECT N.STAFF_ID AS StaffId, O.ID AS OrderId, O.ORDER_NUMBER AS OrderNumber,
+                   O.ORDER_STATUS AS OrderStatus, S.CUSTOMER_NAME AS CustomerName,
+                   N.REQUESTED_STARTS_AT AS RequestedStart, N.REQUESTED_SERVICE_ENDS_AT AS RequestedEnd,
+                   N.CONFIRMATION_STATUS AS ConfirmationStatus
             FROM ORDER_NOMINEES N JOIN ORDERS O ON O.ID=N.ORDER_ID
                  JOIN CUSTOMER_ORDER_SESSIONS S ON S.ID=O.SESSION_ID
-            WHERE S.BUSINESS_DATE=@BusinessDate AND O.ORDER_STATUS IN ('confirmed','in_service')
-              AND N.CONFIRMATION_STATUS IN ('confirmed','in_service') AND N.REQUESTED_SERVICE_ENDS_AT>@Now
-            GROUP BY N.STAFF_ID;
-            """, new { BusinessDate=businessDate.ToDateTime(TimeOnly.MinValue), Now=now }, cancellationToken:ct))).ToDictionary(x=>x.StaffId, StringComparer.Ordinal);
+            WHERE S.BUSINESS_DATE=@BusinessDate
+              AND O.ORDER_STATUS NOT IN ('cancelled','expired','rejected','completed')
+              AND N.CONFIRMATION_STATUS NOT IN ('cancelled','expired','rejected','completed')
+              AND N.REQUESTED_SERVICE_ENDS_AT>@Now
+            ORDER BY N.STAFF_ID, N.REQUESTED_STARTS_AT, O.ORDER_NUMBER;
+            """, new { BusinessDate=businessDate.ToDateTime(TimeOnly.MinValue), Now=now }, cancellationToken:ct))).ToArray();
+        var active = affected.Where(x => x.OrderStatus is "confirmed" or "in_service"
+                && x.ConfirmationStatus is "confirmed" or "in_service")
+            .GroupBy(x=>x.StaffId, StringComparer.Ordinal).ToDictionary(x=>x.Key, x=>x.Count(), StringComparer.Ordinal);
         var summaries = plans.Select(plan => BuildSummary(plan, events.Where(x=>x.StaffId==plan.StaffId),
-            stops.TryGetValue(plan.StaffId,out var stop) && stop.Stop, active.TryGetValue(plan.StaffId,out var busy) ? busy.Count : 0)).ToArray();
+            stops.TryGetValue(plan.StaffId,out var stop) && stop.Stop, active.TryGetValue(plan.StaffId,out var busy) ? busy : 0,
+            affected.Where(x=>x.StaffId==plan.StaffId))).ToArray();
         return new StaffAttendanceOverviewDto(businessDate.ToString("yyyy-MM-dd"), nowOffset,
             summaries.Select(MapSummary).ToArray());
     }
@@ -196,7 +205,8 @@ public sealed class AttendanceRepository(AppDbContext dbContext)
     private static string StableOp(string id, string suffix)
         => $"{id.Replace("-", "", StringComparison.Ordinal)[..Math.Min(34, id.Replace("-", "", StringComparison.Ordinal).Length)]}{suffix}";
 
-    private static SummaryRow BuildSummary(PlanRow plan, IEnumerable<EventRow> source, bool stop, int active)
+    private static SummaryRow BuildSummary(PlanRow plan, IEnumerable<EventRow> source, bool stop, int active,
+        IEnumerable<AffectedRow> affected)
     {
         var rows = source.OrderBy(x=>x.EventAt).ToArray();
         var start = PlanTime(plan.BusinessDate, plan.StartTime); var end = PlanTime(plan.BusinessDate, plan.EndTime);
@@ -208,7 +218,7 @@ public sealed class AttendanceRepository(AppDbContext dbContext)
         var open = rows.Any(x=>x.EventType=="clock_in" && !rows.Any(y=>y.BaseEventId==x.Id));
         return new SummaryRow(plan, start, end, actualStart == default ? null : actualStart, actualEnd == default ? null : actualEnd,
             end is null || start is null ? 0 : (int)Math.Floor((end.Value-start.Value).TotalMinutes), worked, adjustments,
-            Math.Max(0, worked+adjustments), open, stop, active, rows);
+            Math.Max(0, worked+adjustments), open, stop, active, affected.ToArray(), rows);
     }
 
     private static StaffAttendanceSummaryDto MapSummary(SummaryRow x)
@@ -216,7 +226,10 @@ public sealed class AttendanceRepository(AppDbContext dbContext)
             x.ScheduledStart is { } ss ? Offset(ss) : null, x.ScheduledEnd is { } se ? Offset(se) : null,
             x.ActualStart is { } a ? Offset(a) : null, x.ActualEnd is { } e ? Offset(e) : null, x.ScheduledMinutes,
             x.WorkedMinutes, x.Adjustments, x.EffectiveMinutes, x.Open, x.Stop, x.Active,
-            x.Events.Select(MapEvent).ToArray());
+            x.Affected.Select(MapAffected).ToArray(), x.Events.Select(MapEvent).ToArray());
+
+    private static StaffAttendanceAffectedOrderDto MapAffected(AffectedRow x)
+        => new(x.OrderId, x.OrderNumber, x.OrderStatus, x.CustomerName, Offset(x.RequestedStart), Offset(x.RequestedEnd));
 
     private static StaffAttendanceEventDto MapEvent(EventRow x)
         => new(x.Id, x.StaffId, x.BusinessDate.ToString("yyyy-MM-dd"), x.DutyPlanId, x.EventType,
@@ -269,6 +282,6 @@ public sealed class AttendanceRepository(AppDbContext dbContext)
     private sealed class PlanRow { public string Id {get;set;}=""; public string StaffId {get;set;}=""; public string DisplayName {get;set;}=""; public DateTime BusinessDate {get;set;} public TimeSpan? StartTime {get;set;} public TimeSpan? EndTime {get;set;} public bool IsWorking {get;set;} public string ApprovalStatus {get;set;}=""; }
     private sealed class EventRow { public string Id {get;set;}=""; public string StaffId {get;set;}=""; public DateTime BusinessDate {get;set;} public string? DutyPlanId {get;set;} public string EventType {get;set;}=""; public DateTime EventAt {get;set;} public DateTime? EventEndAt {get;set;} public string Source {get;set;}=""; public int MinutesDelta {get;set;} public string? BaseEventId {get;set;} public string OperationId {get;set;}=""; public string? Reason {get;set;} public DateTime CreatedAt {get;set;} }
     private sealed class StopRow { public string StaffId {get;set;}=""; public bool Stop {get;set;} }
-    private sealed class ActiveRow { public string StaffId {get;set;}=""; public int Count {get;set;} }
-    private sealed record SummaryRow(PlanRow Plan, DateTime? ScheduledStart, DateTime? ScheduledEnd, DateTime? ActualStart, DateTime? ActualEnd, int ScheduledMinutes, int WorkedMinutes, int Adjustments, int EffectiveMinutes, bool Open, bool Stop, int Active, EventRow[] Events);
+    private sealed class AffectedRow { public string StaffId {get;set;}=""; public string OrderId {get;set;}=""; public string OrderNumber {get;set;}=""; public string OrderStatus {get;set;}=""; public string? CustomerName {get;set;} public DateTime RequestedStart {get;set;} public DateTime RequestedEnd {get;set;} public string ConfirmationStatus {get;set;}=""; }
+    private sealed record SummaryRow(PlanRow Plan, DateTime? ScheduledStart, DateTime? ScheduledEnd, DateTime? ActualStart, DateTime? ActualEnd, int ScheduledMinutes, int WorkedMinutes, int Adjustments, int EffectiveMinutes, bool Open, bool Stop, int Active, AffectedRow[] Affected, EventRow[] Events);
 }

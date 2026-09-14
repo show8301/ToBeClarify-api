@@ -12,7 +12,13 @@ public sealed record StaffAttendanceSummaryDto(
     DateTimeOffset? ScheduledStart, DateTimeOffset? ScheduledEnd,
     DateTimeOffset? ActualStart, DateTimeOffset? ActualEnd, int ScheduledMinutes,
     int WorkedMinutes, int AdjustmentMinutes, int EffectiveMinutes, bool HasOpenShift,
-    bool StopAcceptingNewOrders, int ActiveServiceCount, IReadOnlyList<StaffAttendanceEventDto> Events);
+    bool StopAcceptingNewOrders, int ActiveServiceCount,
+    IReadOnlyList<StaffAttendanceAffectedOrderDto> AffectedOrders,
+    IReadOnlyList<StaffAttendanceEventDto> Events);
+
+public sealed record StaffAttendanceAffectedOrderDto(
+    string OrderId, string OrderNumber, string OrderStatus, string? CustomerName,
+    DateTimeOffset RequestedStart, DateTimeOffset RequestedEnd);
 
 public sealed record StaffAttendanceOverviewDto(
     string BusinessDate, DateTimeOffset GeneratedAt, IReadOnlyList<StaffAttendanceSummaryDto> Staff);
