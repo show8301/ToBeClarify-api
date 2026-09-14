@@ -75,6 +75,9 @@ public class OrderSessionRow
     public int PrepaidMealCredit { get; set; }
     public int RemainingMealCredit { get; set; }
     public string SessionStatus { get; set; } = string.Empty;
+    public string EntryStatus { get; set; } = "open";
+    public DateTime? DepartedAt { get; set; }
+    public string? DepartureReason { get; set; }
     public DateTime? LastAccessedAt { get; set; }
     public DateTime CreatedAt { get; set; }
 }

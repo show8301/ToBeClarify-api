@@ -65,6 +65,8 @@ public sealed record OrderSessionDto(
 {
     public string? BusinessPeriodId { get; init; }
     public int FlowVersion { get; init; } = 1;
+    public string EntryStatus { get; init; } = "open";
+    public DateTimeOffset? DepartedAt { get; init; }
 }
 
 public sealed record OrderSessionIssuedDto(

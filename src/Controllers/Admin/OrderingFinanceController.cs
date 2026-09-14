@@ -25,6 +25,30 @@ public sealed class OrderingFinanceController(OrderingFinanceService service) : 
         string sessionId, CancellationToken ct)
         => Ok(ApiResponse<IReadOnlyList<OrderingFinancePeriodOptionDto>>.Ok(await service.GetPeriodOptionsAsync(sessionId, ct)));
 
+    [HttpGet("admission")]
+    public async Task<ActionResult<ApiResponse<OrderingAdmissionDto?>>> Admission(string sessionId, CancellationToken ct)
+        => Ok(ApiResponse<OrderingAdmissionDto?>.Ok(await service.GetAdmissionAsync(sessionId, ct)));
+
+    [HttpPost("admission")]
+    public async Task<ActionResult<ApiResponse<OrderingAdmissionOperationDto>>> SaveAdmission(string sessionId,
+        SaveOrderingAdmissionRequest request, CancellationToken ct)
+        => Ok(ApiResponse<OrderingAdmissionOperationDto>.Ok(await service.SaveAdmissionAsync(sessionId, request, User, ct)));
+
+    [HttpGet("cases")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<OrderingFinanceCaseDto>>>> Cases(string sessionId,
+        [FromQuery] bool includeResolved, CancellationToken ct)
+        => Ok(ApiResponse<IReadOnlyList<OrderingFinanceCaseDto>>.Ok(await service.GetCasesAsync(sessionId, includeResolved, ct)));
+
+    [HttpPost("cases/{caseId}/resolve")]
+    public async Task<ActionResult<ApiResponse<OrderingFinanceCaseOperationDto>>> ResolveCase(string sessionId,
+        string caseId, ResolveOrderingFinanceCaseRequest request, CancellationToken ct)
+        => Ok(ApiResponse<OrderingFinanceCaseOperationDto>.Ok(await service.ResolveCaseAsync(sessionId, caseId, request, User, ct)));
+
+    [HttpPost("departure")]
+    public async Task<ActionResult<ApiResponse<OrderingSessionDepartureDto>>> Departure(string sessionId,
+        UpdateOrderingSessionDepartureRequest request, CancellationToken ct)
+        => Ok(ApiResponse<OrderingSessionDepartureDto>.Ok(await service.UpdateDepartureAsync(sessionId, request, User, ct)));
+
     [HttpGet("records/{recordId}/revisions")]
     public async Task<ActionResult<ApiResponse<IReadOnlyList<OrderingFinanceRevisionDto>>>> Revisions(
         string sessionId, string recordId, CancellationToken ct)

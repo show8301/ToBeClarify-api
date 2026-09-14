@@ -23,6 +23,58 @@ public sealed class OrderingFinanceService(OrderingFinanceRepository repository)
     public Task<IReadOnlyList<OrderingFinanceRevisionDto>> GetRevisionsAsync(string sessionId, string recordId, CancellationToken ct)
         => repository.GetRevisionsAsync(sessionId, recordId, ct);
 
+    public Task<OrderingAdmissionDto?> GetAdmissionAsync(string sessionId, CancellationToken ct)
+        => repository.GetAdmissionAsync(sessionId, ct);
+
+    public Task<IReadOnlyList<OrderingFinanceCaseDto>> GetCasesAsync(string sessionId, bool includeResolved, CancellationToken ct)
+        => repository.GetCasesAsync(sessionId, includeResolved, ct);
+
+    public Task<OrderingCustomerBillDto> GetCustomerBillAsync(string sessionId, CancellationToken ct)
+        => repository.GetCustomerBillAsync(sessionId, ct);
+
+    public async Task<OrderingAdmissionOperationDto> SaveAdmissionAsync(string sessionId,
+        SaveOrderingAdmissionRequest request, ClaimsPrincipal actor, CancellationToken ct)
+    {
+        var actorId = ActorId(actor);
+        if (!Guid.TryParse(request.OperationId, out var op) || request.ExpectedVersion < 0)
+            throw new BusinessException("操作識別碼或帳款版本無效。", "FINANCE_INVALID_OPERATION");
+        if (request.Amount < 0 || request.DiscountAmount < 0 || request.DiscountAmount > request.Amount || request.CreditAmount < 0 || request.Amount > 1_000_000_000_000L)
+            throw new BusinessException("入場費、折讓與折抵額度無效。", "ADMISSION_INVALID_AMOUNT");
+        if (request.Mode is not ("received" or "unpaid" or "waived" or "reissue"))
+            throw new BusinessException("入場狀態無效。", "ADMISSION_INVALID_MODE");
+        var reason = string.IsNullOrWhiteSpace(request.Reason) ? "入場帳記錄" : request.Reason.Trim();
+        if (reason.Length > 500) throw new BusinessException("原因最多 500 字。", "FINANCE_REASON_REQUIRED");
+        var normalized = request with { OperationId = op.ToString(), Reason = reason,
+            DiscountAmount = request.Mode == "waived" ? request.Amount : request.DiscountAmount,
+            CashPeriodId = EmptyToNull(request.CashPeriodId) };
+        return await repository.SaveAdmissionAsync(sessionId, normalized, Hash(new { sessionId, request = normalized }), actorId, ct);
+    }
+
+    public async Task<OrderingFinanceCaseOperationDto> ResolveCaseAsync(string sessionId, string caseId,
+        ResolveOrderingFinanceCaseRequest request, ClaimsPrincipal actor, CancellationToken ct)
+    {
+        var actorId = ActorId(actor);
+        if (!Guid.TryParse(request.OperationId, out var op) || request.ExpectedVersion < 0)
+            throw new BusinessException("操作識別碼或帳款版本無效。", "FINANCE_INVALID_OPERATION");
+        var normalized = request with { OperationId = op.ToString(), CashPeriodId = EmptyToNull(request.CashPeriodId),
+            ResolutionNote = string.IsNullOrWhiteSpace(request.ResolutionNote) ? "案件確認完成" : request.ResolutionNote.Trim() };
+        return await repository.ResolveCaseAsync(sessionId, caseId, normalized,
+            Hash(new { sessionId, caseId, request = normalized }), actorId, ct);
+    }
+
+    public async Task<OrderingSessionDepartureDto> UpdateDepartureAsync(string sessionId,
+        UpdateOrderingSessionDepartureRequest request, ClaimsPrincipal actor, CancellationToken ct)
+    {
+        var actorId = ActorId(actor);
+        if (!Guid.TryParse(request.OperationId, out var op))
+            throw new BusinessException("操作識別碼無效。", "FINANCE_INVALID_OPERATION");
+        var action = (request.Action ?? "depart").Trim().ToLowerInvariant();
+        var normalized = request with { OperationId = op.ToString(), Action = action,
+            Reason = string.IsNullOrWhiteSpace(request.Reason) ? "顧客離店處理" : request.Reason.Trim() };
+        return await repository.UpdateDepartureAsync(sessionId, normalized,
+            Hash(new { sessionId, request = normalized }), actorId, ct);
+    }
+
     public Task<OrderingFinanceOperationDto> SaveAsync(string sessionId, string? recordId,
         SaveOrderingFinanceRecordRequest request, ClaimsPrincipal actor, CancellationToken ct)
     {
@@ -71,6 +123,13 @@ public sealed class OrderingFinanceService(OrderingFinanceRepository repository)
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload)));
         return repository.SaveAsync(sessionId, recordId, normalized, hash, actorId, ct);
     }
+
+    private static string ActorId(ClaimsPrincipal actor)
+        => actor.FindFirstValue(AdminAuthConstants.UserIdClaimType)
+            ?? actor.FindFirstValue(ClaimTypes.NameIdentifier) ?? throw new UnauthorizedException();
+
+    private static string Hash(object payload)
+        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(payload))));
 
     private static string? EmptyToNull(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

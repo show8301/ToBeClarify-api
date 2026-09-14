@@ -29,9 +29,10 @@ public sealed partial class OrderingService : IOrderingService
     private readonly IConfiguration _configuration;
     private readonly IBusinessDayContext _businessDay;
     private readonly BusinessDayPlanService _plans;
+    private readonly OrderingFinanceRepository _finance;
 
     public OrderingService(IOrderingRepository repository, IOrderingTokenService tokens,
-        IMenuService menuService, IRoomService roomService, IStaffService staffService, IAppClock clock, MenuQuoteService quotes, IConfiguration configuration, IBusinessDayContext businessDay, BusinessDayPlanService plans)
+        IMenuService menuService, IRoomService roomService, IStaffService staffService, IAppClock clock, MenuQuoteService quotes, IConfiguration configuration, IBusinessDayContext businessDay, BusinessDayPlanService plans, OrderingFinanceRepository finance)
     {
         _repository = repository;
         _tokens = tokens;
@@ -43,6 +44,7 @@ public sealed partial class OrderingService : IOrderingService
         _configuration = configuration;
         _businessDay = businessDay;
         _plans = plans;
+        _finance = finance;
     }
 
     public async Task<OrderSessionIssuedDto> CreateSessionAsync(CreateOrderSessionRequest request,
@@ -351,6 +353,12 @@ public sealed partial class OrderingService : IOrderingService
     {
         var session = await ValidateTokenAsync(token, cancellationToken);
         return await MapOrdersAsync(await _repository.GetOrdersBySessionAsync(session.Id, cancellationToken), cancellationToken);
+    }
+
+    public async Task<OrderingCustomerBillDto> GetCustomerBillAsync(string token, CancellationToken cancellationToken)
+    {
+        var session = await ValidateTokenAsync(token, cancellationToken);
+        return await _finance.GetCustomerBillAsync(session.Id, cancellationToken);
     }
 
     public async Task<IReadOnlyList<AdminOrderSessionDto>> GetAdminSessionsAsync(DateOnly? businessDate,
@@ -1014,7 +1022,7 @@ public sealed partial class OrderingService : IOrderingService
 
     private static OrderSessionDto MapSession(OrderSessionRow row)
         => new(row.Id, row.GameId, row.CustomerName, DateOnly.FromDateTime(row.BusinessDate),
-            row.MaxNominatedStaff, row.PrepaidMealCredit, row.RemainingMealCredit, row.SessionStatus) { BusinessPeriodId=row.BusinessPeriodId, FlowVersion=row.FlowVersion };
+            row.MaxNominatedStaff, row.PrepaidMealCredit, row.RemainingMealCredit, row.SessionStatus) { BusinessPeriodId=row.BusinessPeriodId, FlowVersion=row.FlowVersion, EntryStatus=row.EntryStatus, DepartedAt=ToOffset(row.DepartedAt) };
 
     private static OrderingBusinessDayOverrideDto? MapBusinessDayOverride(BusinessDayOverrideRow? row)
         => row is null ? null : new OrderingBusinessDayOverrideDto(row.Enabled,

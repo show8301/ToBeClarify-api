@@ -2017,7 +2017,9 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
         S.`SHORT_CODE_HASH` AS ShortCodeHash, S.`RECOVERY_CODE_HASH` AS RecoveryCodeHash,
         S.`MAX_NOMINATED_STAFF` AS MaxNominatedStaff,
         S.`PREPAID_MEAL_CREDIT` AS PrepaidMealCredit, S.`REMAINING_MEAL_CREDIT` AS RemainingMealCredit,
-        S.`SESSION_STATUS` AS SessionStatus, S.`LAST_ACCESSED_AT` AS LastAccessedAt, S.`CREATED_AT` AS CreatedAt
+        S.`SESSION_STATUS` AS SessionStatus, COALESCE(S.`ENTRY_STATUS`, 'open') AS EntryStatus,
+        S.`DEPARTED_AT` AS DepartedAt, S.`DEPARTURE_REASON` AS DepartureReason,
+        S.`LAST_ACCESSED_AT` AS LastAccessedAt, S.`CREATED_AT` AS CreatedAt
         """;
 
     private const string BusinessPeriodColumns = """
