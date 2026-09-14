@@ -32,6 +32,8 @@ public sealed class ExceptionHandlingMiddleware
 
             context.Response.ContentType = "application/json";
             context.Response.StatusCode = (int)statusCode;
+            if (ex is GuestbookRateLimitException limited)
+                context.Response.Headers.RetryAfter = limited.RetryAfter.ToString();
 
             var response = ApiResponse<object>.Fail(errorCode, message, traceId);
             await context.Response.WriteAsJsonAsync(response);
@@ -42,6 +44,8 @@ public sealed class ExceptionHandlingMiddleware
     {
         return exception switch
         {
+            GuestbookUnavailableException unavailable => (HttpStatusCode.ServiceUnavailable, "GUESTBOOK_UNAVAILABLE", unavailable.Message),
+            GuestbookRateLimitException => (HttpStatusCode.TooManyRequests, "RATE_LIMITED", "每次留言後需等待 3 分鐘。"),
             BusinessException businessException => (HttpStatusCode.BadRequest, businessException.ErrorCode, businessException.Message),
             ConflictException conflictException => (HttpStatusCode.Conflict, conflictException.ErrorCode, conflictException.Message),
             NotFoundException notFoundException => (HttpStatusCode.NotFound, notFoundException.ErrorCode, notFoundException.Message),

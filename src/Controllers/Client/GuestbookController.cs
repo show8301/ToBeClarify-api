@@ -8,6 +8,8 @@ namespace ToBeClarify.Api.Controllers.Client;
 
 [ApiController]
 [Route("api/client/guestbook/comments")]
+[ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
+[RequestSizeLimit(16384)]
 public sealed class GuestbookController : ControllerBase
 {
     private readonly IGuestbookService _service;
@@ -25,7 +27,6 @@ public sealed class GuestbookController : ControllerBase
         => Ok(ApiResponse<GuestbookCommentDto>.Ok(await _service.GetGuestbookCommentAsync(id, cancellationToken)));
 
     [HttpPost]
-    [EnableRateLimiting("guestbook-write")]
     [ProducesResponseType(typeof(ApiResponse<GuestbookCommentDto>), StatusCodes.Status201Created)]
     public async Task<ActionResult<ApiResponse<GuestbookCommentDto>>> Create(
         [FromBody] CreateGuestbookCommentRequest request, CancellationToken cancellationToken)
@@ -35,7 +36,6 @@ public sealed class GuestbookController : ControllerBase
     }
 
     [HttpPost("{id}/replies")]
-    [EnableRateLimiting("guestbook-write")]
     [ProducesResponseType(typeof(ApiResponse<GuestbookReplyDto>), StatusCodes.Status201Created)]
     public async Task<ActionResult<ApiResponse<GuestbookReplyDto>>> CreateReply(
         string id, [FromBody] CreateGuestbookReplyRequest request, CancellationToken cancellationToken)

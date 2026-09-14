@@ -76,6 +76,9 @@ builder.Services.Configure<ApiLoggingOptions>(builder.Configuration.GetSection(A
 builder.Services.Configure<MediaOptions>(builder.Configuration.GetSection(MediaOptions.SectionName));
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<AppDbContext>();
+builder.Services.AddScoped<ToBeClarify.Api.Repositories.Shared.GuestbookStore>();
+builder.Services.AddScoped<ToBeClarify.Api.Services.Client.Guestbook.GuestbookBoardService>();
+builder.Services.AddScoped<ToBeClarify.Api.Services.Admin.Guestbook.AdminGuestbookService>();
 builder.Services.AddSingleton<IAppClock, TaiwanAppClock>();
 builder.Services.AddSingleton<PasswordHashService>();
 builder.Services.AddScoped<IApiLogService, ApiLogService>();
@@ -137,15 +140,6 @@ builder.Services.AddRateLimiter(options =>
             ApiResponse<object>.Fail("RATE_LIMITED", "Too many requests.", context.HttpContext.TraceIdentifier),
             cancellationToken);
     };
-    options.AddPolicy("guestbook-write", httpContext => RateLimitPartition.GetFixedWindowLimiter(
-        httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-        _ => new FixedWindowRateLimiterOptions
-        {
-            PermitLimit = 5,
-            Window = TimeSpan.FromMinutes(1),
-            QueueLimit = 0,
-            AutoReplenishment = true
-        }));
     options.AddPolicy("admin-login", httpContext => RateLimitPartition.GetFixedWindowLimiter(
         httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions

@@ -141,6 +141,7 @@ public sealed record GuestbookPageDto(
 
 public sealed class CreateGuestbookCommentRequest
 {
+    [StringLength(200)] public string Website { get; init; } = "";
     [Required, StringLength(60, MinimumLength = 1)]
     public string DisplayName { get; init; } = string.Empty;
 
@@ -153,6 +154,7 @@ public sealed class CreateGuestbookCommentRequest
 
 public sealed class CreateGuestbookReplyRequest
 {
+    [StringLength(200)] public string Website { get; init; } = "";
     [Required, StringLength(60, MinimumLength = 1)]
     public string DisplayName { get; init; } = string.Empty;
 
