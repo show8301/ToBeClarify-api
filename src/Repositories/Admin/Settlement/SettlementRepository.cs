@@ -245,7 +245,7 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
                    COALESCE(SUM(CASE WHEN F.`ALLOCATION_STATUS`='pending' OR F.`CASH_PERIOD_ID` IS NULL AND F.`KIND` IN ('cash_receipt','cash_refund') THEN 1 ELSE 0 END), 0) AS PendingFinanceCount,
                    COALESCE(MAX(F.`VERSION`), 0) AS SourceVersion,
                    MAX(F.`UPDATED_AT`) AS LatestRecordedAt,
-                   CAST(COUNT(F.`ID`) > 0 AS UNSIGNED) AS HasCashRecords
+                   CAST(SUM(CASE WHEN F.`KIND` IN ('cash_receipt','cash_refund') THEN 1 ELSE 0 END) > 0 AS UNSIGNED) AS HasCashRecords
             FROM `ORDERING_FINANCE_RECORDS` F
             INNER JOIN `CUSTOMER_ORDER_SESSIONS` S ON S.`ID` = F.`SESSION_ID`
             WHERE S.`BUSINESS_DATE` = @BusinessDate;
