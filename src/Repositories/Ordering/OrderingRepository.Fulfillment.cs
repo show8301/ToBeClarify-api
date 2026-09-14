@@ -171,8 +171,9 @@ public sealed partial class OrderingRepository
                 if (parentSchedule is not null)
                 {
                     var nextStart = await connection.ExecuteScalarAsync<DateTime?>(new CommandDefinition("""
-                        SELECT MAX(SCHEDULED_ENDS_AT) FROM ORDER_FULFILLMENT_UNITS
-                        WHERE NOMINEE_ID=@NomineeId AND KIND='addon' AND UNIT_STATUS NOT IN ('cancelled','completed');
+                        SELECT MAX(F.SCHEDULED_ENDS_AT) FROM ORDER_FULFILLMENT_UNITS F
+                        JOIN ORDER_SERVICE_ADDONS A ON A.ID=F.RELATED_ID
+                        WHERE A.PARENT_NOMINEE_ID=@NomineeId AND F.KIND='addon' AND F.UNIT_STATUS NOT IN ('cancelled','completed');
                         """, new { addon.NomineeId }, tx, cancellationToken: ct));
                     unit.ScheduledStartsAt = nextStart.HasValue && nextStart.Value > parentSchedule.StartsAt ? nextStart : parentSchedule.StartsAt;
                     unit.ScheduledEndsAt = unit.ScheduledStartsAt?.AddMinutes(unit.PurchasedMinutes);
