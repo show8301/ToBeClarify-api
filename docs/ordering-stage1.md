@@ -11,3 +11,5 @@
   - `reschedule` 可帶 `targetBusinessPeriodId`，目標營業期須為可履約狀態。
 
 折讓在同一資料庫交易新增 `charge_reduce` 費用紀錄，服務事件寫入 `ORDER_FULFILLMENT_EVENTS`。晚開始碰到後續時段時，系統留下 `ORDER_FULFILLMENT_CONFLICTS`、釋放受影響的忙碌區段並將該單轉為待協調。
+
+排程工作到達等候期限時，只釋放尚未接單的加購暫占並回到待處理狀態，不會刪除加購或改寫原購買資料；接單與開始時仍會重新檢查母指名的剩餘容量。
