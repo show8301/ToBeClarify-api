@@ -43,6 +43,22 @@ public sealed partial class OrderingRepository
         return await ReadFulfillmentAsync(connection, null, orderId, cancellationToken);
     }
 
+    public async Task<IReadOnlyList<FulfillmentPeriodOptionDto>> GetFulfillmentPeriodOptionsAsync(string orderId,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        var exists = await connection.ExecuteScalarAsync<bool>(new CommandDefinition(
+            "SELECT EXISTS(SELECT 1 FROM ORDERS WHERE ID=@OrderId AND FLOW_VERSION>=2);",
+            new { OrderId = orderId }, cancellationToken: cancellationToken));
+        if (!exists) throw new BusinessException("此訂單尚未使用分項履約。", "FULFILLMENT_LEGACY_ORDER");
+        var rows = await connection.QueryAsync<FulfillmentPeriodOptionRow>(new CommandDefinition("""
+            SELECT ID AS Id, BUSINESS_DATE AS BusinessDate, PERIOD_STATUS AS Status
+            FROM BUSINESS_PERIODS WHERE PERIOD_STATUS IN ('open','coordination')
+            ORDER BY BUSINESS_DATE DESC LIMIT 200;
+            """, cancellationToken: cancellationToken));
+        return rows.Select(x => new FulfillmentPeriodOptionDto(x.Id, x.BusinessDate.ToString("yyyy-MM-dd"), x.Status)).ToArray();
+    }
+
     private static async Task<OrderFulfillmentDto> ReadFulfillmentAsync(MySqlConnection connection,
         MySqlTransaction? transaction, string orderId, CancellationToken ct)
     {
@@ -700,5 +716,11 @@ public sealed partial class OrderingRepository
     {
         public DateTime StartsAt { get; set; }
         public DateTime EndsAt { get; set; }
+    }
+    private sealed class FulfillmentPeriodOptionRow
+    {
+        public string Id { get; set; } = "";
+        public DateTime BusinessDate { get; set; }
+        public string Status { get; set; } = "";
     }
 }

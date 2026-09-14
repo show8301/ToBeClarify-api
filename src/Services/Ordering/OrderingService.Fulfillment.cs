@@ -22,6 +22,10 @@ public sealed partial class OrderingService
         return preview;
     }
 
+    public Task<IReadOnlyList<FulfillmentPeriodOptionDto>> GetFulfillmentPeriodOptionsAsync(string orderId,
+        ClaimsPrincipal actor, CancellationToken cancellationToken)
+        => _repository.GetFulfillmentPeriodOptionsAsync(orderId, cancellationToken);
+
     public async Task<OrderFulfillmentDto> TransitionFulfillmentAsync(string orderId, string unitId,
         FulfillmentTransitionRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken)
     {

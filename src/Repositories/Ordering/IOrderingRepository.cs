@@ -7,6 +7,8 @@ public interface IOrderingRepository
     Task<ToBeClarify.Api.Models.Dtos.OrderFulfillmentDto> GetFulfillmentAsync(string orderId, CancellationToken cancellationToken);
     Task<ToBeClarify.Api.Models.Dtos.FulfillmentStartPreviewDto> GetFulfillmentStartPreviewAsync(string orderId, string unitId,
         DateTime now, CancellationToken cancellationToken);
+    Task<IReadOnlyList<ToBeClarify.Api.Models.Dtos.FulfillmentPeriodOptionDto>> GetFulfillmentPeriodOptionsAsync(
+        string orderId, CancellationToken cancellationToken);
     Task<ToBeClarify.Api.Models.Dtos.OrderFulfillmentDto> TransitionFulfillmentAsync(string orderId, string unitId,
         ToBeClarify.Api.Models.Dtos.FulfillmentTransitionRequest request, string actorId, string actorRole,
         string? staffId, DateTime now, CancellationToken cancellationToken);

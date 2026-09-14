@@ -20,6 +20,11 @@ public sealed class OrderFulfillmentController(IOrderingService service) : Contr
         CancellationToken cancellationToken)
         => Ok(ApiResponse<FulfillmentStartPreviewDto>.Ok(await service.GetFulfillmentStartPreviewAsync(orderId, unitId, User, cancellationToken)));
 
+    [HttpGet("period-options")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<FulfillmentPeriodOptionDto>>>> PeriodOptions(string orderId,
+        CancellationToken cancellationToken)
+        => Ok(ApiResponse<IReadOnlyList<FulfillmentPeriodOptionDto>>.Ok(await service.GetFulfillmentPeriodOptionsAsync(orderId, User, cancellationToken)));
+
     [HttpPost("{unitId}/transition")]
     public async Task<ActionResult<ApiResponse<OrderFulfillmentDto>>> Transition(string orderId, string unitId,
         FulfillmentTransitionRequest request, CancellationToken cancellationToken)

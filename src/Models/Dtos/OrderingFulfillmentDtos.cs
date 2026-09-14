@@ -19,6 +19,8 @@ public sealed record FulfillmentStartPreviewDto(
     DateTimeOffset EffectiveEndsAt, int PurchasedMinutes, int OriginalRestMinutes,
     int RestMinutesReserved, IReadOnlyList<FulfillmentConflictDto> Conflicts, bool CanStartNow);
 
+public sealed record FulfillmentPeriodOptionDto(string Id, string BusinessDate, string Status);
+
 public sealed record OrderFulfillmentDto(string OrderId, string? BusinessPeriodId, int FlowVersion,
     string OrderStatus, IReadOnlyList<FulfillmentUnitDto> Units);
 
