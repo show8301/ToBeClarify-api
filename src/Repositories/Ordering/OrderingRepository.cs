@@ -829,6 +829,20 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
+            // Stage 1 addon holds expire without expiring the parent order. The case remains
+            // waiting and actionable, while its accepted capacity is released for re-check.
+            await connection.ExecuteAsync(new CommandDefinition("""
+                UPDATE ORDER_FULFILLMENT_UNITS F
+                JOIN ORDERS O ON O.ID=F.ORDER_ID
+                SET F.ACCEPTED_QUANTITY=0,F.UNIT_STATUS='waiting',F.VERSION=F.VERSION+1,F.UPDATED_AT=@Now
+                WHERE O.FLOW_VERSION>=2 AND O.ORDER_STATUS IN ('submitted','partially_confirmed','needs_reschedule')
+                  AND O.QUEUE_ENTERED_AT<=@Cutoff AND F.KIND='addon' AND F.UNIT_STATUS='accepted';
+                UPDATE ORDER_SERVICE_ADDONS A
+                JOIN ORDERS O ON O.ID=A.ORDER_ID
+                SET A.ADDON_STATUS='waiting',A.CONFIRMED_AT=NULL,A.CONFIRMED_BY=NULL,A.UPDATED_AT=@Now
+                WHERE O.FLOW_VERSION>=2 AND O.ORDER_STATUS IN ('submitted','partially_confirmed','needs_reschedule')
+                  AND O.QUEUE_ENTERED_AT<=@Cutoff AND A.ADDON_STATUS='confirmed';
+                """, new { Cutoff = cutoff, Now = now }, transaction, cancellationToken: cancellationToken));
             var orderIds = (await connection.QueryAsync<string>(new CommandDefinition("""
                 SELECT `ID` FROM `ORDERS`
                 WHERE `FLOW_VERSION`=1 AND `ORDER_STATUS` IN ('submitted', 'partially_confirmed', 'needs_reschedule')
