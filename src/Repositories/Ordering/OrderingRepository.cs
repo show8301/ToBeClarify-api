@@ -1451,7 +1451,15 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
                 throw new BusinessException("原指名資料已變更，無法送出加購服務。", "ADDON_PARENT_CHANGED");
             if (parent.ParentOrderStatus is not ("confirmed" or "in_service" or "partially_confirmed") || parent.ServiceEndsAt <= addon.SubmittedAt)
                 throw new BusinessException("原指名已不在可加購狀態。", "ADDON_PARENT_INACTIVE");
+            var existingAddonEnd = await connection.ExecuteScalarAsync<DateTime?>(new CommandDefinition("""
+                SELECT MAX(F.SCHEDULED_ENDS_AT)
+                FROM ORDER_FULFILLMENT_UNITS F
+                WHERE F.NOMINEE_ID=@NomineeId AND F.KIND='addon'
+                  AND F.UNIT_STATUS NOT IN ('cancelled','completed');
+                """, new { NomineeId = addon.ParentNomineeId }, transaction, cancellationToken: cancellationToken));
             var effectiveStart = parent.StartsAt > addon.SubmittedAt ? parent.StartsAt : addon.SubmittedAt;
+            if (existingAddonEnd.HasValue && existingAddonEnd.Value > effectiveStart)
+                effectiveStart = existingAddonEnd.Value;
             if (effectiveStart.AddMinutes(addon.ServiceDurationMinutes) > parent.ServiceEndsAt)
                 throw new BusinessException("原指名的剩餘時段已變更，無法容納此加購服務。", "ADDON_EXCEEDS_REMAINING_TIME");
 
