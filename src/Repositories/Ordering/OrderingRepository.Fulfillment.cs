@@ -13,6 +13,30 @@ namespace ToBeClarify.Api.Repositories.Ordering;
 
 public sealed partial class OrderingRepository
 {
+    private static async Task ValidateNewNominationEligibilityAsync(MySqlConnection connection,
+        MySqlTransaction tx, NewOrderAggregate order, CancellationToken ct)
+    {
+        foreach (var nominee in order.Nominees.OrderBy(n => n.StaffId, StringComparer.Ordinal))
+        {
+            // Lock the approved plan and daily mode while deciding whether this new sale is allowed.
+            var eligible = await connection.ExecuteScalarAsync<int?>(new CommandDefinition("""
+                SELECT CASE WHEN M.IS_ACTIVE=TRUE AND M.IS_NOMINATABLE=TRUE
+                    AND P.IS_WORKING=TRUE AND P.APPROVAL_STATUS='approved'
+                    AND @Now>=TIMESTAMP(P.BUSINESS_DATE,P.START_TIME)
+                    AND @Now<TIMESTAMP(P.BUSINESS_DATE,P.END_TIME)
+                        + INTERVAL (CASE WHEN P.END_TIME<=P.START_TIME THEN 1 ELSE 0 END) DAY
+                    AND COALESCE(D.IS_WORKING,TRUE)=TRUE
+                    AND COALESCE(D.STOP_ACCEPTING_NEW_ORDERS,FALSE)=FALSE THEN 1 ELSE 0 END
+                FROM CUSTOMER_ORDER_SESSIONS S JOIN STAFF_MEMBERS M ON M.ID=@StaffId
+                LEFT JOIN STAFF_DUTY_PLANS P ON P.STAFF_MEMBER_ID=M.ID AND P.BUSINESS_DATE=S.BUSINESS_DATE
+                LEFT JOIN STAFF_DAILY_WORK_MODES D ON D.STAFF_MEMBER_ID=M.ID AND D.BUSINESS_DATE=S.BUSINESS_DATE
+                WHERE S.ID=@SessionId FOR UPDATE
+                """, new { nominee.StaffId, order.SessionId, Now=order.SubmittedAt }, tx, cancellationToken:ct));
+            if (eligible != 1)
+                throw new ConflictException("店員班表或接單狀態已變更，請重新選擇。", "NOMINATION_UNAVAILABLE");
+        }
+    }
+
     public async Task<OrderFulfillmentDto> GetFulfillmentAsync(string orderId, CancellationToken cancellationToken)
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);

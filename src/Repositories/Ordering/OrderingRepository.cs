@@ -326,6 +326,11 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
             throw new BusinessException("目前已有營業中的營業日。", "BUSINESS_PERIOD_ALREADY_ACTIVE");
         if(await connection.ExecuteScalarAsync<int>(new CommandDefinition("SELECT COUNT(*) FROM BUSINESS_PERIODS WHERE BUSINESS_DATE=@BusinessDate",period,transaction,cancellationToken:cancellationToken))>0)
             throw new BusinessException("此營業日已存在，請查閱或重開原營業日。", "BUSINESS_PERIOD_EXISTS");
+        var savedPlan=await connection.QuerySingleOrDefaultAsync<BusinessPeriodRow>(new CommandDefinition(
+            "SELECT STARTS_AT StartsAt,ENDS_AT EndsAt FROM BUSINESS_DAY_PLANS WHERE BUSINESS_DATE=@BusinessDate FOR UPDATE",
+            period,transaction,cancellationToken:cancellationToken));
+        if(savedPlan is not null && (savedPlan.StartsAt!=period.StartsAt || savedPlan.EndsAt!=period.EndsAt))
+            throw new ConflictException("營業計畫剛被修改，請重新讀取再開店。", "BUSINESS_PLAN_VERSION_CONFLICT");
         await connection.ExecuteAsync(new CommandDefinition("""
             INSERT INTO BUSINESS_PERIODS(ID,BUSINESS_DATE,STARTS_AT,ENDS_AT,ACTUAL_OPENED_AT,PROJECTED_CLOSE_AT,
             TIMEZONE,PERIOD_STATUS,INTAKE_MODE,CREATED_AT,UPDATED_AT,UPDATED_BY,FLOW_VERSION,VERSION)
@@ -538,6 +543,8 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
                 "SELECT `REMAINING_MEAL_CREDIT` FROM `CUSTOMER_ORDER_SESSIONS` WHERE `ID` = @SessionId AND `SESSION_STATUS` = 'active' FOR UPDATE;",
                 new { order.SessionId }, transaction, cancellationToken: cancellationToken));
             if (!remaining.HasValue) throw new BusinessException("點餐碼已失效。", "ORDER_SESSION_INACTIVE");
+            if (currentPeriod?.FlowVersion >= 2)
+                await ValidateNewNominationEligibilityAsync(connection, transaction, order, cancellationToken);
             if (order.MealCreditApplied > remaining.Value)
                 throw new BusinessException("信物折抵餘額已變更，請重新確認訂單。", "MEAL_CREDIT_CHANGED");
             if (order.QuoteId is not null && order.MenuSnapshotJson is not null &&
