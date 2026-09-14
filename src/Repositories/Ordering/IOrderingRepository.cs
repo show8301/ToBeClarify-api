@@ -42,7 +42,7 @@ public interface IOrderingRepository
     Task<StaffOfferRow?> GetStaffOfferAsync(string staffId, string serviceId, DateOnly businessDate,
         CancellationToken cancellationToken);
     Task<StaffNominationRow?> GetStaffNominationAsync(string staffId, DateOnly businessDate,
-        bool requireApprovedPlan, CancellationToken cancellationToken);
+        bool requireApprovedPlan, DateTime? requestedAt, CancellationToken cancellationToken);
     Task<RoomRow?> GetActiveRoomAsync(string roomId, CancellationToken cancellationToken);
     Task<string?> GetStaffNameAsync(string staffId, CancellationToken cancellationToken);
     Task<bool> IsStaffBusyAsync(string staffId, DateTime startsAt, DateTime endsAt, CancellationToken cancellationToken);

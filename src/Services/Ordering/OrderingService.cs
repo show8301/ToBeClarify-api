@@ -220,8 +220,11 @@ public sealed partial class OrderingService : IOrderingService
         {
             var staffId = Required(line.StaffId, "STAFF_ID_REQUIRED");
             var mode = line.Mode == "companionship" ? "companionship" : "service";
+            var startsAt = ToTaiwanDateTime(line.RequestedStartsAt);
+            if (startsAt < now)
+                throw new BusinessException("指名開始時間不可早於目前時間。", "NOMINATION_START_IN_PAST");
             var staff = await _repository.GetStaffNominationAsync(staffId, businessDate,
-                session.FlowVersion >= 2, cancellationToken);
+                session.FlowVersion >= 2, startsAt, cancellationToken);
             if (staff is null || !staff.IsWorkingToday || !staff.StaffIsNominatable)
                 throw new BusinessException("此店員目前無法指名。", "NOMINATION_UNAVAILABLE");
             StaffOfferRow? offer = null;
@@ -232,9 +235,6 @@ public sealed partial class OrderingService : IOrderingService
                 if (offer is null || !offer.ServiceIsNominatable || !offer.ServiceIsEnabled || !offer.Price.HasValue)
                     throw new BusinessException("此服務目前無法指名。", "NOMINATION_UNAVAILABLE");
             }
-            var startsAt = ToTaiwanDateTime(line.RequestedStartsAt);
-            if (startsAt < now)
-                throw new BusinessException("指名開始時間不可早於目前時間。", "NOMINATION_START_IN_PAST");
             var coveredMinutes = checked(line.SegmentCount * settings.SegmentMinutes);
             var serviceDuration = offer?.DurationMinutes is > 0 ? offer.DurationMinutes.Value : coveredMinutes;
             var requiredSegments = (int)Math.Ceiling(serviceDuration / (double)settings.SegmentMinutes);
