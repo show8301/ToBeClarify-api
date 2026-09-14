@@ -36,7 +36,12 @@ public sealed record OrderingBusinessContextDto(
     int OpenSessionCount = 0,
     int WaitingOrderCount = 0,
     int UnfinishedOrderCount = 0,
-    DateTimeOffset? LatestCommittedBusyUntil = null);
+    DateTimeOffset? LatestCommittedBusyUntil = null)
+{
+    public string? BusinessPeriodId { get; init; }
+    public int FlowVersion { get; init; } = 1;
+    public int Version { get; init; }
+}
 
 public sealed record OrderingBusinessDayOverrideDto(
     bool Enabled,
@@ -56,7 +61,11 @@ public sealed record OrderSessionDto(
     int MaxNominatedStaff,
     int PrepaidMealCredit,
     int RemainingMealCredit,
-    string Status);
+    string Status)
+{
+    public string? BusinessPeriodId { get; init; }
+    public int FlowVersion { get; init; } = 1;
+}
 
 public sealed record OrderSessionIssuedDto(
     OrderSessionDto Session,
@@ -175,6 +184,9 @@ public sealed record OrderDto(
     IReadOnlyList<OrderStatusHistoryDto> History,
     IReadOnlyList<OrderRoomBookingDto> RoomBookings)
 {
+    public string? BusinessPeriodId { get; init; }
+    public int FlowVersion { get; init; } = 1;
+    public IReadOnlyList<FulfillmentUnitDto> Fulfillment { get; init; } = [];
     public System.Text.Json.JsonElement? MenuSnapshot { get; init; }
 }
 
@@ -380,6 +392,8 @@ public sealed class UpdateOrderingBusinessDayOverrideRequest
 
 public sealed class OpenBusinessPeriodRequest
 {
+    [Range(1,2)] public int FlowVersion { get; init; } = 1;
+    [StringLength(80)] public string? OperationId { get; init; }
     [Required]
     public DateOnly BusinessDate { get; init; }
 
@@ -391,6 +405,9 @@ public sealed class OpenBusinessPeriodRequest
 
 public sealed class BusinessPeriodActionRequest
 {
+    public DateOnly? BusinessDate { get; init; }
+    public int? ExpectedVersion { get; init; }
+    [StringLength(80)] public string? OperationId { get; init; }
     [Required, RegularExpression("^(set_projected_close|set_intake_mode|close|reopen|settle)$")]
     public string Action { get; init; } = string.Empty;
 

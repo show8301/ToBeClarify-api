@@ -12,7 +12,7 @@ namespace ToBeClarify.Api.Repositories.Ordering;
 // Direct SQL maintenance account cannot delete rows or schema objects. API callers
 // may use DeleteOrderItemAsync when the deployed API connection identity has the
 // required privilege and the service/controller business checks have passed.
-public sealed class OrderingRepository : DapperRepositoryBase, IOrderingRepository
+public sealed partial class OrderingRepository : DapperRepositoryBase, IOrderingRepository
 {
     public OrderingRepository(AppDbContext dbContext) : base(dbContext) { }
 
@@ -120,10 +120,10 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
     {
         const string sql = """
             INSERT INTO `CUSTOMER_ORDER_SESSIONS`
-                (`ID`, `GAME_ID`, `CUSTOMER_NAME`, `BUSINESS_DATE`, `ACCESS_TOKEN_HASH`, `SHORT_CODE_HASH`, `RECOVERY_CODE_HASH`,
+                (`ID`, `GAME_ID`, `CUSTOMER_NAME`, `BUSINESS_DATE`, `BUSINESS_PERIOD_ID`, `ACCESS_TOKEN_HASH`, `SHORT_CODE_HASH`, `RECOVERY_CODE_HASH`,
                  `MAX_NOMINATED_STAFF`, `PREPAID_MEAL_CREDIT`, `REMAINING_MEAL_CREDIT`, `SESSION_STATUS`,
                  `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
-            VALUES (@Id, @GameId, @CustomerName, @BusinessDate, @AccessTokenHash, @ShortCodeHash, @RecoveryCodeHash,
+            VALUES (@Id, @GameId, @CustomerName, @BusinessDate, @BusinessPeriodId, @AccessTokenHash, @ShortCodeHash, @RecoveryCodeHash,
                     @MaxNominatedStaff, @PrepaidMealCredit, @RemainingMealCredit, 'active',
                     @CreatedAt, @ActorId, @CreatedAt, @ActorId);
             INSERT INTO `ORDER_AUDIT_LOG`
@@ -131,13 +131,18 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             VALUES (@AuditId, @Id, 'session.created', @AfterJson, @ActorId, 'admin', @CreatedAt);
             """;
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await connection.ExecuteScalarAsync<string>(new CommandDefinition("SELECT ID FROM ORDERING_RUNTIME_LOCKS WHERE ID='operating_period' FOR UPDATE",transaction:transaction,cancellationToken:cancellationToken));
+        if(session.BusinessPeriodId is not null && await connection.ExecuteScalarAsync<int>(new CommandDefinition("SELECT COUNT(*) FROM BUSINESS_PERIODS WHERE ID=@Id AND PERIOD_STATUS='open'",new{Id=session.BusinessPeriodId},transaction,cancellationToken:cancellationToken))==0)
+            throw new BusinessException("營業日已關店，請重新整理。", "BUSINESS_PERIOD_NOT_OPEN");
         await connection.ExecuteAsync(new CommandDefinition(sql, new
         {
-            session.Id, session.GameId, session.CustomerName,
+            session.Id, session.GameId, session.CustomerName, session.BusinessPeriodId,
             BusinessDate = session.BusinessDate.Date, session.AccessTokenHash, session.ShortCodeHash, session.RecoveryCodeHash,
             session.MaxNominatedStaff, session.PrepaidMealCredit, session.RemainingMealCredit,
             session.CreatedAt, ActorId = actorId, AuditId = NewId(), AfterJson = JsonSerializer.Serialize(session)
-        }, cancellationToken: cancellationToken));
+        }, transaction, cancellationToken: cancellationToken));
+        await transaction.CommitAsync(cancellationToken);
     }
 
     public async Task RotateSessionCredentialsAsync(string sessionId, string tokenHash, string? recoveryCodeHash,
@@ -303,44 +308,74 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
     public async Task<BusinessPeriodRow> GetOrCreateBusinessPeriodAsync(BusinessPeriodRow period,
         CancellationToken cancellationToken)
     {
-        const string insertSql = """
-            INSERT IGNORE INTO `BUSINESS_PERIODS`
-                (`ID`, `BUSINESS_DATE`, `STARTS_AT`, `ENDS_AT`, `ACTUAL_OPENED_AT`, `PROJECTED_CLOSE_AT`,
-                 `TIMEZONE`, `PERIOD_STATUS`, `INTAKE_MODE`, `CREATED_AT`, `UPDATED_AT`, `UPDATED_BY`)
-            VALUES (@Id, @BusinessDate, @StartsAt, @EndsAt, @ActualOpenedAt, @ProjectedCloseAt,
-                    'Asia/Taipei', 'open', 'normal', @ActualOpenedAt, @ActualOpenedAt, @UpdatedBy);
-            """;
-        var selectSql = $"""
-            SELECT {BusinessPeriodColumns}
-            FROM `BUSINESS_PERIODS` WHERE `BUSINESS_DATE` = @BusinessDate LIMIT 1;
-            """;
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
-        var parameters = new
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await connection.ExecuteScalarAsync<string>(new CommandDefinition("SELECT ID FROM ORDERING_RUNTIME_LOCKS WHERE ID='operating_period' FOR UPDATE", transaction: transaction, cancellationToken:cancellationToken));
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new {period.BusinessDate,period.StartsAt,period.EndsAt,period.ProjectedCloseAt,period.FlowVersion,period.UpdatedBy}))));
+        if (!string.IsNullOrWhiteSpace(period.OperationId))
         {
-            period.Id,
-            BusinessDate = period.BusinessDate.Date,
-            period.StartsAt,
-            period.EndsAt,
-            period.ActualOpenedAt,
-            period.ProjectedCloseAt,
-            period.UpdatedBy
-        };
-        await connection.ExecuteAsync(new CommandDefinition(insertSql, parameters, cancellationToken: cancellationToken));
-        return await connection.QuerySingleAsync<BusinessPeriodRow>(new CommandDefinition(selectSql, parameters,
-            cancellationToken: cancellationToken));
+            var prior=await connection.QuerySingleOrDefaultAsync<PeriodOperation>(new CommandDefinition("SELECT PAYLOAD_HASH PayloadHash,PERIOD_ID PeriodId FROM BUSINESS_PERIOD_OPERATIONS WHERE OPERATION_ID=@OperationId",period,transaction,cancellationToken:cancellationToken));
+            if(prior is not null)
+            {
+                if(prior.PayloadHash!=hash) throw new ConflictException("此操作編號已用於不同內容。", "OPERATION_ID_CONFLICT");
+                var result=await connection.QuerySingleAsync<BusinessPeriodRow>(new CommandDefinition($"SELECT {BusinessPeriodColumns} FROM BUSINESS_PERIODS WHERE ID=@Id",new{Id=prior.PeriodId},transaction,cancellationToken:cancellationToken));
+                await transaction.CommitAsync(cancellationToken); return result;
+            }
+        }
+        if(await connection.ExecuteScalarAsync<int>(new CommandDefinition("SELECT COUNT(*) FROM BUSINESS_PERIODS WHERE PERIOD_STATUS='open'",transaction:transaction,cancellationToken:cancellationToken))>0)
+            throw new BusinessException("目前已有營業中的營業日。", "BUSINESS_PERIOD_ALREADY_ACTIVE");
+        if(await connection.ExecuteScalarAsync<int>(new CommandDefinition("SELECT COUNT(*) FROM BUSINESS_PERIODS WHERE BUSINESS_DATE=@BusinessDate",period,transaction,cancellationToken:cancellationToken))>0)
+            throw new BusinessException("此營業日已存在，請查閱或重開原營業日。", "BUSINESS_PERIOD_EXISTS");
+        await connection.ExecuteAsync(new CommandDefinition("""
+            INSERT INTO BUSINESS_PERIODS(ID,BUSINESS_DATE,STARTS_AT,ENDS_AT,ACTUAL_OPENED_AT,PROJECTED_CLOSE_AT,
+            TIMEZONE,PERIOD_STATUS,INTAKE_MODE,CREATED_AT,UPDATED_AT,UPDATED_BY,FLOW_VERSION,VERSION)
+            VALUES(@Id,@BusinessDate,@StartsAt,@EndsAt,@ActualOpenedAt,@ProjectedCloseAt,
+            'Asia/Taipei','open','normal',@ActualOpenedAt,@ActualOpenedAt,@UpdatedBy,@FlowVersion,1)
+            """,period,transaction,cancellationToken:cancellationToken));
+        if(!string.IsNullOrWhiteSpace(period.OperationId))
+            await connection.ExecuteAsync(new CommandDefinition("INSERT INTO BUSINESS_PERIOD_OPERATIONS(OPERATION_ID,PAYLOAD_HASH,BUSINESS_DATE,PERIOD_ID,ACTION,ACTOR_ID,CREATED_AT) VALUES(@OperationId,@Hash,@BusinessDate,@Id,'open',@UpdatedBy,@ActualOpenedAt)",new{period.OperationId,Hash=hash,period.BusinessDate,period.Id,period.UpdatedBy,period.ActualOpenedAt},transaction,cancellationToken:cancellationToken));
+        await InsertAuditAsync(connection,transaction,null,null,"business_period.open",null,JsonSerializer.Serialize(period),period.UpdatedBy??"unknown","manager",period.ActualOpenedAt!.Value,cancellationToken);
+        await transaction.CommitAsync(cancellationToken); return period;
     }
+
+    private sealed class PeriodOperation { public string PayloadHash { get; set; }=""; public string? PeriodId { get; set; } }
 
     public async Task ApplyBusinessPeriodActionAsync(string periodId, string action, DateTime? projectedCloseAt,
         string? intakeMode, string? reason, string actorId, string actorRole, DateTime now,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, int? expectedVersion = null, string? operationId = null)
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await connection.ExecuteScalarAsync<string>(new CommandDefinition("SELECT ID FROM ORDERING_RUNTIME_LOCKS WHERE ID='operating_period' FOR UPDATE",transaction:transaction,cancellationToken:cancellationToken));
         var before = await connection.QuerySingleOrDefaultAsync<BusinessPeriodRow>(new CommandDefinition(
             $"SELECT {BusinessPeriodColumns} FROM `BUSINESS_PERIODS` WHERE `ID` = @PeriodId FOR UPDATE;",
             new { PeriodId = periodId }, transaction, cancellationToken: cancellationToken))
             ?? throw new BusinessException("找不到目前營業期。", "BUSINESS_PERIOD_NOT_FOUND");
 
+        var hash=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new{periodId,action,projectedCloseAt,intakeMode,reason,actorId,expectedVersion}))));
+        if(!string.IsNullOrWhiteSpace(operationId))
+        {
+            var previous=await connection.QuerySingleOrDefaultAsync<string>(new CommandDefinition("SELECT PAYLOAD_HASH FROM BUSINESS_PERIOD_OPERATIONS WHERE OPERATION_ID=@OperationId",new{OperationId=operationId},transaction,cancellationToken:cancellationToken));
+            if(previous is not null)
+            {
+                if(previous!=hash) throw new ConflictException("操作編號內容不一致。", "OPERATION_ID_CONFLICT");
+                await transaction.CommitAsync(cancellationToken); return;
+            }
+        }
+        if(expectedVersion.HasValue && before.Version!=expectedVersion) throw new ConflictException("營業日已更新，請重新整理。", "BUSINESS_PERIOD_VERSION_CONFLICT");
+        if(action is "set_projected_close" or "set_intake_mode" or "close" && before.PeriodStatus!="open")
+            throw new BusinessException("目前已非營業中。", "BUSINESS_PERIOD_NOT_OPEN");
+        if(action is "reopen" or "settle" && before.PeriodStatus!="closed")
+            throw new BusinessException("需先關店。", "BUSINESS_PERIOD_NOT_CLOSED");
+        if(action=="settle" && before.FlowVersion>=2)
+            throw new BusinessException("分項接待的薪資串接尚未開放；未決費用可結轉，請保留分潤。", "SETTLEMENT_FLOW_NOT_READY");
+        if(action=="reopen" && await connection.ExecuteScalarAsync<int>(new CommandDefinition("SELECT COUNT(*) FROM BUSINESS_PERIODS WHERE PERIOD_STATUS='open' AND ID<>@Id",before,transaction,cancellationToken:cancellationToken))>0)
+            throw new BusinessException("已有其他營業日開店，無法同時重開。", "BUSINESS_PERIOD_ALREADY_ACTIVE");
+        if(action is "close" or "settle")
+        {
+            var unfinished=await connection.ExecuteScalarAsync<int>(new CommandDefinition("SELECT COUNT(*) FROM ORDERS O JOIN CUSTOMER_ORDER_SESSIONS S ON S.ID=O.SESSION_ID WHERE S.BUSINESS_DATE=@BusinessDate AND O.ORDER_STATUS IN ('submitted','partially_confirmed','needs_reschedule','confirmed','in_service')",before,transaction,cancellationToken:cancellationToken));
+            if(unfinished>0) throw new BusinessException("仍有未完成訂單，請先處理。", "BUSINESS_PERIOD_HAS_UNFINISHED_ORDERS");
+        }
         var (status, mode, closedAt, settledAt) = action switch
         {
             "open" => (before.PeriodStatus, before.IntakeMode, before.ActualClosedAt, before.SettledAt),
@@ -354,7 +389,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
         var nextProjectedClose = action == "set_projected_close" ? projectedCloseAt : before.ProjectedCloseAt;
         await connection.ExecuteAsync(new CommandDefinition("""
             UPDATE `BUSINESS_PERIODS`
-            SET `PERIOD_STATUS` = @Status, `INTAKE_MODE` = @Mode,
+            SET `VERSION`=`VERSION`+1, `PERIOD_STATUS` = @Status, `INTAKE_MODE` = @Mode,
                 `PROJECTED_CLOSE_AT` = @ProjectedCloseAt, `ACTUAL_CLOSED_AT` = @ClosedAt,
                 `SETTLED_AT` = @SettledAt, `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId
             WHERE `ID` = @PeriodId;
@@ -364,6 +399,8 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
         await InsertAuditAsync(connection, transaction, null, null, $"business_period.{action}",
             JsonSerializer.Serialize(before), JsonSerializer.Serialize(new { status, mode, projectedCloseAt = nextProjectedClose,
                 closedAt, settledAt, reason }), actorId, actorRole, now, cancellationToken);
+        if(!string.IsNullOrWhiteSpace(operationId))
+            await connection.ExecuteAsync(new CommandDefinition("INSERT INTO BUSINESS_PERIOD_OPERATIONS(OPERATION_ID,PAYLOAD_HASH,BUSINESS_DATE,PERIOD_ID,ACTION,ACTOR_ID,CREATED_AT) VALUES(@OperationId,@Hash,@BusinessDate,@PeriodId,@Action,@ActorId,@Now)",new{OperationId=operationId,Hash=hash,before.BusinessDate,PeriodId=periodId,Action=action,ActorId=actorId,Now=now},transaction,cancellationToken:cancellationToken));
         await transaction.CommitAsync(cancellationToken);
     }
 
@@ -487,6 +524,11 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await connection.ExecuteScalarAsync<string>(new CommandDefinition("SELECT ID FROM ORDERING_RUNTIME_LOCKS WHERE ID='operating_period' FOR UPDATE",transaction:transaction,cancellationToken:cancellationToken));
+        var currentPeriod = await connection.QuerySingleOrDefaultAsync<BusinessPeriodRow>(new CommandDefinition("SELECT P.PERIOD_STATUS PeriodStatus,P.INTAKE_MODE IntakeMode,P.FLOW_VERSION FlowVersion FROM CUSTOMER_ORDER_SESSIONS S JOIN BUSINESS_PERIODS P ON P.ID=S.BUSINESS_PERIOD_ID WHERE S.ID=@SessionId",new{order.SessionId},transaction,cancellationToken:cancellationToken));
+        if(currentPeriod?.FlowVersion>=2 && (currentPeriod.PeriodStatus!="open" || (order.IntakeModeSnapshot!="staff_only" && currentPeriod.IntakeMode=="staff_only")))
+            throw new BusinessException("已停止接收新訂單，請洽店員協助。", "BUSINESS_PERIOD_NOT_OPEN");
+
         try
         {
             var existing = await MenuQuoteService.ConsumeAsync(connection, transaction, order, cancellationToken);
@@ -630,6 +672,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             await InsertHistoryAsync(connection, transaction, order.Id, null, order.Status,
                 "顧客送出訂單", "customer", null, order.SubmittedAt, cancellationToken);
             await MenuNotifications.EnqueueAsync(connection, transaction, order, cancellationToken);
+            await InitializeFulfillmentAsync(connection, transaction, order.Id, order.SessionId, order.SubmittedAt, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return order.Id;
         }
@@ -651,7 +694,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
         var sql = $"""
             SELECT O.`ID` AS Id, O.`SESSION_ID` AS SessionId, O.`ORDER_NUMBER` AS OrderNumber,
                    O.`ORDER_KIND` AS OrderKind, O.`PARENT_NOMINEE_ID` AS ParentNomineeId,
-                   O.`MENU_SNAPSHOT_JSON` AS MenuSnapshotJson, O.`ORDER_STATUS` AS OrderStatus, O.`INTAKE_MODE_SNAPSHOT` AS IntakeModeSnapshot,
+                   O.`BUSINESS_PERIOD_ID` AS BusinessPeriodId, O.`FLOW_VERSION` AS FlowVersion, O.`MENU_SNAPSHOT_JSON` AS MenuSnapshotJson, O.`ORDER_STATUS` AS OrderStatus, O.`INTAKE_MODE_SNAPSHOT` AS IntakeModeSnapshot,
                    O.`STORE_CONFIRMATION_STATUS` AS StoreConfirmationStatus,
                    O.`STORE_CONFIRMED_AT` AS StoreConfirmedAt, O.`STORE_CONFIRMED_BY` AS StoreConfirmedBy,
                    O.`QUEUE_ENTERED_AT` AS QueueEnteredAt,
@@ -752,7 +795,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             JOIN (
                 SELECT O.`SESSION_ID`, SUM(O.`MEAL_CREDIT_APPLIED`) AS Credit
                 FROM `ORDERS` O
-                WHERE O.`ORDER_STATUS` IN ('submitted', 'partially_confirmed', 'needs_reschedule') AND O.`QUEUE_ENTERED_AT` <= @Cutoff
+                WHERE O.`FLOW_VERSION`=1 AND O.`ORDER_STATUS` IN ('submitted', 'partially_confirmed', 'needs_reschedule') AND O.`QUEUE_ENTERED_AT` <= @Cutoff
                 GROUP BY O.`SESSION_ID`
             ) X ON X.`SESSION_ID` = S.`ID`
             SET S.`REMAINING_MEAL_CREDIT` = S.`REMAINING_MEAL_CREDIT` + X.Credit,
@@ -761,19 +804,19 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
                 (`ID`, `ORDER_ID`, `FROM_STATUS`, `TO_STATUS`, `REASON`, `ACTOR_TYPE`, `CREATED_AT`)
             SELECT UUID(), O.`ID`, O.`ORDER_STATUS`, 'expired', '等待確認逾時，自動失效。', 'system', @Now
             FROM `ORDERS` O
-            WHERE O.`ORDER_STATUS` IN ('submitted', 'partially_confirmed', 'needs_reschedule') AND O.`QUEUE_ENTERED_AT` <= @Cutoff;
+            WHERE O.`FLOW_VERSION`=1 AND O.`ORDER_STATUS` IN ('submitted', 'partially_confirmed', 'needs_reschedule') AND O.`QUEUE_ENTERED_AT` <= @Cutoff;
             UPDATE `ORDERS` O
             SET O.`ORDER_STATUS` = 'expired', O.`CANCELLED_AT` = @Now, O.`UPDATED_AT` = @Now
-            WHERE O.`ORDER_STATUS` IN ('submitted', 'partially_confirmed', 'needs_reschedule') AND O.`QUEUE_ENTERED_AT` <= @Cutoff;
+            WHERE O.`FLOW_VERSION`=1 AND O.`ORDER_STATUS` IN ('submitted', 'partially_confirmed', 'needs_reschedule') AND O.`QUEUE_ENTERED_AT` <= @Cutoff;
             UPDATE `ROOM_SERVICE_ORDERS` R JOIN `ORDERS` O ON O.`ID` = R.`ORDER_ID`
             SET R.`ORDER_STATUS` = 'cancelled', R.`UPDATED_AT` = @Now
-            WHERE O.`ORDER_STATUS` = 'expired' AND R.`ORDER_STATUS` IN ('scheduled', 'in_service');
+            WHERE O.`FLOW_VERSION`=1 AND O.`ORDER_STATUS` = 'expired' AND R.`ORDER_STATUS` IN ('scheduled', 'in_service');
             UPDATE `ORDER_NOMINEES` N JOIN `ORDERS` O ON O.`ID` = N.`ORDER_ID`
             SET N.`CONFIRMATION_STATUS` = 'expired', N.`UPDATED_AT` = @Now
-            WHERE O.`ORDER_STATUS` = 'expired' AND N.`CONFIRMATION_STATUS` IN ('waiting', 'confirmed');
+            WHERE O.`FLOW_VERSION`=1 AND O.`ORDER_STATUS` = 'expired' AND N.`CONFIRMATION_STATUS` IN ('waiting', 'confirmed');
             UPDATE `ORDER_SERVICE_ADDONS` A JOIN `ORDERS` O ON O.`ID` = A.`ORDER_ID`
             SET A.`ADDON_STATUS` = 'expired', A.`UPDATED_AT` = @Now
-            WHERE O.`ORDER_STATUS` = 'expired' AND A.`ADDON_STATUS` = 'waiting';
+            WHERE O.`FLOW_VERSION`=1 AND O.`ORDER_STATUS` = 'expired' AND A.`ADDON_STATUS` = 'waiting';
         """;
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
@@ -781,7 +824,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
         {
             var orderIds = (await connection.QueryAsync<string>(new CommandDefinition("""
                 SELECT `ID` FROM `ORDERS`
-                WHERE `ORDER_STATUS` IN ('submitted', 'partially_confirmed', 'needs_reschedule')
+                WHERE `FLOW_VERSION`=1 AND `ORDER_STATUS` IN ('submitted', 'partially_confirmed', 'needs_reschedule')
                   AND `QUEUE_ENTERED_AT` <= @Cutoff FOR UPDATE;
                 """, new { Cutoff = cutoff }, transaction, cancellationToken: cancellationToken))).ToArray();
             foreach (var orderId in orderIds)
@@ -805,6 +848,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await EnsureLegacyOrderMutationAsync(connection, transaction, orderId, cancellationToken);
         try
         {
             var order = await connection.QuerySingleOrDefaultAsync<OrderRow>(new CommandDefinition(
@@ -925,6 +969,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await EnsureLegacyOrderMutationAsync(connection, transaction, orderId, cancellationToken);
         var order = await connection.QuerySingleOrDefaultAsync<OrderRow>(new CommandDefinition("""
             SELECT `ID` AS Id, `SESSION_ID` AS SessionId, `ORDER_KIND` AS OrderKind,
                    `ORDER_STATUS` AS OrderStatus, `STORE_CONFIRMATION_STATUS` AS StoreConfirmationStatus,
@@ -995,6 +1040,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await EnsureLegacyOrderMutationAsync(connection, transaction, orderId, cancellationToken);
         var order = await connection.QuerySingleOrDefaultAsync<OrderRow>(new CommandDefinition(
             "SELECT `ID` AS Id, `SESSION_ID` AS SessionId, `ORDER_STATUS` AS OrderStatus, `MEAL_CREDIT_APPLIED` AS MealCreditApplied FROM `ORDERS` WHERE `ID` = @OrderId FOR UPDATE;",
             new { OrderId = orderId }, transaction, cancellationToken: cancellationToken));
@@ -1060,6 +1106,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await EnsureLegacyOrderMutationAsync(connection, transaction, orderId, cancellationToken);
         try
         {
             var order = await connection.QuerySingleOrDefaultAsync<OrderRow>(new CommandDefinition("""
@@ -1235,6 +1282,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await EnsureLegacyOrderMutationAsync(connection, transaction, orderId, cancellationToken);
         try
         {
             var row = await connection.QuerySingleOrDefaultAsync<NominationEditRow>(new CommandDefinition("""
@@ -1374,6 +1422,14 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await connection.ExecuteScalarAsync<string>(new CommandDefinition("SELECT ID FROM ORDERING_RUNTIME_LOCKS WHERE ID='operating_period' FOR UPDATE",transaction:transaction,cancellationToken:cancellationToken));
+        var currentPeriod = await connection.QuerySingleOrDefaultAsync<BusinessPeriodRow>(new CommandDefinition("SELECT P.PERIOD_STATUS PeriodStatus,P.INTAKE_MODE IntakeMode,P.FLOW_VERSION FlowVersion FROM CUSTOMER_ORDER_SESSIONS S JOIN BUSINESS_PERIODS P ON P.ID=S.BUSINESS_PERIOD_ID WHERE S.ID=@SessionId",new{addon.SessionId},transaction,cancellationToken:cancellationToken));
+        if(currentPeriod?.FlowVersion>=2 && (currentPeriod.PeriodStatus!="open" || (addon.IntakeModeSnapshot!="staff_only" && currentPeriod.IntakeMode=="staff_only")))
+            throw new BusinessException("已停止接收新訂單，請洽店員協助。", "BUSINESS_PERIOD_NOT_OPEN");
+
+        await connection.ExecuteScalarAsync<string>(new CommandDefinition("SELECT ID FROM CUSTOMER_ORDER_SESSIONS WHERE ID=@SessionId FOR UPDATE",new{addon.SessionId},transaction,cancellationToken:cancellationToken));
+        if(currentPeriod?.FlowVersion>=2 && !await connection.ExecuteScalarAsync<bool>(new CommandDefinition("SELECT EXISTS(SELECT 1 FROM ORDER_FULFILLMENT_UNITS WHERE NOMINEE_ID=@ParentNomineeId AND UNIT_STATUS IN ('accepted','in_service'))",addon,transaction,cancellationToken:cancellationToken)))
+            throw new BusinessException("原指名已結束或尚未接單，無法追加。", "ADDON_PARENT_INACTIVE");
         try
         {
             var parent = await connection.QuerySingleOrDefaultAsync<AddonParentRow>(new CommandDefinition("""
@@ -1386,7 +1442,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
                 """, new { addon.ParentNomineeId }, transaction, cancellationToken: cancellationToken));
             if (parent is null || parent.SessionId != addon.SessionId || parent.StaffId != addon.StaffId)
                 throw new BusinessException("原指名資料已變更，無法送出加購服務。", "ADDON_PARENT_CHANGED");
-            if (parent.ParentOrderStatus is not ("confirmed" or "in_service") || parent.ServiceEndsAt <= addon.SubmittedAt)
+            if (parent.ParentOrderStatus is not ("confirmed" or "in_service" or "partially_confirmed") || parent.ServiceEndsAt <= addon.SubmittedAt)
                 throw new BusinessException("原指名已不在可加購狀態。", "ADDON_PARENT_INACTIVE");
             var effectiveStart = parent.StartsAt > addon.SubmittedAt ? parent.StartsAt : addon.SubmittedAt;
             if (effectiveStart.AddMinutes(addon.ServiceDurationMinutes) > parent.ServiceEndsAt)
@@ -1453,6 +1509,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
             await InsertAuditAsync(connection, transaction, addon.Id, addon.SessionId, "order.addon.created", null,
                 JsonSerializer.Serialize(addon), addon.ActorId ?? "customer", addon.ActorRole ?? addon.ActorType,
                 addon.SubmittedAt, cancellationToken);
+            await InitializeFulfillmentAsync(connection, transaction, addon.Id, addon.SessionId, addon.SubmittedAt, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
         }
         catch
@@ -1467,6 +1524,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await EnsureLegacyOrderMutationAsync(connection, transaction, orderId, cancellationToken);
         try
         {
             var addon = await connection.QuerySingleOrDefaultAsync<OrderAddonRow>(new CommandDefinition("""
@@ -1514,6 +1572,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await EnsureLegacyOrderMutationAsync(connection, transaction, orderId, cancellationToken);
         try
         {
             var order = await connection.QuerySingleOrDefaultAsync<OrderRow>(new CommandDefinition("""
@@ -1660,6 +1719,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await EnsureLegacyOrderMutationAsync(connection, transaction, orderId, cancellationToken);
         var item = await LockEditableItemAsync(connection, transaction, orderId, itemId, cancellationToken);
         if (item.ItemType is "nomination_base" or "staff_service" && quantity.HasValue && quantity != item.Quantity)
             throw new BusinessException("已送出的指名訂單不可延長節數，請另開新訂單。", "NOMINATION_EXTENSION_FORBIDDEN");
@@ -1685,6 +1745,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await EnsureLegacyOrderMutationAsync(connection, transaction, orderId, cancellationToken);
         var item = await LockEditableItemAsync(connection, transaction, orderId, itemId, cancellationToken);
         if (item.ItemType == "nomination_base")
         {
@@ -1757,6 +1818,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await EnsureLegacyOrderMutationAsync(connection, transaction, orderId, cancellationToken);
         var order = await connection.QuerySingleOrDefaultAsync<OrderRow>(new CommandDefinition("""
             SELECT `ID` AS Id, `SESSION_ID` AS SessionId, `ORDER_STATUS` AS OrderStatus,
                    `MEAL_CREDIT_APPLIED` AS MealCreditApplied FROM `ORDERS` WHERE `ID` = @OrderId FOR UPDATE;
@@ -1921,6 +1983,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
 
     private const string SessionColumns = """
         S.`ID` AS Id, S.`GAME_ID` AS GameId, S.`CUSTOMER_NAME` AS CustomerName,
+        S.`BUSINESS_PERIOD_ID` AS BusinessPeriodId, COALESCE((SELECT P.FLOW_VERSION FROM BUSINESS_PERIODS P WHERE P.ID=S.BUSINESS_PERIOD_ID),1) AS FlowVersion,
         S.`BUSINESS_DATE` AS BusinessDate, S.`ACCESS_TOKEN_HASH` AS AccessTokenHash,
         S.`SHORT_CODE_HASH` AS ShortCodeHash, S.`RECOVERY_CODE_HASH` AS RecoveryCodeHash,
         S.`MAX_NOMINATED_STAFF` AS MaxNominatedStaff,
@@ -1929,7 +1992,7 @@ public sealed class OrderingRepository : DapperRepositoryBase, IOrderingReposito
         """;
 
     private const string BusinessPeriodColumns = """
-        `ID` AS Id, `BUSINESS_DATE` AS BusinessDate, `STARTS_AT` AS StartsAt, `ENDS_AT` AS EndsAt,
+        `ID` AS Id, `FLOW_VERSION` AS FlowVersion, `VERSION` AS Version, `BUSINESS_DATE` AS BusinessDate, `STARTS_AT` AS StartsAt, `ENDS_AT` AS EndsAt,
         `ACTUAL_OPENED_AT` AS ActualOpenedAt, `PROJECTED_CLOSE_AT` AS ProjectedCloseAt,
         `ACTUAL_CLOSED_AT` AS ActualClosedAt, `SETTLED_AT` AS SettledAt,
         `PERIOD_STATUS` AS PeriodStatus, `INTAKE_MODE` AS IntakeMode,

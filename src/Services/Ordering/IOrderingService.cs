@@ -5,6 +5,8 @@ namespace ToBeClarify.Api.Services.Ordering;
 
 public interface IOrderingService
 {
+    Task<OrderFulfillmentDto> GetFulfillmentAsync(string orderId, ClaimsPrincipal actor, CancellationToken cancellationToken);
+    Task<OrderFulfillmentDto> TransitionFulfillmentAsync(string orderId, string unitId, FulfillmentTransitionRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<OrderSessionIssuedDto> CreateSessionAsync(CreateOrderSessionRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<OrderSessionIssuedDto> RotateSessionCredentialsAsync(string sessionId, ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<OrderSessionDto> UpdateSessionAsync(string sessionId, UpdateOrderSessionRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);

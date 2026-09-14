@@ -219,6 +219,11 @@ public sealed class RoomAdminRepository : DapperRepositoryBase, IRoomAdminReposi
         CancellationToken cancellationToken)
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        var usesFulfillment = await connection.ExecuteScalarAsync<bool>(new CommandDefinition(
+            "SELECT EXISTS(SELECT 1 FROM ROOM_SERVICE_ORDERS R JOIN ORDERS O ON O.ID=R.ORDER_ID WHERE R.ID=@Id AND O.FLOW_VERSION>=2)",
+            new { Id=id }, cancellationToken:cancellationToken));
+        if (usesFulfillment)
+            throw new ToBeClarify.Api.Exceptions.BusinessException("此包廂屬於顧客分項訂單，請從點餐管理處理該包廂項目。", "ORDER_REQUIRES_FULFILLMENT");
         var affected = await connection.ExecuteAsync(new CommandDefinition("""
             UPDATE `ROOM_SERVICE_ORDERS`
             SET `ORDER_STATUS` = @Status, `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId

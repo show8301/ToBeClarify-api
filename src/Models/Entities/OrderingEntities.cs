@@ -20,6 +20,10 @@ public sealed class OrderingSettingsRow
 
 public sealed class BusinessPeriodRow
 {
+    public string? OperationId { get; set; }
+    public int FlowVersion { get; set; } = 1;
+    public int Version { get; set; } = 1;
+
     public string Id { get; set; } = string.Empty;
     public DateTime BusinessDate { get; set; }
     public DateTime StartsAt { get; set; }
@@ -57,6 +61,9 @@ public sealed class BusinessDayOverrideRow
 
 public class OrderSessionRow
 {
+    public int FlowVersion { get; set; } = 1;
+    public string? BusinessPeriodId { get; set; }
+
     public string Id { get; set; } = string.Empty;
     public string GameId { get; set; } = string.Empty;
     public string CustomerName { get; set; } = string.Empty;
@@ -107,6 +114,9 @@ public sealed class StaffNominationRow
 
 public sealed class OrderRow
 {
+    public int FlowVersion { get; set; } = 1;
+    public string? BusinessPeriodId { get; set; }
+
     public string? MenuSnapshotJson { get; set; }
     public string Id { get; set; } = string.Empty;
     public string SessionId { get; set; } = string.Empty;

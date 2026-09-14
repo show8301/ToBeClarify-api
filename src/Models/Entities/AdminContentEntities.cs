@@ -73,6 +73,7 @@ public sealed class AdminStaffMemberRow
     public string BusinessDate { get; set; } = string.Empty;
     public string? ScheduledRolesJson { get; set; }
     public string? ActiveRolesJson { get; set; }
+    public bool StopAcceptingNewOrders { get; set; }
 }
 
 public sealed class AdminStaffMemberListRow
@@ -89,6 +90,7 @@ public sealed class AdminStaffMemberListRow
     public string BusinessDate { get; set; } = string.Empty;
     public string? ScheduledRolesJson { get; set; }
     public string? ActiveRolesJson { get; set; }
+    public bool StopAcceptingNewOrders { get; set; }
 }
 
 public sealed class AdminDutyPlanRow

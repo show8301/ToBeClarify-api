@@ -207,7 +207,7 @@ public sealed class MenuNotifications(AppDbContext db, IAppClock clock, Notifica
                 FROM `ORDER_NOMINEES` N
                 JOIN `ORDERS` O ON O.`ID`=N.`ORDER_ID`
                 WHERE N.`CONFIRMATION_STATUS`='confirmed'
-                  AND O.`ORDER_STATUS` IN ('confirmed','in_service')
+                  AND O.`ORDER_STATUS` IN ('confirmed','partially_confirmed','in_service')
                   AND N.`REQUESTED_SERVICE_ENDS_AT`>=@Now;
                 """,new{Now=clock.LocalDateTime},tx,cancellationToken:ct))).AsList();
             await EnsureNominationSchedulesAsync(connection,tx,futureNominees,clock.LocalDateTime,ct);

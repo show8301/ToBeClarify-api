@@ -4,6 +4,10 @@ namespace ToBeClarify.Api.Repositories.Ordering;
 
 public interface IOrderingRepository
 {
+    Task<ToBeClarify.Api.Models.Dtos.OrderFulfillmentDto> GetFulfillmentAsync(string orderId, CancellationToken cancellationToken);
+    Task<ToBeClarify.Api.Models.Dtos.OrderFulfillmentDto> TransitionFulfillmentAsync(string orderId, string unitId,
+        ToBeClarify.Api.Models.Dtos.FulfillmentTransitionRequest request, string actorId, string actorRole,
+        string? staffId, DateTime now, CancellationToken cancellationToken);
     Task<OrderingSettingsRow> GetSettingsAsync(CancellationToken cancellationToken);
     Task SaveSettingsAsync(OrderingSettingsRow settings, string actorId, DateTime now, CancellationToken cancellationToken);
     Task<BusinessPeriodRow?> GetActiveBusinessPeriodAsync(DateTime now, CancellationToken cancellationToken);
@@ -12,7 +16,7 @@ public interface IOrderingRepository
     Task<BusinessPeriodRow> GetOrCreateBusinessPeriodAsync(BusinessPeriodRow period, CancellationToken cancellationToken);
     Task ApplyBusinessPeriodActionAsync(string periodId, string action, DateTime? projectedCloseAt,
         string? intakeMode, string? reason, string actorId, string actorRole, DateTime now,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken, int? expectedVersion = null, string? operationId = null);
     Task<int> EnterCoordinationAtProjectedCloseAsync(DateTime now, CancellationToken cancellationToken);
     Task<BusinessDayOverrideRow?> GetActiveBusinessDayOverrideAsync(DateTime now, CancellationToken cancellationToken);
     Task<BusinessDayOverrideRow?> GetBusinessDayOverrideAsync(CancellationToken cancellationToken);

@@ -11,6 +11,7 @@ using ToBeClarify.Api.Models.Dtos;
 using ToBeClarify.Api.Models.Entities;
 using ToBeClarify.Api.Repositories.Admin.Content;
 using ToBeClarify.Api.Services.Media;
+using ToBeClarify.Api.Services.Ordering;
 
 namespace ToBeClarify.Api.Services.Admin.Content;
 
@@ -18,6 +19,7 @@ public sealed class AdminContentService : IAdminContentService
 {
     private readonly IAdminContentRepository _repository;
     private readonly IAppClock _clock;
+    private readonly IBusinessDayContext _businessDays;
     private readonly MediaUrlService _mediaUrls;
     private readonly AdminMediaUploadService _mediaUpload;
 
@@ -25,10 +27,12 @@ public sealed class AdminContentService : IAdminContentService
         IAdminContentRepository repository,
         IAppClock clock,
         MediaUrlService mediaUrls,
-        AdminMediaUploadService mediaUpload)
+        AdminMediaUploadService mediaUpload,
+        IBusinessDayContext businessDays)
     {
         _repository = repository;
         _clock = clock;
+        _businessDays = businessDays;
         _mediaUrls = mediaUrls;
         _mediaUpload = mediaUpload;
     }
@@ -189,6 +193,7 @@ public sealed class AdminContentService : IAdminContentService
         var normalizedRequest = new UpdateStaffDailyWorkModeRequest
         {
             IsWorking = request.IsWorking,
+            StopAcceptingNewOrders = request.StopAcceptingNewOrders ?? existing.StopAcceptingNewOrders,
             ScheduledRoles = scheduledRoles.ToList(),
             ActiveRoles = request.IsWorking ? activeRoles.ToList() : [],
         };
@@ -199,7 +204,7 @@ public sealed class AdminContentService : IAdminContentService
 
     public async Task<IReadOnlyList<AdminDutyPlanDto>> GetDutyPlansAsync(string? from, string? to, ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
-        var fromDate = ParseDutyDate(from, "DUTY_PLAN_FROM_INVALID") ?? DateOnly.FromDateTime(_clock.LocalDateTime);
+        var fromDate = ParseDutyDate(from, "DUTY_PLAN_FROM_INVALID") ?? (await _businessDays.GetCurrentAsync(cancellationToken)).BusinessDate;
         var toDate = ParseDutyDate(to, "DUTY_PLAN_TO_INVALID") ?? fromDate.AddDays(13);
         if (toDate < fromDate)
             throw new BusinessException("Duty plan end date must not be before the start date.", "DUTY_PLAN_DATE_RANGE_INVALID");
@@ -217,7 +222,7 @@ public sealed class AdminContentService : IAdminContentService
         var staffId = CanManageAll(actor) ? requestedStaffId : ResolveStaffId(requestedStaffId, actor);
         var businessDate = ParseDutyDate(request.BusinessDate, "DUTY_PLAN_DATE_INVALID")
             ?? throw new BusinessException("Duty plan date is required.", "DUTY_PLAN_DATE_REQUIRED");
-        var today = DateOnly.FromDateTime(_clock.LocalDateTime);
+        var today = (await _businessDays.GetCurrentAsync(cancellationToken)).BusinessDate;
         if (businessDate < today)
             throw new BusinessException("Past duty plans cannot be changed.", "DUTY_PLAN_DATE_PAST");
         if (businessDate.DayNumber - today.DayNumber > 180)
@@ -226,6 +231,8 @@ public sealed class AdminContentService : IAdminContentService
         var staff = await _repository.GetStaffMemberAsync(staffId, cancellationToken)
             ?? throw new NotFoundException("Staff member not found.", "STAFF_MEMBER_NOT_FOUND");
         var roles = request.IsWorking ? NormalizeDailyRoles(request.ScheduledRoles, "DUTY_PLAN_ROLES_INVALID") : [];
+        if (request.IsWorking && roles.Count == 0)
+            throw new BusinessException("Working duty plans require at least one scheduled role.", "DUTY_PLAN_ROLES_REQUIRED");
         var startTime = request.IsWorking ? NormalizeDutyTime(request.StartTime, "DUTY_PLAN_START_TIME_INVALID") : null;
         var endTime = request.IsWorking ? NormalizeDutyTime(request.EndTime, "DUTY_PLAN_END_TIME_INVALID") : null;
         if (request.IsWorking && (startTime is null || endTime is null))
@@ -438,11 +445,11 @@ public sealed class AdminContentService : IAdminContentService
 
     private static AdminStaffDailyWorkModeDto MapDailyWorkMode(AdminStaffMemberRow row)
         => new(row.BusinessDate, row.IsWorkingToday,
-            ParseDailyRoles(row.ScheduledRolesJson), ParseDailyRoles(row.ActiveRolesJson));
+            ParseDailyRoles(row.ScheduledRolesJson), ParseDailyRoles(row.ActiveRolesJson), row.StopAcceptingNewOrders);
 
     private static AdminStaffDailyWorkModeDto MapDailyWorkMode(AdminStaffMemberListRow row)
         => new(row.BusinessDate, row.IsWorkingToday,
-            ParseDailyRoles(row.ScheduledRolesJson), ParseDailyRoles(row.ActiveRolesJson));
+            ParseDailyRoles(row.ScheduledRolesJson), ParseDailyRoles(row.ActiveRolesJson), row.StopAcceptingNewOrders);
 
     private static IReadOnlyList<string> ParseDailyRoles(string? value)
     {
@@ -474,9 +481,23 @@ public sealed class AdminContentService : IAdminContentService
     }
 
     private static AdminDutyPlanDto MapDutyPlan(AdminDutyPlanRow row)
-        => new(row.Id, row.StaffId, row.StaffName, row.BusinessDate, row.IsWorking,
+    {
+        DateTimeOffset? startsAt = null;
+        DateTimeOffset? endsAt = null;
+        if (row.IsWorking && row.StartTime is not null && row.EndTime is not null)
+        {
+            var date = DateOnly.ParseExact(row.BusinessDate, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+            var startMinutes = DutyMinutes(row.StartTime);
+            var endMinutes = DutyMinutes(row.EndTime);
+            if (endMinutes <= startMinutes) endMinutes += 1440;
+            var midnight = new DateTimeOffset(date.ToDateTime(TimeOnly.MinValue), TimeSpan.FromHours(8));
+            startsAt = midnight.AddMinutes(startMinutes);
+            endsAt = midnight.AddMinutes(endMinutes);
+        }
+        return new(row.Id, row.StaffId, row.StaffName, row.BusinessDate, row.IsWorking,
             row.StartTime, row.EndTime, ParseDailyRoles(row.ScheduledRolesJson), row.ApprovalStatus,
-            row.SubmittedAt, row.SubmittedBy, row.ApprovedAt, row.ApprovedBy, row.ApprovalNote);
+            row.SubmittedAt, row.SubmittedBy, row.ApprovedAt, row.ApprovedBy, row.ApprovalNote, startsAt, endsAt);
+    }
 
     private static DateOnly? ParseDutyDate(string? value, string errorCode)
     {

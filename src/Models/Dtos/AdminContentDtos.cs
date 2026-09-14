@@ -127,10 +127,13 @@ public sealed record AdminStaffDailyWorkModeDto(
     string BusinessDate,
     bool IsWorking,
     IReadOnlyList<string> ScheduledRoles,
-    IReadOnlyList<string> ActiveRoles);
+    IReadOnlyList<string> ActiveRoles,
+    bool StopAcceptingNewOrders = false);
 
 public sealed class UpdateStaffDailyWorkModeRequest
 {
+    public bool? StopAcceptingNewOrders { get; init; }
+
     public bool IsWorking { get; init; } = true;
 
     public List<string> ScheduledRoles { get; init; } = [];
@@ -152,7 +155,9 @@ public sealed record AdminDutyPlanDto(
     string? SubmittedBy,
     DateTime? ApprovedAt,
     string? ApprovedBy,
-    string? ApprovalNote);
+    string? ApprovalNote,
+    DateTimeOffset? StartsAt = null,
+    DateTimeOffset? EndsAt = null);
 
 public sealed class SaveDutyPlanRequest
 {
@@ -170,7 +175,7 @@ public sealed class SaveDutyPlanRequest
     [RegularExpression("^(?:[0-2]?\\d):[0-5]\\d$")]
     public string? EndTime { get; init; }
 
-    [Required, MinLength(1)]
+    [Required]
     public List<string> ScheduledRoles { get; init; } = [];
 }
 

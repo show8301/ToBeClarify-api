@@ -17,10 +17,10 @@ public sealed class StaffService : IStaffService
         _mediaUrls = mediaUrls;
     }
 
-    public async Task<IReadOnlyList<StaffListItemDto>> GetStaffAsync(int? limit, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<StaffListItemDto>> GetStaffAsync(int? limit, CancellationToken cancellationToken, DateOnly? businessDate = null)
     {
         if (limit is < 1 or > 100) throw new BusinessException("Limit must be between 1 and 100.", "INVALID_LIMIT");
-        var rows = await _repository.GetStaffMembersAsync(limit, cancellationToken);
+        var rows = await _repository.GetStaffMembersAsync(limit, cancellationToken, businessDate);
         var services = await _repository.GetStaffServicesAsync(rows.Select(row => row.Id).ToArray(), cancellationToken);
         return rows.Select(row => ClientContentMappings.MapStaffListItem(row,
             services.Where(service => service.StaffId == row.Id), _mediaUrls)).ToArray();

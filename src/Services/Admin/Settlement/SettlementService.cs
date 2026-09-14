@@ -1,3 +1,4 @@
+using ToBeClarify.Api.Services.Ordering;
 using System.Security.Claims;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -15,11 +16,13 @@ public sealed class SettlementService : ISettlementService
     private static readonly string[] InputRoles = ["designated", "service", "manager", "backstage"];
     private readonly ISettlementRepository _repository;
     private readonly IAppClock _clock;
+    private readonly IBusinessDayContext _businessDays;
 
-    public SettlementService(ISettlementRepository repository, IAppClock clock)
+    public SettlementService(ISettlementRepository repository, IAppClock clock, IBusinessDayContext businessDays)
     {
         _repository = repository;
         _clock = clock;
+        _businessDays = businessDays;
     }
 
     public async Task<SettlementOverviewDto> GetOverviewAsync(DateOnly businessDate, int sessionNo,
@@ -109,6 +112,8 @@ public sealed class SettlementService : ISettlementService
     public async Task<SettlementOverviewDto> CalculateAsync(SettlementCalculateRequest request,
         ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
+        if ((await _businessDays.GetForDateAsync(request.BusinessDate, cancellationToken)).FlowVersion >= 2)
+            throw new BusinessException("分項接待的薪資串接尚未開放；費用可持續記錄，未決分潤先保留。", "SETTLEMENT_FLOW_NOT_READY");
         var run = await RequireRunAsync(request.BusinessDate, request.SessionNo, actor, cancellationToken);
         EnsureEditable(run);
         var rule = await GetRuleForRunAsync(run, request.BusinessDate, cancellationToken);
