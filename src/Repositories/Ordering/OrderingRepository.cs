@@ -564,11 +564,11 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
                     (`ID`, `SESSION_ID`, `ORDER_NUMBER`, `ORDER_KIND`, `PARENT_NOMINEE_ID`,
                      `ORDER_STATUS`, `INTAKE_MODE_SNAPSHOT`, `STORE_CONFIRMATION_STATUS`,
                      `QUEUE_ENTERED_AT`, `SUBMITTED_AT`,
-                     `CONFIRMED_AT`, `SUBTOTAL`, `MEAL_CREDIT_APPLIED`, `TOTAL_AMOUNT`, `CUSTOMER_NOTE`, `CREATED_AT`, `UPDATED_AT`, `MENU_SNAPSHOT_JSON`)
+                     `CONFIRMED_AT`, `SUBTOTAL`, `MEAL_CREDIT_APPLIED`, `TOTAL_AMOUNT`, `CUSTOMER_NOTE`, `CUSTOMER_LOCATION`, `CREATED_AT`, `UPDATED_AT`, `MENU_SNAPSHOT_JSON`)
                 VALUES (@Id, @SessionId, @OrderNumber, @OrderKind, @ParentNomineeId, @Status,
                         @IntakeModeSnapshot, @StoreConfirmationStatus, @QueueEnteredAt, @SubmittedAt,
                         CASE WHEN @Status = 'confirmed' THEN @SubmittedAt ELSE NULL END,
-                        @Subtotal, @MealCreditApplied, @TotalAmount, @CustomerNote, @SubmittedAt, @SubmittedAt, @MenuSnapshotJson);
+                        @Subtotal, @MealCreditApplied, @TotalAmount, @CustomerNote, @CustomerLocation, @SubmittedAt, @SubmittedAt, @MenuSnapshotJson);
                 UPDATE `CUSTOMER_ORDER_SESSIONS`
                 SET `REMAINING_MEAL_CREDIT` = `REMAINING_MEAL_CREDIT` - @MealCreditApplied,
                     `UPDATED_AT` = @SubmittedAt
@@ -685,7 +685,8 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
             }
 
             await InsertHistoryAsync(connection, transaction, order.Id, null, order.Status,
-                "顧客送出訂單", "customer", null, order.SubmittedAt, cancellationToken);
+                order.ActorType == "staff" ? "店員代客送出訂單" : "顧客送出訂單",
+                order.ActorType, order.ActorId, order.SubmittedAt, cancellationToken);
             await MenuNotifications.EnqueueAsync(connection, transaction, order, cancellationToken);
             await InitializeFulfillmentAsync(connection, transaction, order.Id, order.SessionId, order.SubmittedAt, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
@@ -717,7 +718,8 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
                    O.`STARTED_AT` AS StartedAt, O.`COMPLETED_AT` AS CompletedAt,
                    O.`CANCELLED_AT` AS CancelledAt, O.`SUBTOTAL` AS Subtotal,
                    O.`MEAL_CREDIT_APPLIED` AS MealCreditApplied, O.`TOTAL_AMOUNT` AS TotalAmount,
-                   O.`CUSTOMER_NOTE` AS CustomerNote, O.`INTERNAL_NOTE` AS InternalNote
+                   O.`CUSTOMER_NOTE` AS CustomerNote, O.`CUSTOMER_LOCATION` AS CustomerLocation,
+                   O.`INTERNAL_NOTE` AS InternalNote
             FROM `ORDERS` O WHERE {where} ORDER BY O.`SUBMITTED_AT` DESC;
             SELECT I.`ID` AS Id, I.`ORDER_ID` AS OrderId, I.`ITEM_TYPE` AS ItemType,
                    I.`REFERENCE_ID` AS ReferenceId, I.`PARENT_ITEM_ID` AS ParentItemId,
@@ -1282,7 +1284,7 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
         }
     }
 
-    public async Task UpdateOrderAsync(string orderId, string? customerNote, string? internalNote,
+    public async Task UpdateOrderAsync(string orderId, string? customerNote, string? customerLocation, string? internalNote,
         string actorId, string actorRole, DateTime now, CancellationToken cancellationToken)
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
@@ -1290,19 +1292,20 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
         var current = await connection.QuerySingleOrDefaultAsync<OrderRow>(new CommandDefinition("""
             SELECT `ID` AS Id, `SESSION_ID` AS SessionId, `ORDER_STATUS` AS OrderStatus,
                    `MEAL_CREDIT_APPLIED` AS MealCreditApplied, `CUSTOMER_NOTE` AS CustomerNote,
-                   `INTERNAL_NOTE` AS InternalNote FROM `ORDERS` WHERE `ID` = @OrderId FOR UPDATE;
+                   `CUSTOMER_LOCATION` AS CustomerLocation, `INTERNAL_NOTE` AS InternalNote FROM `ORDERS` WHERE `ID` = @OrderId FOR UPDATE;
             """, new { OrderId = orderId }, transaction, cancellationToken: cancellationToken))
             ?? throw new BusinessException("找不到訂單。", "ORDER_NOT_FOUND");
         if (current.OrderStatus is "completed" or "cancelled" or "expired" or "rejected")
             throw new BusinessException("已結案訂單不可修改。", "ORDER_LOCKED");
         await connection.ExecuteAsync(new CommandDefinition("""
             UPDATE `ORDERS` SET `CUSTOMER_NOTE` = COALESCE(@CustomerNote, `CUSTOMER_NOTE`),
+                   `CUSTOMER_LOCATION` = COALESCE(@CustomerLocation, `CUSTOMER_LOCATION`),
                    `INTERNAL_NOTE` = COALESCE(@InternalNote, `INTERNAL_NOTE`),
                    `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId WHERE `ID` = @OrderId;
-            """, new { CustomerNote = customerNote, InternalNote = internalNote,
+            """, new { CustomerNote = customerNote, CustomerLocation = customerLocation, InternalNote = internalNote,
                 Now = now, ActorId = actorId, OrderId = orderId }, transaction, cancellationToken: cancellationToken));
         await InsertAuditAsync(connection, transaction, orderId, null, "order.updated", JsonSerializer.Serialize(current),
-            JsonSerializer.Serialize(new { customerNote, internalNote }), actorId, actorRole, now, cancellationToken);
+            JsonSerializer.Serialize(new { customerNote, customerLocation, internalNote }), actorId, actorRole, now, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
     }
 

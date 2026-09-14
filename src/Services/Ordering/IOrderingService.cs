@@ -17,8 +17,11 @@ public interface IOrderingService
     Task<OrderSessionAccessDto> AccessSessionAsync(string token, CancellationToken cancellationToken);
     Task<OrderSessionIssuedDto> RecoverSessionAsync(RecoverOrderSessionRequest request, CancellationToken cancellationToken);
     Task<OrderCatalogDto> GetCatalogAsync(string token, CancellationToken cancellationToken);
+    Task<OrderCatalogDto> GetAdminCatalogAsync(DateOnly? businessDate, CancellationToken cancellationToken);
     Task<MenuQuoteDto> QuoteOrderAsync(string token, SubmitOrderRequest request, CancellationToken cancellationToken);
     Task<OrderDto> SubmitOrderAsync(string token, SubmitOrderRequest request, CancellationToken cancellationToken);
+    Task<MenuQuoteDto> QuoteAdminOrderAsync(string sessionId, SubmitOrderRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);
+    Task<OrderDto> SubmitAdminOrderAsync(string sessionId, SubmitOrderRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<OrderDto> SubmitAddonAsync(string token, SubmitAddonRequest request, CancellationToken cancellationToken);
     Task<IReadOnlyList<OrderDto>> GetMyOrdersAsync(string token, CancellationToken cancellationToken);
     Task<OrderingCustomerBillDto> GetCustomerBillAsync(string token, CancellationToken cancellationToken);

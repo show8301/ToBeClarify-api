@@ -186,6 +186,7 @@ public sealed record OrderDto(
     IReadOnlyList<OrderStatusHistoryDto> History,
     IReadOnlyList<OrderRoomBookingDto> RoomBookings)
 {
+    public string? CustomerLocation { get; init; }
     public string? BusinessPeriodId { get; init; }
     public int FlowVersion { get; init; } = 1;
     public IReadOnlyList<FulfillmentUnitDto> Fulfillment { get; init; } = [];
@@ -321,6 +322,9 @@ public sealed class SubmitOrderRequest
 
     [StringLength(500)]
     public string? CustomerNote { get; init; }
+
+    [StringLength(200)]
+    public string? CustomerLocation { get; init; }
 }
 
 public sealed class UpdateOrderingSettingsRequest
@@ -365,6 +369,9 @@ public sealed class UpdateAdminOrderRequest
 {
     [StringLength(500)]
     public string? CustomerNote { get; init; }
+
+    [StringLength(200)]
+    public string? CustomerLocation { get; init; }
 
     [StringLength(1000)]
     public string? InternalNote { get; init; }

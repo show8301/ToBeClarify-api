@@ -145,9 +145,22 @@ public sealed partial class OrderingService : IOrderingService
     public async Task<OrderCatalogDto> GetCatalogAsync(string token, CancellationToken cancellationToken)
     {
         var session = await ValidateTokenAsync(token, cancellationToken);
+        return await GetCatalogForBusinessDateAsync(DateOnly.FromDateTime(session.BusinessDate), cancellationToken);
+    }
+
+    public async Task<OrderCatalogDto> GetAdminCatalogAsync(DateOnly? businessDate, CancellationToken cancellationToken)
+    {
+        var settings = await _repository.GetSettingsAsync(cancellationToken);
+        var context = await ResolveBusinessContextAsync(settings, _clock.LocalDateTime, cancellationToken);
+        return await GetCatalogForBusinessDateAsync(businessDate ?? context.ReferenceBusinessDate, cancellationToken);
+    }
+
+    private async Task<OrderCatalogDto> GetCatalogForBusinessDateAsync(DateOnly businessDate,
+        CancellationToken cancellationToken)
+    {
         var settingsTask = _repository.GetSettingsAsync(cancellationToken);
         var menuTask = _menuService.GetMenuAsync(cancellationToken, true);
-        var staffTask = _staffService.GetStaffAsync(null, cancellationToken, DateOnly.FromDateTime(session.BusinessDate));
+        var staffTask = _staffService.GetStaffAsync(null, cancellationToken, businessDate);
         var roomsTask = _roomService.GetRoomsAsync(cancellationToken);
         await Task.WhenAll(settingsTask, menuTask, staffTask, roomsTask);
         return new OrderCatalogDto(MapSettings(await settingsTask), await menuTask, await staffTask,
@@ -177,7 +190,38 @@ public sealed partial class OrderingService : IOrderingService
         return (await MapOrdersAsync(await _repository.GetOrderAsync(id, cancellationToken), cancellationToken)).Single();
     }
 
-    private async Task<NewOrderAggregate> BuildOrderAsync(OrderSessionRow session, SubmitOrderRequest request, CancellationToken cancellationToken)
+    public async Task<MenuQuoteDto> QuoteAdminOrderAsync(string sessionId, SubmitOrderRequest request,
+        ClaimsPrincipal actor, CancellationToken cancellationToken)
+    {
+        _ = actor;
+        var session = await GetSessionByIdAsync(sessionId, cancellationToken);
+        var order = await BuildOrderAsync(session, request, cancellationToken, allowStaffAssist: true);
+        return await _quotes.CreateAsync(session, request, order, cancellationToken);
+    }
+
+    public async Task<OrderDto> SubmitAdminOrderAsync(string sessionId, SubmitOrderRequest request,
+        ClaimsPrincipal actor, CancellationToken cancellationToken)
+    {
+        var session = await GetSessionByIdAsync(sessionId, cancellationToken);
+        var existing = await _quotes.ExistingOrderAsync(session.Id, request.QuoteToken, cancellationToken);
+        if (existing is not null)
+            return (await MapOrdersAsync(await _repository.GetOrderAsync(existing, cancellationToken), cancellationToken)).Single();
+        if (_configuration.GetValue<bool>("Menu:RequireQuote") && request.Meals.Count > 0 &&
+            string.IsNullOrWhiteSpace(request.QuoteToken))
+            throw new ConflictException("請先取得最新報價並確認訂單。", "MENU_QUOTE_REQUIRED");
+        var order = await BuildOrderAsync(session, request, cancellationToken, allowStaffAssist: true);
+        await _quotes.ValidateAsync(session.Id, request, order, cancellationToken);
+        var id = await _repository.CreateOrderAsync(order with {
+            QuoteId = request.QuoteToken,
+            QuoteFingerprint = MenuQuoteService.Fingerprint(order),
+            ActorType = "staff",
+            ActorId = ActorId(actor)
+        }, cancellationToken);
+        return (await MapOrdersAsync(await _repository.GetOrderAsync(id, cancellationToken), cancellationToken)).Single();
+    }
+
+    private async Task<NewOrderAggregate> BuildOrderAsync(OrderSessionRow session, SubmitOrderRequest request,
+        CancellationToken cancellationToken, bool allowStaffAssist = false)
     {
         if (request.Meals.Count + request.Nominations.Count + request.Rooms.Count + request.Tips.Count == 0)
             throw new BusinessException("本次點餐尚未加入任何項目。", "ORDER_EMPTY");
@@ -188,7 +232,7 @@ public sealed partial class OrderingService : IOrderingService
 
         var settings = await _repository.GetSettingsAsync(cancellationToken);
         var now = _clock.LocalDateTime;
-        var submission = await ResolveSubmissionAsync(session, cancellationToken);
+        var submission = await ResolveSubmissionAsync(session, cancellationToken, allowStaffAssist);
         var businessContext = submission.Context;
         var businessDate = DateOnly.FromDateTime(session.BusinessDate);
         var intakeMode = submission.IntakeMode;
@@ -327,7 +371,9 @@ public sealed partial class OrderingService : IOrderingService
             initialStatus == "submitted" ? now : null, now,
             subtotal, creditApplied, subtotal - creditApplied,
             string.IsNullOrWhiteSpace(request.CustomerNote) ? null : request.CustomerNote.Trim(), items, nominees, rooms, tips);
-        return aggregate with { MenuSnapshotJson = JsonSerializer.Serialize(new MenuOrderSnapshot(menuLines,
+        return aggregate with {
+            CustomerLocation = string.IsNullOrWhiteSpace(request.CustomerLocation) ? null : request.CustomerLocation.Trim(),
+            MenuSnapshotJson = JsonSerializer.Serialize(new MenuOrderSnapshot(menuLines,
             menu.PricingRules.Where(x => x.Policy.ShowOnOrder).Select(x => new MenuRuleSnapshot(x.Id, x.Title, x.Description, x.PriceText, x.Policy)).ToArray(),
             session.PrepaidMealCredit, settings.BaseNominationFee, settings.SegmentMinutes, session.RemainingMealCredit), MenuPolicies.Json) };
     }
@@ -597,7 +643,7 @@ public sealed partial class OrderingService : IOrderingService
     {
         if (!string.IsNullOrWhiteSpace(request.Status))
             throw new BusinessException("不可直接指定訂單狀態，請使用合法的狀態操作。", "ORDER_STATUS_DIRECT_UPDATE_FORBIDDEN");
-        await _repository.UpdateOrderAsync(orderId, request.CustomerNote, request.InternalNote,
+        await _repository.UpdateOrderAsync(orderId, request.CustomerNote, request.CustomerLocation, request.InternalNote,
             ActorId(actor), ActorRole(actor), _clock.LocalDateTime, cancellationToken);
         return (await MapOrdersAsync(await _repository.GetOrderAsync(orderId, cancellationToken), cancellationToken)).Single();
     }
@@ -773,6 +819,7 @@ public sealed partial class OrderingService : IOrderingService
                     new OrderRoomBookingDto(item.Id, item.RoomId, item.RoomNameSnapshot,
                         item.SegmentCount, item.SegmentMinutesSnapshot, item.UnitPrice, item.TotalAmount,
                         ToOffset(item.StartsAt)!.Value, ToOffset(item.EndsAt)!.Value, item.OrderStatus)).ToArray()) {
+                            CustomerLocation = order.CustomerLocation,
                             BusinessPeriodId = order.BusinessPeriodId, FlowVersion = order.FlowVersion,
                             Fulfillment = fulfillment.GetValueOrDefault(order.Id) ?? [],
                             MenuSnapshot = order.MenuSnapshotJson is null ? null : JsonSerializer.Deserialize<JsonElement>(order.MenuSnapshotJson)
@@ -945,7 +992,7 @@ public sealed partial class OrderingService : IOrderingService
     }
 
     private async Task<SubmissionContext> ResolveSubmissionAsync(OrderSessionRow session,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, bool allowStaffAssist = false)
     {
         if (session.SessionStatus != "active")
             throw new BusinessException("此點餐碼目前只能查看訂單；如需加點請洽店員重新開放。",
@@ -958,7 +1005,7 @@ public sealed partial class OrderingService : IOrderingService
                 "ORDERING_STAFF_ASSIST_REQUIRED");
         var intakeMode = context.PastProjectedClose && context.IntakeMode == "normal"
             ? "coordination" : context.IntakeMode;
-        if (intakeMode == "staff_only")
+        if (intakeMode == "staff_only" && !allowStaffAssist)
             throw new BusinessException("目前改由店員協助送單；已選內容會保留。",
                 "ORDERING_STAFF_ASSIST_REQUIRED");
         return new SubmissionContext(context, intakeMode, intakeMode == "coordination");

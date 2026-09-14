@@ -45,6 +45,24 @@ public sealed class OrdersController : ControllerBase
         => Ok(ApiResponse<IReadOnlyList<OrderDto>>.Ok(
             await _service.GetAdminOrdersAsync(sessionId, cancellationToken)));
 
+    [HttpGet("ordering-catalog")]
+    public async Task<ActionResult<ApiResponse<OrderCatalogDto>>> OrderingCatalog(
+        [FromQuery] DateOnly? businessDate, CancellationToken cancellationToken)
+        => Ok(ApiResponse<OrderCatalogDto>.Ok(
+            await _service.GetAdminCatalogAsync(businessDate, cancellationToken)));
+
+    [HttpPost("order-sessions/{sessionId}/quote")]
+    public async Task<ActionResult<ApiResponse<MenuQuoteDto>>> QuoteAssistedOrder(
+        string sessionId, SubmitOrderRequest request, CancellationToken cancellationToken)
+        => Ok(ApiResponse<MenuQuoteDto>.Ok(
+            await _service.QuoteAdminOrderAsync(sessionId, request, User, cancellationToken)));
+
+    [HttpPost("order-sessions/{sessionId}/orders")]
+    public async Task<ActionResult<ApiResponse<OrderDto>>> SubmitAssistedOrder(
+        string sessionId, SubmitOrderRequest request, CancellationToken cancellationToken)
+        => Ok(ApiResponse<OrderDto>.Ok(
+            await _service.SubmitAdminOrderAsync(sessionId, request, User, cancellationToken)));
+
     [HttpGet("orders/{orderId}")]
     public async Task<ActionResult<ApiResponse<AdminOrderLookupDto>>> Order(string orderId, CancellationToken cancellationToken)
         => Ok(ApiResponse<AdminOrderLookupDto>.Ok(await _service.GetAdminOrderAsync(orderId, cancellationToken)));

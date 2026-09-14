@@ -67,7 +67,8 @@ public sealed partial class OrderingService
                 {
                     actions.Add("start_now");
                 }
-                if (unit.Kind is "nominee" or "addon" && unit.StartedQuantity == 0 && unit.CancelledQuantity == 0)
+                if ((unit.Kind is "nominee" or "addon" && unit.StartedQuantity == 0 && unit.CancelledQuantity == 0) ||
+                    (unit.Kind is "meal" or "room" && unit.CompletedQuantity < unit.Quantity && unit.CancelledQuantity == 0))
                     actions.Add("backfill");
                 if (unit.CompletedQuantity < unit.StartedQuantity) actions.Add("complete");
                 if (unit.StartedQuantity + unit.CancelledQuantity < unit.Quantity) actions.Add("cancel");

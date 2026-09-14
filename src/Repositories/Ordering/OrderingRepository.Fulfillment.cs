@@ -303,6 +303,8 @@ public sealed partial class OrderingRepository
             case "backfill" when unit.Kind is "nominee" or "addon" && unit.StartedQuantity == 0 && unit.CancelledQuantity == 0:
                 if (!request.ActualStartsAt.HasValue || request.ActualStartsAt.Value > DateTimeOffset.Now)
                     throw new BusinessException("補登開始時間不可為未來。", "FULFILLMENT_BACKFILL_TIME_INVALID");
+                if (request.ActualEndsAt.HasValue && request.ActualEndsAt.Value < request.ActualStartsAt.Value)
+                    throw new BusinessException("補登結束時間不可早於開始時間。", "FULFILLMENT_BACKFILL_TIME_INVALID");
                 unit.AcceptedQuantity = Math.Max(unit.AcceptedQuantity, q);
                 unit.StartedQuantity += q; unit.ActualStartsAt = request.ActualStartsAt.Value.ToOffset(TimeSpan.FromHours(8)).DateTime;
                 if (request.ActualEndsAt.HasValue)
@@ -312,6 +314,16 @@ public sealed partial class OrderingRepository
                     unit.CompletedQuantity += q;
                     unit.ActualEndsAt = request.ActualEndsAt.Value.ToOffset(TimeSpan.FromHours(8)).DateTime;
                 }
+                break;
+            case "backfill" when unit.Kind is "meal" or "room" && unit.CancelledQuantity == 0 &&
+                q <= unit.Quantity - unit.CancelledQuantity - unit.CompletedQuantity:
+                if (!request.ActualStartsAt.HasValue || request.ActualStartsAt.Value > DateTimeOffset.Now)
+                    throw new BusinessException("補登開始時間不可為未來。", "FULFILLMENT_BACKFILL_TIME_INVALID");
+                unit.AcceptedQuantity = Math.Max(unit.AcceptedQuantity, q);
+                unit.StartedQuantity += q;
+                unit.CompletedQuantity += q;
+                unit.ActualStartsAt ??= request.ActualStartsAt.Value.ToOffset(TimeSpan.FromHours(8)).DateTime;
+                unit.ActualEndsAt = (request.ActualEndsAt ?? request.ActualStartsAt.Value).ToOffset(TimeSpan.FromHours(8)).DateTime;
                 break;
             case "complete" when q <= unit.StartedQuantity - unit.CompletedQuantity:
                 if (unit.Kind is "nominee" or "addon" && unit.ScheduledEndsAt > now && request.Reason is null)
@@ -350,7 +362,7 @@ public sealed partial class OrderingRepository
         {
             await connection.ExecuteAsync(new CommandDefinition("""
                 UPDATE ROOM_SERVICE_ORDERS SET ORDER_STATUS=@Status,UPDATED_AT=@Now WHERE ID=@RelatedId;
-                """, new { unit.RelatedId, Now = now, Status = request.Action switch { "start" => "in_service", "complete" => "completed", "cancel" => "cancelled", _ => "scheduled" } }, tx, cancellationToken: ct));
+                """, new { unit.RelatedId, Now = now, Status = request.Action switch { "start" => "in_service", "complete" or "backfill" => "completed", "cancel" => "cancelled", _ => "scheduled" } }, tx, cancellationToken: ct));
         }
         unit.Status = unit.CancelledQuantity == unit.Quantity ? "cancelled"
             : unit.CompletedQuantity + unit.CancelledQuantity == unit.Quantity ? "completed"

@@ -35,10 +35,11 @@ public sealed class MenuQuoteService(AppDbContext db, IAppClock clock)
         Nominees = order.Nominees.Select(x => new { x.StaffId, x.ServiceId, x.StartsAt, x.ServiceEndsAt, x.BusyUntil }),
         Rooms = order.Rooms.Select(x => new { x.RoomId, x.StartsAt, x.EndsAt, x.UnitPrice }),
         Tips = order.Tips.Select(x => new { x.StaffId, x.Amount, x.StaffPercentage, x.StorePercentage }),
-        order.Subtotal, order.MealCreditApplied, order.TotalAmount, order.StoreConfirmationStatus, order.MenuSnapshotJson
+        order.Subtotal, order.MealCreditApplied, order.TotalAmount, order.StoreConfirmationStatus,
+        order.CustomerLocation, order.MenuSnapshotJson
     });
     private static string RequestJson(SubmitOrderRequest request) => JsonSerializer.Serialize(new {
-        request.Meals, request.Nominations, request.Rooms, request.Tips, request.CustomerNote
+        request.Meals, request.Nominations, request.Rooms, request.Tips, request.CustomerNote, request.CustomerLocation
     }, MenuPolicies.Json);
     public async Task<MenuQuoteDto> CreateAsync(OrderSessionRow session, SubmitOrderRequest request, NewOrderAggregate order, CancellationToken ct)
     {

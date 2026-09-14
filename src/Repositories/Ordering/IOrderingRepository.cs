@@ -68,7 +68,7 @@ public interface IOrderingRepository
         CancellationToken cancellationToken);
     Task ShortenNominationAsync(string orderId, string nomineeId, int segmentCount, string reason,
         string actorId, string actorRole, DateTime now, CancellationToken cancellationToken);
-    Task UpdateOrderAsync(string orderId, string? customerNote, string? internalNote,
+    Task UpdateOrderAsync(string orderId, string? customerNote, string? customerLocation, string? internalNote,
         string actorId, string actorRole, DateTime now, CancellationToken cancellationToken);
     Task TransitionOrderAsync(string orderId, string action, string? reason,
         string actorId, string actorRole, DateTime now, CancellationToken cancellationToken);

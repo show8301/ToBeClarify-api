@@ -141,6 +141,7 @@ public sealed class OrderRow
     public int MealCreditApplied { get; set; }
     public int TotalAmount { get; set; }
     public string? CustomerNote { get; set; }
+    public string? CustomerLocation { get; set; }
     public string? InternalNote { get; set; }
 }
 
@@ -276,6 +277,9 @@ public sealed record NewOrderAggregate(
     IReadOnlyList<NewOrderNominee> Nominees, IReadOnlyList<NewOrderRoom> Rooms,
     IReadOnlyList<NewOrderTip> Tips)
 {
+    public string ActorType { get; init; } = "customer";
+    public string? ActorId { get; init; }
+    public string? CustomerLocation { get; init; }
     public string? MenuSnapshotJson { get; init; }
     public string? QuoteId { get; init; }
     public string? QuoteFingerprint { get; init; }
