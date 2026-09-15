@@ -307,7 +307,7 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
                            ('submitted', 'partially_confirmed', 'needs_reschedule', 'confirmed', 'in_service')
                            AND EXISTS (SELECT 1 FROM `ORDER_FULFILLMENT_UNITS` U
                                        WHERE U.`ORDER_ID`=O.`ID`
-                                         AND U.`UNIT_STATUS` NOT IN ('completed','cancelled')
+                                         AND U.`UNIT_STATUS` NOT IN ('completed','cancelled','carried_forward')
                                          AND COALESCE(U.`FULFILLMENT_PERIOD_ID`,U.`BUSINESS_PERIOD_ID`)=S.`BUSINESS_PERIOD_ID`))
                                       THEN O.`ID` END) AS UnfinishedOrderCount,
                    MAX(CASE WHEN O.`ORDER_STATUS` IN ('confirmed', 'in_service')
@@ -399,7 +399,7 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
                     (O.FLOW_VERSION<2 AND O.ORDER_STATUS IN ('submitted','partially_confirmed','needs_reschedule','confirmed','in_service'))
                     OR (O.FLOW_VERSION>=2 AND O.ORDER_STATUS IN ('submitted','partially_confirmed','needs_reschedule','confirmed','in_service')
                         AND EXISTS (SELECT 1 FROM ORDER_FULFILLMENT_UNITS U WHERE U.ORDER_ID=O.ID
-                            AND U.UNIT_STATUS NOT IN ('completed','cancelled')
+                            AND U.UNIT_STATUS NOT IN ('completed','cancelled','carried_forward')
                             AND COALESCE(U.FULFILLMENT_PERIOD_ID,U.BUSINESS_PERIOD_ID)=S.BUSINESS_PERIOD_ID))
                 )
                 """,before,transaction,cancellationToken:cancellationToken));

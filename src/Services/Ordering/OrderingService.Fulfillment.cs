@@ -38,8 +38,6 @@ public sealed partial class OrderingService
             throw new BusinessException("原因最多 500 字。", "FULFILLMENT_REASON_TOO_LONG");
         if (request.Action is "cancel" or "reschedule" or "carry_forward" && request.Reason is null)
             throw new BusinessException("請填寫此次取消或改期的原因。", "FULFILLMENT_REASON_REQUIRED");
-        if (request.Action == "carry_forward" && string.IsNullOrWhiteSpace(request.TargetBusinessPeriodId))
-            throw new BusinessException("跨營業期履約必須指定新的營業期。", "FULFILLMENT_TARGET_PERIOD_REQUIRED");
         request.CompensationReason = string.IsNullOrWhiteSpace(request.CompensationReason) ? null : request.CompensationReason.Trim();
         if (request.CompensationAmount < 0 || request.CompensationAmount > 2_000_000_000)
             throw new BusinessException("折讓金額不正確。", "FULFILLMENT_COMPENSATION_INVALID");

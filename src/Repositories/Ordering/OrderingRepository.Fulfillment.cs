@@ -335,13 +335,24 @@ public sealed partial class OrderingRepository
                 unit.CancelledQuantity += q;
                 unit.AcceptedQuantity = Math.Min(unit.AcceptedQuantity, unit.Quantity - unit.CancelledQuantity);
                 break;
-            case "reschedule" or "carry_forward" when unit.Kind == "nominee" && unit.StartedQuantity == 0 && unit.CancelledQuantity == 0:
+            case "reschedule" when unit.Kind == "nominee" && unit.StartedQuantity == 0 && unit.CancelledQuantity == 0:
                 if (!request.ScheduledStartsAt.HasValue) throw new BusinessException("請選擇新開始時間。", "FULFILLMENT_SCHEDULE_REQUIRED");
                 unit.OriginalScheduledStartsAt ??= unit.ScheduledStartsAt;
                 unit.OriginalScheduledEndsAt ??= unit.ScheduledEndsAt;
                 unit.ScheduledStartsAt = request.ScheduledStartsAt.Value.ToOffset(TimeSpan.FromHours(8)).DateTime;
                 if (unit.ScheduledStartsAt < now && request.TargetBusinessPeriodId is null) throw new BusinessException("新開始時間不可早於目前時間。", "NOMINATION_START_IN_PAST");
                 unit.ScheduledEndsAt = unit.ScheduledStartsAt.Value.AddMinutes(unit.PurchasedMinutes);
+                unit.AcceptedQuantity = 0;
+                break;
+            case "carry_forward" when unit.Kind == "nominee" && unit.StartedQuantity == 0 && unit.CancelledQuantity == 0:
+                if (request.TargetBusinessPeriodId is not null)
+                {
+                    if (!request.ScheduledStartsAt.HasValue) throw new BusinessException("請選擇新開始時間。", "FULFILLMENT_SCHEDULE_REQUIRED");
+                    unit.OriginalScheduledStartsAt ??= unit.ScheduledStartsAt;
+                    unit.OriginalScheduledEndsAt ??= unit.ScheduledEndsAt;
+                    unit.ScheduledStartsAt = request.ScheduledStartsAt.Value.ToOffset(TimeSpan.FromHours(8)).DateTime;
+                    unit.ScheduledEndsAt = unit.ScheduledStartsAt.Value.AddMinutes(unit.PurchasedMinutes);
+                }
                 unit.AcceptedQuantity = 0;
                 break;
             case "carry_forward" when unit.Kind is "meal" or "room" && unit.StartedQuantity == 0 && unit.CancelledQuantity < unit.Quantity:
@@ -375,6 +386,8 @@ public sealed partial class OrderingRepository
             : unit.CompletedQuantity + unit.CancelledQuantity == unit.Quantity ? "completed"
             : unit.StartedQuantity > unit.CompletedQuantity ? "in_service"
             : unit.AcceptedQuantity + unit.CancelledQuantity == unit.Quantity ? "accepted" : "waiting";
+        if (request.Action == "carry_forward" && string.IsNullOrWhiteSpace(request.TargetBusinessPeriodId))
+            unit.Status = "carried_forward";
         if (unit.CancelledQuantity > oldCancelled)
         {
             var cancelledAmount = (int)((long)unit.OriginalAmount * unit.CancelledQuantity / unit.Quantity);
@@ -472,7 +485,8 @@ public sealed partial class OrderingRepository
             nominee.RequestedServiceEndsAt = unit.ScheduledEndsAt.Value;
             nominee.RequestedBusyUntil = nominee.RequestedServiceEndsAt.AddMinutes(nominee.BufferMinutesSnapshot);
         }
-        if (action is "accept" or "reschedule" or "carry_forward")
+        if (action is "accept" or "reschedule" ||
+            action == "carry_forward" && !string.Equals(unit.FulfillmentPeriodId, order.BusinessPeriodId, StringComparison.OrdinalIgnoreCase))
         {
             if (nominee.RequestedStartsAt < now)
                 throw new BusinessException("預定開始时间已過，請使用此項目的改期入口重新安排。", "NOMINATION_START_IN_PAST");
@@ -488,7 +502,7 @@ public sealed partial class OrderingRepository
                 AND ID<>@Id AND STARTED_QUANTITY>COMPLETED_QUANTITY);
             """, new { unit.StaffId, unit.Id }, tx, cancellationToken: ct)))
             throw new ConflictException("此店員仍有服務進行中，請先處理目前服務。", "STAFF_ALREADY_IN_SERVICE");
-        if (action is "cancel" or "reschedule" or "start_now")
+        if (action is "cancel" or "reschedule" or "carry_forward" or "start_now")
         {
             await connection.ExecuteAsync(new CommandDefinition("""
                 UPDATE STAFF_BUSY_BLOCKS SET BLOCK_STATUS='released',UPDATED_AT=@Now WHERE ORDER_NOMINEE_ID=@NomineeId AND BLOCK_STATUS='active';
