@@ -316,7 +316,7 @@ public sealed partial class OrderingRepository
                     unit.ActualEndsAt = request.ActualEndsAt.Value.ToOffset(TimeSpan.FromHours(8)).DateTime;
                 }
                 break;
-            case "backfill" when unit.Kind is "meal" or "room" && unit.CancelledQuantity == 0 &&
+            case "backfill" when unit.Kind is "meal" or "room" && unit.CancelledQuantity < unit.Quantity &&
                 q <= unit.Quantity - unit.CancelledQuantity - unit.CompletedQuantity:
                 if (!request.ActualStartsAt.HasValue || request.ActualStartsAt.Value > DateTimeOffset.Now)
                     throw new BusinessException("補登開始時間不可為未來。", "FULFILLMENT_BACKFILL_TIME_INVALID");
@@ -508,12 +508,21 @@ public sealed partial class OrderingRepository
         {
             if (action == "start_now")
                 await HandleLateStartConflictsAsync(connection, tx, order, unit, now, ct);
-            await connection.ExecuteAsync(new CommandDefinition("""
-                INSERT INTO STAFF_BUSY_BLOCKS (ID,ORDER_ID,ORDER_NOMINEE_ID,STAFF_ID,STARTS_AT,SERVICE_ENDS_AT,ENDS_AT,BLOCK_STATUS,CREATED_AT,UPDATED_AT)
-                VALUES (@Id,@OrderId,@NomineeId,@StaffId,@StartsAt,@ServiceEndsAt,@EndsAt,'active',@Now,@Now);
-                """, new { Id = NewId(), OrderId = order.Id, NomineeId = nominee.Id, nominee.StaffId,
+            var updatedBusyBlock = await connection.ExecuteAsync(new CommandDefinition("""
+                UPDATE STAFF_BUSY_BLOCKS
+                SET ORDER_ID=@OrderId,STAFF_ID=@StaffId,STARTS_AT=@StartsAt,SERVICE_ENDS_AT=@ServiceEndsAt,
+                    ENDS_AT=@EndsAt,BLOCK_STATUS='active',UPDATED_AT=@Now
+                WHERE ORDER_NOMINEE_ID=@NomineeId;
+                """, new { OrderId = order.Id, NomineeId = nominee.Id, nominee.StaffId,
                     StartsAt = nominee.RequestedStartsAt, ServiceEndsAt = nominee.RequestedServiceEndsAt,
                     EndsAt = nominee.RequestedBusyUntil, Now = now }, tx, cancellationToken: ct));
+            if (updatedBusyBlock == 0)
+                await connection.ExecuteAsync(new CommandDefinition("""
+                    INSERT INTO STAFF_BUSY_BLOCKS (ID,ORDER_ID,ORDER_NOMINEE_ID,STAFF_ID,STARTS_AT,SERVICE_ENDS_AT,ENDS_AT,BLOCK_STATUS,CREATED_AT,UPDATED_AT)
+                    VALUES (@Id,@OrderId,@NomineeId,@StaffId,@StartsAt,@ServiceEndsAt,@EndsAt,'active',@Now,@Now);
+                    """, new { Id = NewId(), OrderId = order.Id, NomineeId = nominee.Id, nominee.StaffId,
+                        StartsAt = nominee.RequestedStartsAt, ServiceEndsAt = nominee.RequestedServiceEndsAt,
+                        EndsAt = nominee.RequestedBusyUntil, Now = now }, tx, cancellationToken: ct));
             nominee.ConfirmationStatus = "confirmed";
             await MenuNotifications.EnsureNominationSchedulesAsync(connection, tx, [nominee], now, ct, nextScheduleRevision: true);
         }
