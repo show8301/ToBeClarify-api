@@ -406,7 +406,7 @@ public sealed partial class OrderingService : IOrderingService
         await _repository.UpdateOrderAsync(order.Id,
             request.CustomerNote is null ? null : request.CustomerNote.Trim(),
             request.CustomerLocation is null ? null : request.CustomerLocation.Trim(), null,
-            $"customer:{session.Id}", "customer", _clock.LocalDateTime, cancellationToken);
+            session.Id, "customer", _clock.LocalDateTime, cancellationToken);
         return (await MapOrdersAsync(await _repository.GetOrderAsync(order.Id, cancellationToken), cancellationToken)).Single();
     }
 
