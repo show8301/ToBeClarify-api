@@ -710,7 +710,7 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
         var sql = $"""
             SELECT O.`ID` AS Id, O.`SESSION_ID` AS SessionId, O.`ORDER_NUMBER` AS OrderNumber,
                    O.`ORDER_KIND` AS OrderKind, O.`PARENT_NOMINEE_ID` AS ParentNomineeId,
-                   O.`BUSINESS_PERIOD_ID` AS BusinessPeriodId, O.`FLOW_VERSION` AS FlowVersion, O.`MENU_SNAPSHOT_JSON` AS MenuSnapshotJson, O.`ORDER_STATUS` AS OrderStatus, O.`INTAKE_MODE_SNAPSHOT` AS IntakeModeSnapshot,
+                   CAST(O.`BUSINESS_PERIOD_ID` AS CHAR(36)) AS BusinessPeriodId, O.`FLOW_VERSION` AS FlowVersion, O.`MENU_SNAPSHOT_JSON` AS MenuSnapshotJson, O.`ORDER_STATUS` AS OrderStatus, O.`INTAKE_MODE_SNAPSHOT` AS IntakeModeSnapshot,
                    O.`STORE_CONFIRMATION_STATUS` AS StoreConfirmationStatus,
                    O.`STORE_CONFIRMED_AT` AS StoreConfirmedAt, O.`STORE_CONFIRMED_BY` AS StoreConfirmedBy,
                    O.`QUEUE_ENTERED_AT` AS QueueEnteredAt,
@@ -2023,7 +2023,7 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
 
     private const string SessionColumns = """
         S.`ID` AS Id, S.`GAME_ID` AS GameId, S.`CUSTOMER_NAME` AS CustomerName,
-        S.`BUSINESS_PERIOD_ID` AS BusinessPeriodId, COALESCE((SELECT P.FLOW_VERSION FROM BUSINESS_PERIODS P WHERE P.ID=S.BUSINESS_PERIOD_ID),1) AS FlowVersion,
+        CAST(S.`BUSINESS_PERIOD_ID` AS CHAR(36)) AS BusinessPeriodId, COALESCE((SELECT P.FLOW_VERSION FROM BUSINESS_PERIODS P WHERE P.ID=S.BUSINESS_PERIOD_ID),1) AS FlowVersion,
         S.`BUSINESS_DATE` AS BusinessDate, S.`ACCESS_TOKEN_HASH` AS AccessTokenHash,
         S.`SHORT_CODE_HASH` AS ShortCodeHash, S.`RECOVERY_CODE_HASH` AS RecoveryCodeHash,
         S.`MAX_NOMINATED_STAFF` AS MaxNominatedStaff,

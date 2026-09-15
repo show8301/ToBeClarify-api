@@ -237,7 +237,7 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
             WHERE B.`SETTLEMENT_ID` = @SettlementId
             ORDER BY B.`REQUESTED_AT` DESC;
 
-            SELECT MAX(S.`BUSINESS_PERIOD_ID`) AS BusinessPeriodId,
+            SELECT CAST(MAX(S.`BUSINESS_PERIOD_ID`) AS CHAR(36)) AS BusinessPeriodId,
                    COALESCE(SUM(CASE WHEN F.`KIND`='cash_receipt' THEN F.`AMOUNT` ELSE 0 END), 0) AS CashReceived,
                    COALESCE(SUM(CASE WHEN F.`KIND`='cash_refund' THEN F.`AMOUNT` ELSE 0 END), 0) AS CashRefunded,
                    COALESCE(SUM(CASE WHEN F.`KIND`='cash_receipt' THEN F.`AMOUNT` WHEN F.`KIND`='cash_refund' THEN -F.`AMOUNT` ELSE 0 END), 0) AS NetCash,

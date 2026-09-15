@@ -11,7 +11,7 @@ public sealed class OrderingFinanceRepository(AppDbContext dbContext)
 {
     private const string SessionSql = """
         SELECT s.ID AS SessionId, s.BUSINESS_DATE AS BusinessDate,
-               s.BUSINESS_PERIOD_ID AS SourcePeriodId, COALESCE(p.FLOW_VERSION, 1) AS FlowVersion,
+               CAST(s.BUSINESS_PERIOD_ID AS CHAR(36)) AS SourcePeriodId, COALESCE(p.FLOW_VERSION, 1) AS FlowVersion,
                COALESCE(s.ENTRY_STATUS, 'open') AS EntryStatus, s.DEPARTED_AT AS DepartedAt,
                s.DEPARTURE_REASON AS DepartureReason, s.SESSION_STATUS AS SessionStatus
         FROM CUSTOMER_ORDER_SESSIONS s LEFT JOIN BUSINESS_PERIODS p ON p.ID = s.BUSINESS_PERIOD_ID

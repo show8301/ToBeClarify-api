@@ -63,7 +63,7 @@ public sealed partial class OrderingRepository
         MySqlTransaction? transaction, string orderId, CancellationToken ct)
     {
         var order = await connection.QuerySingleOrDefaultAsync<FulfillmentOrder>(new CommandDefinition("""
-            SELECT ID AS Id, BUSINESS_PERIOD_ID AS BusinessPeriodId, FLOW_VERSION AS FlowVersion,
+            SELECT ID AS Id, CAST(BUSINESS_PERIOD_ID AS CHAR(36)) AS BusinessPeriodId, FLOW_VERSION AS FlowVersion,
                    ORDER_STATUS AS OrderStatus, SESSION_ID AS SessionId
             FROM ORDERS WHERE ID=@OrderId;
             """, new { OrderId = orderId }, transaction, cancellationToken: ct))
@@ -92,7 +92,8 @@ public sealed partial class OrderingRepository
         var rest = unit.RestMinutesReserved;
         var effectiveEnd = now.AddMinutes(unit.PurchasedMinutes);
         var conflicts = (await connection.QueryAsync<FulfillmentConflictRow>(new CommandDefinition("""
-            SELECT F.ID AS UnitId, F.ORDER_ID AS OrderId, F.NAME_SNAPSHOT AS Name, F.STAFF_ID AS StaffId,
+            SELECT CAST(F.ID AS CHAR(36)) AS UnitId, CAST(F.ORDER_ID AS CHAR(36)) AS OrderId,
+                   F.NAME_SNAPSHOT AS Name, CAST(F.STAFF_ID AS CHAR(36)) AS StaffId,
                    GREATEST(0, TIMESTAMPDIFF(MINUTE, GREATEST(@StartsAt,F.SCHEDULED_STARTS_AT),
                      LEAST(@EndsAt,F.SCHEDULED_ENDS_AT))) AS OverlapMinutes,
                    F.SCHEDULED_STARTS_AT AS StartsAt, F.SCHEDULED_ENDS_AT AS EndsAt, F.UNIT_STATUS AS Status
@@ -126,7 +127,7 @@ public sealed partial class OrderingRepository
             WHERE O.ID=@OrderId;
             """, new { OrderId = orderId }, tx, cancellationToken: ct));
         var order = await connection.QuerySingleAsync<FulfillmentOrder>(new CommandDefinition("""
-            SELECT ID AS Id, BUSINESS_PERIOD_ID AS BusinessPeriodId, FLOW_VERSION AS FlowVersion,
+            SELECT ID AS Id, CAST(BUSINESS_PERIOD_ID AS CHAR(36)) AS BusinessPeriodId, FLOW_VERSION AS FlowVersion,
                    MEAL_CREDIT_APPLIED AS MealCreditApplied, ORDER_STATUS AS OrderStatus
             FROM ORDERS WHERE ID=@OrderId;
             """, new { OrderId = orderId }, tx, cancellationToken: ct));
@@ -260,7 +261,7 @@ public sealed partial class OrderingRepository
             "SELECT ID FROM CUSTOMER_ORDER_SESSIONS WHERE ID=@SessionId FOR UPDATE;", new { SessionId = sessionId }, tx, cancellationToken: ct));
         var order = await connection.QuerySingleAsync<FulfillmentOrder>(new CommandDefinition("""
             SELECT ID AS Id, SESSION_ID AS SessionId, FLOW_VERSION AS FlowVersion,
-                   BUSINESS_PERIOD_ID AS BusinessPeriodId, ORDER_STATUS AS OrderStatus
+                   CAST(BUSINESS_PERIOD_ID AS CHAR(36)) AS BusinessPeriodId, ORDER_STATUS AS OrderStatus
             FROM ORDERS WHERE ID=@OrderId FOR UPDATE;
             """, new { OrderId = orderId }, tx, cancellationToken: ct));
         if (order.FlowVersion < 2) throw new BusinessException("此歷史訂單沿用整單操作。", "FULFILLMENT_LEGACY_ORDER");
@@ -562,7 +563,8 @@ public sealed partial class OrderingRepository
     {
         var currentEnd = current.ScheduledEndsAt!.Value.AddMinutes(current.RestMinutesReserved);
         var affected = (await connection.QueryAsync<FulfillmentConflictRow>(new CommandDefinition("""
-            SELECT ID AS UnitId, ORDER_ID AS OrderId, NAME_SNAPSHOT AS Name, STAFF_ID AS StaffId,
+            SELECT CAST(ID AS CHAR(36)) AS UnitId, CAST(ORDER_ID AS CHAR(36)) AS OrderId,
+                   NAME_SNAPSHOT AS Name, CAST(STAFF_ID AS CHAR(36)) AS StaffId,
                    GREATEST(0,TIMESTAMPDIFF(MINUTE,GREATEST(@StartsAt,SCHEDULED_STARTS_AT),
                      LEAST(@EndsAt,SCHEDULED_ENDS_AT))) AS OverlapMinutes,
                    SCHEDULED_STARTS_AT AS StartsAt,SCHEDULED_ENDS_AT AS EndsAt,UNIT_STATUS AS Status
@@ -657,15 +659,16 @@ public sealed partial class OrderingRepository
     }
 
     private const string UnitSelect = """
-        SELECT ID AS Id, ORDER_ITEM_ID AS OrderItemId, NOMINEE_ID AS NomineeId,RELATED_ID AS RelatedId,
-            KIND AS Kind, NAME_SNAPSHOT AS Name, STAFF_ID AS StaffId, QUANTITY AS Quantity,
+        SELECT CAST(ID AS CHAR(36)) AS Id, CAST(ORDER_ITEM_ID AS CHAR(36)) AS OrderItemId,
+            CAST(NOMINEE_ID AS CHAR(36)) AS NomineeId, CAST(RELATED_ID AS CHAR(36)) AS RelatedId,
+            KIND AS Kind, NAME_SNAPSHOT AS Name, CAST(STAFF_ID AS CHAR(36)) AS StaffId, QUANTITY AS Quantity,
             ACCEPTED_QUANTITY AS AcceptedQuantity,STARTED_QUANTITY AS StartedQuantity,COMPLETED_QUANTITY AS CompletedQuantity,
             CANCELLED_QUANTITY AS CancelledQuantity,UNIT_STATUS AS Status,VERSION AS Version,
             ORIGINAL_AMOUNT AS OriginalAmount,ORIGINAL_CREDIT AS OriginalCredit,CANCELLED_AMOUNT AS CancelledAmount,
             RETURNED_CREDIT AS ReturnedCredit,PURCHASED_MINUTES AS PurchasedMinutes,SCHEDULED_STARTS_AT AS ScheduledStartsAt,
             SCHEDULED_ENDS_AT AS ScheduledEndsAt,ACTUAL_STARTS_AT AS ActualStartsAt,ACTUAL_ENDS_AT AS ActualEndsAt,
             ORIGINAL_SCHEDULED_STARTS_AT AS OriginalScheduledStartsAt,ORIGINAL_SCHEDULED_ENDS_AT AS OriginalScheduledEndsAt,
-            REST_MINUTES_RESERVED AS RestMinutesReserved,FULFILLMENT_PERIOD_ID AS FulfillmentPeriodId
+            REST_MINUTES_RESERVED AS RestMinutesReserved,CAST(FULFILLMENT_PERIOD_ID AS CHAR(36)) AS FulfillmentPeriodId
         FROM ORDER_FULFILLMENT_UNITS
         """;
 
