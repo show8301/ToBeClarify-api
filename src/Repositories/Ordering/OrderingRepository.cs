@@ -539,8 +539,19 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await connection.ExecuteScalarAsync<string>(new CommandDefinition("SELECT ID FROM ORDERING_RUNTIME_LOCKS WHERE ID='operating_period' FOR UPDATE",transaction:transaction,cancellationToken:cancellationToken));
         var currentPeriod = await connection.QuerySingleOrDefaultAsync<BusinessPeriodRow>(new CommandDefinition("SELECT P.PERIOD_STATUS PeriodStatus,P.INTAKE_MODE IntakeMode,P.FLOW_VERSION FlowVersion FROM CUSTOMER_ORDER_SESSIONS S JOIN BUSINESS_PERIODS P ON P.ID=S.BUSINESS_PERIOD_ID WHERE S.ID=@SessionId",new{order.SessionId},transaction,cancellationToken:cancellationToken));
-        if(currentPeriod?.FlowVersion>=2 && (currentPeriod.PeriodStatus!="open" || (order.IntakeModeSnapshot!="staff_only" && currentPeriod.IntakeMode=="staff_only")))
-            throw new BusinessException("已停止接收新訂單，請洽店員協助。", "BUSINESS_PERIOD_NOT_OPEN");
+        if (currentPeriod?.FlowVersion >= 2)
+        {
+            // Staff-assisted orders can be entered while a period is closed so
+            // missed orders can be reconciled before settlement.  A settled
+            // period and all customer submissions remain blocked.
+            var staffAssistClosed = currentPeriod.PeriodStatus == "closed" &&
+                order.IntakeModeSnapshot == "staff_only";
+            var periodAllowsOrder = currentPeriod.PeriodStatus == "open" || staffAssistClosed;
+            var intakeAllowsOrder = currentPeriod.IntakeMode != "staff_only" ||
+                order.IntakeModeSnapshot == "staff_only";
+            if (!periodAllowsOrder || !intakeAllowsOrder)
+                throw new BusinessException("已停止接收新訂單，請洽店員協助。", "BUSINESS_PERIOD_NOT_OPEN");
+        }
 
         try
         {

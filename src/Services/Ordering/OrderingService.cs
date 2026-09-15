@@ -1001,8 +1001,15 @@ public sealed partial class OrderingService : IOrderingService
         if (context.IsTestOverride && context.CurrentBusinessDate == DateOnly.FromDateTime(session.BusinessDate))
             return new SubmissionContext(context, "normal", false);
         if (context.PeriodStatus != "open")
-            throw new BusinessException("目前已停止顧客新增訂單；已選內容會保留，請洽店員協助。",
-                "ORDERING_STAFF_ASSIST_REQUIRED");
+        {
+            // A closed but not yet settled period still needs a staff-only path
+            // for missed orders found after the doors are closed.  Customers
+            // and already settled periods remain read-only.
+            if (!allowStaffAssist || context.PeriodStatus != "closed")
+                throw new BusinessException("目前已停止顧客新增訂單；已選內容會保留，請洽店員協助。",
+                    "ORDERING_STAFF_ASSIST_REQUIRED");
+            return new SubmissionContext(context, "staff_only", false);
+        }
         var intakeMode = context.PastProjectedClose && context.IntakeMode == "normal"
             ? "coordination" : context.IntakeMode;
         if (intakeMode == "staff_only" && !allowStaffAssist)
