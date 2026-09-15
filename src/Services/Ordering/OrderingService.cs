@@ -390,6 +390,26 @@ public sealed partial class OrderingService : IOrderingService
             submission.IntakeMode, submission.RequiresStoreConfirmation, cancellationToken);
     }
 
+    public async Task<OrderDto> UpdateCustomerOrderAsync(string token, string orderId,
+        UpdateCustomerOrderRequest request, CancellationToken cancellationToken)
+    {
+        var session = await ValidateTokenAsync(token, cancellationToken);
+        if (session.SessionStatus != "active")
+            throw new BusinessException("顧客離店後不可修改訂單位置或備註。", "ORDER_SESSION_READONLY");
+        if (request.CustomerNote is null && request.CustomerLocation is null)
+            throw new BusinessException("請至少修改送餐位置或顧客備註。", "ORDER_UPDATE_EMPTY");
+        var bundle = await _repository.GetOrderAsync(Required(orderId, "ORDER_ID_REQUIRED"), cancellationToken);
+        var order = bundle.Orders.SingleOrDefault()
+            ?? throw new BusinessException("找不到訂單。", "ORDER_NOT_FOUND");
+        if (order.SessionId != session.Id)
+            throw new BusinessException("找不到訂單。", "ORDER_NOT_FOUND");
+        await _repository.UpdateOrderAsync(order.Id,
+            request.CustomerNote is null ? null : request.CustomerNote.Trim(),
+            request.CustomerLocation is null ? null : request.CustomerLocation.Trim(), null,
+            $"customer:{session.Id}", "customer", _clock.LocalDateTime, cancellationToken);
+        return (await MapOrdersAsync(await _repository.GetOrderAsync(order.Id, cancellationToken), cancellationToken)).Single();
+    }
+
     public async Task<IReadOnlyList<OrderDto>> GetMyOrdersAsync(string token, CancellationToken cancellationToken)
     {
         var session = await ValidateTokenAsync(token, cancellationToken);

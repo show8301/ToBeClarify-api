@@ -23,6 +23,8 @@ public interface IOrderingService
     Task<MenuQuoteDto> QuoteAdminOrderAsync(string sessionId, SubmitOrderRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<OrderDto> SubmitAdminOrderAsync(string sessionId, SubmitOrderRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<OrderDto> SubmitAddonAsync(string token, SubmitAddonRequest request, CancellationToken cancellationToken);
+    Task<OrderDto> UpdateCustomerOrderAsync(string token, string orderId, UpdateCustomerOrderRequest request,
+        CancellationToken cancellationToken);
     Task<IReadOnlyList<OrderDto>> GetMyOrdersAsync(string token, CancellationToken cancellationToken);
     Task<OrderingCustomerBillDto> GetCustomerBillAsync(string token, CancellationToken cancellationToken);
     Task<IReadOnlyList<AdminOrderSessionDto>> GetAdminSessionsAsync(DateOnly? businessDate, string? search, CancellationToken cancellationToken);

@@ -381,6 +381,15 @@ public sealed class UpdateAdminOrderRequest
     public string? Status { get; init; }
 }
 
+public sealed class UpdateCustomerOrderRequest
+{
+    [StringLength(500)]
+    public string? CustomerNote { get; init; }
+
+    [StringLength(200)]
+    public string? CustomerLocation { get; init; }
+}
+
 public sealed class UpdateOrderingBusinessDayOverrideRequest
 {
     [Required]
