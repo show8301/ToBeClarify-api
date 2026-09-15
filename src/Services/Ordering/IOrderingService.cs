@@ -59,4 +59,5 @@ public interface IOrderingService
     Task CancelOrderAsync(string orderId, OrderActionRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<IReadOnlyList<OrderingReportSummaryDto>> GetReportAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken);
     Task<int> ExpireWaitingOrdersAsync(CancellationToken cancellationToken);
+    Task<int> RunExpiryMaintenanceAsync(ClaimsPrincipal actor, CancellationToken cancellationToken);
 }

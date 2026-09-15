@@ -31,13 +31,15 @@ public sealed partial class OrderingService
     {
         if (!Guid.TryParse(request.OperationId, out _) || request.ExpectedVersion < 1 || request.Quantity < 1)
             throw new BusinessException("操作識別碼、資料版本或數量不正確。", "FULFILLMENT_REQUEST_INVALID");
-        if (request.Action is not ("accept" or "start" or "start_now" or "backfill" or "complete" or "cancel" or "reschedule"))
+        if (request.Action is not ("accept" or "start" or "start_now" or "backfill" or "complete" or "cancel" or "reschedule" or "carry_forward"))
             throw new BusinessException("不支援此分項操作。", "FULFILLMENT_ACTION_INVALID");
         request.Reason = string.IsNullOrWhiteSpace(request.Reason) ? null : request.Reason.Trim();
         if (request.Reason?.Length > 500)
             throw new BusinessException("原因最多 500 字。", "FULFILLMENT_REASON_TOO_LONG");
-        if (request.Action is "cancel" or "reschedule" && request.Reason is null)
+        if (request.Action is "cancel" or "reschedule" or "carry_forward" && request.Reason is null)
             throw new BusinessException("請填寫此次取消或改期的原因。", "FULFILLMENT_REASON_REQUIRED");
+        if (request.Action == "carry_forward" && string.IsNullOrWhiteSpace(request.TargetBusinessPeriodId))
+            throw new BusinessException("跨營業期履約必須指定新的營業期。", "FULFILLMENT_TARGET_PERIOD_REQUIRED");
         request.CompensationReason = string.IsNullOrWhiteSpace(request.CompensationReason) ? null : request.CompensationReason.Trim();
         if (request.CompensationAmount < 0 || request.CompensationAmount > 2_000_000_000)
             throw new BusinessException("折讓金額不正確。", "FULFILLMENT_COMPENSATION_INVALID");
@@ -73,6 +75,8 @@ public sealed partial class OrderingService
                 if (unit.CompletedQuantity < unit.StartedQuantity) actions.Add("complete");
                 if (unit.StartedQuantity + unit.CancelledQuantity < unit.Quantity) actions.Add("cancel");
                 if (unit.Kind == "nominee" && unit.StartedQuantity == 0 && unit.CancelledQuantity == 0) actions.Add("reschedule");
+                if (unit.Kind is not "addon" && unit.StartedQuantity == 0 && unit.CancelledQuantity < unit.Quantity)
+                    actions.Add("carry_forward");
             }
             return unit with { AllowedActions = actions };
         }).ToArray() };

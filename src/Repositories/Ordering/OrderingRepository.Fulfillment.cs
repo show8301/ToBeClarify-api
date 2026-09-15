@@ -335,7 +335,7 @@ public sealed partial class OrderingRepository
                 unit.CancelledQuantity += q;
                 unit.AcceptedQuantity = Math.Min(unit.AcceptedQuantity, unit.Quantity - unit.CancelledQuantity);
                 break;
-            case "reschedule" when unit.Kind == "nominee" && unit.StartedQuantity == 0 && unit.CancelledQuantity == 0:
+            case "reschedule" or "carry_forward" when unit.Kind == "nominee" && unit.StartedQuantity == 0 && unit.CancelledQuantity == 0:
                 if (!request.ScheduledStartsAt.HasValue) throw new BusinessException("請選擇新開始時間。", "FULFILLMENT_SCHEDULE_REQUIRED");
                 unit.OriginalScheduledStartsAt ??= unit.ScheduledStartsAt;
                 unit.OriginalScheduledEndsAt ??= unit.ScheduledEndsAt;
@@ -344,10 +344,14 @@ public sealed partial class OrderingRepository
                 unit.ScheduledEndsAt = unit.ScheduledStartsAt.Value.AddMinutes(unit.PurchasedMinutes);
                 unit.AcceptedQuantity = 0;
                 break;
+            case "carry_forward" when unit.Kind is "meal" or "room" && unit.StartedQuantity == 0 && unit.CancelledQuantity < unit.Quantity:
+                if (q != unit.Quantity - unit.CancelledQuantity)
+                    throw new BusinessException("跨營業期轉移必須一次移轉所有尚未服務的數量。", "FULFILLMENT_CARRY_FORWARD_QUANTITY_INVALID");
+                break;
             default:
                 throw new BusinessException("目前進度無法執行此數量，請重新確認。", "FULFILLMENT_TRANSITION_INVALID");
         }
-        if (request.Action == "reschedule" && !string.IsNullOrWhiteSpace(request.TargetBusinessPeriodId))
+        if (request.Action is "reschedule" or "carry_forward" && !string.IsNullOrWhiteSpace(request.TargetBusinessPeriodId))
         {
             var targetPeriod = await connection.QuerySingleOrDefaultAsync<BusinessPeriodRow>(new CommandDefinition("""
                 SELECT ID AS Id, PERIOD_STATUS AS PeriodStatus, ACTUAL_OPENED_AT AS ActualOpenedAt,
@@ -355,6 +359,8 @@ public sealed partial class OrderingRepository
                 """, new { Id = request.TargetBusinessPeriodId }, tx, cancellationToken: ct));
             if (targetPeriod is null || targetPeriod.PeriodStatus is not ("open" or "coordination"))
                 throw new BusinessException("目標營業期尚未開放履約。", "FULFILLMENT_TARGET_PERIOD_INVALID");
+            if (request.Action == "carry_forward" && string.Equals(request.TargetBusinessPeriodId, order.BusinessPeriodId, StringComparison.OrdinalIgnoreCase))
+                throw new BusinessException("跨營業期轉移不可選擇原營業期。", "FULFILLMENT_TARGET_PERIOD_SAME");
             unit.FulfillmentPeriodId = request.TargetBusinessPeriodId;
         }
         if (unit.Kind == "nominee") await ApplyNomineeFulfillmentAsync(connection, tx, order, unit, request.Action, actorId, now, ct);
@@ -439,7 +445,7 @@ public sealed partial class OrderingRepository
                    CONFIRMATION_STATUS AS ConfirmationStatus FROM ORDER_NOMINEES WHERE ID=@NomineeId FOR UPDATE;
             """, new { unit.NomineeId }, tx, cancellationToken: ct));
         await LockStaffRowsAsync(connection, tx, [nominee.StaffId], ct);
-        if (action is "cancel" or "complete" or "reschedule")
+        if (action is "cancel" or "complete" or "reschedule" or "carry_forward")
         {
             var hasAddons = await connection.ExecuteScalarAsync<bool>(new CommandDefinition("""
                 SELECT EXISTS(SELECT 1 FROM ORDER_SERVICE_ADDONS A JOIN ORDERS O ON O.ID=A.ORDER_ID
@@ -453,7 +459,7 @@ public sealed partial class OrderingRepository
             nominee.RequestedServiceEndsAt = unit.ScheduledEndsAt!.Value;
             nominee.RequestedBusyUntil = nominee.RequestedServiceEndsAt.AddMinutes(unit.RestMinutesReserved);
         }
-        if (action == "reschedule")
+        if (action is "reschedule" or "carry_forward")
         {
             var period = await connection.QuerySingleOrDefaultAsync<BusinessPeriodRow>(new CommandDefinition("""
                 SELECT PERIOD_STATUS AS PeriodStatus, ACTUAL_OPENED_AT AS ActualOpenedAt,
@@ -466,7 +472,7 @@ public sealed partial class OrderingRepository
             nominee.RequestedServiceEndsAt = unit.ScheduledEndsAt.Value;
             nominee.RequestedBusyUntil = nominee.RequestedServiceEndsAt.AddMinutes(nominee.BufferMinutesSnapshot);
         }
-        if (action is "accept" or "reschedule")
+        if (action is "accept" or "reschedule" or "carry_forward")
         {
             if (nominee.RequestedStartsAt < now)
                 throw new BusinessException("預定開始时间已過，請使用此項目的改期入口重新安排。", "NOMINATION_START_IN_PAST");
@@ -495,11 +501,11 @@ public sealed partial class OrderingRepository
                 WHERE ORDER_NOMINEE_ID=@NomineeId AND BLOCK_STATUS='active';
                 """, new { unit.NomineeId, Now = now, BusyUntil = now.AddMinutes(nominee.BufferMinutesSnapshot) }, tx, cancellationToken: ct));
         }
-        var confirmation = action switch { "cancel" => "cancelled", "reschedule" => "waiting", "complete" => "completed", "backfill" when unit.CompletedQuantity > 0 => "completed", _ => "confirmed" };
+        var confirmation = action switch { "cancel" => "cancelled", "reschedule" or "carry_forward" => "waiting", "complete" => "completed", "backfill" when unit.CompletedQuantity > 0 => "completed", _ => "confirmed" };
         await connection.ExecuteAsync(new CommandDefinition("""
             UPDATE ORDER_NOMINEES SET CONFIRMATION_STATUS=@Confirmation,
-                CONFIRMED_AT=CASE WHEN @Action IN ('accept','start_now') THEN @Now WHEN @Action='reschedule' THEN NULL ELSE CONFIRMED_AT END,
-                CONFIRMED_BY=CASE WHEN @Action IN ('accept','start_now') THEN @ActorId WHEN @Action='reschedule' THEN NULL ELSE CONFIRMED_BY END,
+                CONFIRMED_AT=CASE WHEN @Action IN ('accept','start_now') THEN @Now WHEN @Action IN ('reschedule','carry_forward') THEN NULL ELSE CONFIRMED_AT END,
+                CONFIRMED_BY=CASE WHEN @Action IN ('accept','start_now') THEN @ActorId WHEN @Action IN ('reschedule','carry_forward') THEN NULL ELSE CONFIRMED_BY END,
                 REQUESTED_STARTS_AT=@RequestedStartsAt,REQUESTED_SERVICE_ENDS_AT=@RequestedServiceEndsAt,
                 REQUESTED_BUSY_UNTIL=@RequestedBusyUntil,UPDATED_AT=@Now WHERE ID=@Id;
             """, new { nominee.Id, Confirmation = confirmation, Action = action, Now = now, ActorId = actorId,
@@ -640,7 +646,7 @@ public sealed partial class OrderingRepository
         FulfillmentOrder order, FulfillmentUnit unit, FulfillmentTransitionRequest request, string actorId,
         DateTime now, CancellationToken ct)
     {
-        var type = request.Action switch { "start_now" => "start_now", "backfill" => "backfill", "reschedule" => "reschedule", _ => request.Action };
+        var type = request.Action switch { "start_now" => "start_now", "backfill" => "backfill", "reschedule" => "reschedule", "carry_forward" => "carry_forward", _ => request.Action };
         await connection.ExecuteAsync(new CommandDefinition("""
             INSERT INTO ORDER_FULFILLMENT_EVENTS
                 (ID,ORDER_ID,UNIT_ID,EVENT_TYPE,OPERATION_ID,FROM_PERIOD_ID,TO_PERIOD_ID,

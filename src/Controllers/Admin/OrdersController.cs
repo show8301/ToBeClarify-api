@@ -92,6 +92,11 @@ public sealed class OrdersController : ControllerBase
         => Ok(ApiResponse<OrderingBusinessContextDto>.Ok(
             await _service.ApplyBusinessPeriodActionAsync(request, User, cancellationToken)));
 
+    [HttpPost("ordering-maintenance/expire-waiting")]
+    [Authorize(Policy = "AdminManager")]
+    public async Task<ActionResult<ApiResponse<int>>> ExpireWaiting(CancellationToken cancellationToken)
+        => Ok(ApiResponse<int>.Ok(await _service.RunExpiryMaintenanceAsync(User, cancellationToken)));
+
     [HttpGet("ordering-settings/business-day-override")]
     [Authorize(Policy = "AdminManager")]
     public async Task<ActionResult<ApiResponse<OrderingBusinessDayOverrideDto?>>> BusinessDayOverride(

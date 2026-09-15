@@ -300,8 +300,15 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
             SELECT COUNT(DISTINCT CASE WHEN S.`SESSION_STATUS` = 'active' THEN S.`ID` END) AS OpenSessionCount,
                    COUNT(DISTINCT CASE WHEN O.`ORDER_STATUS` IN ('submitted', 'partially_confirmed', 'needs_reschedule')
                                       THEN O.`ID` END) AS WaitingOrderCount,
-                   COUNT(DISTINCT CASE WHEN O.`ORDER_STATUS` IN
-                       ('submitted', 'partially_confirmed', 'needs_reschedule', 'confirmed', 'in_service')
+                   COUNT(DISTINCT CASE WHEN
+                       (O.`FLOW_VERSION` < 2 AND O.`ORDER_STATUS` IN
+                           ('submitted', 'partially_confirmed', 'needs_reschedule', 'confirmed', 'in_service'))
+                       OR (O.`FLOW_VERSION` >= 2 AND O.`ORDER_STATUS` IN
+                           ('submitted', 'partially_confirmed', 'needs_reschedule', 'confirmed', 'in_service')
+                           AND EXISTS (SELECT 1 FROM `ORDER_FULFILLMENT_UNITS` U
+                                       WHERE U.`ORDER_ID`=O.`ID`
+                                         AND U.`UNIT_STATUS` NOT IN ('completed','cancelled')
+                                         AND COALESCE(U.`FULFILLMENT_PERIOD_ID`,U.`BUSINESS_PERIOD_ID`)=S.`BUSINESS_PERIOD_ID`))
                                       THEN O.`ID` END) AS UnfinishedOrderCount,
                    MAX(CASE WHEN O.`ORDER_STATUS` IN ('confirmed', 'in_service')
                             THEN N.`REQUESTED_BUSY_UNTIL` END) AS LatestCommittedBusyUntil
@@ -386,7 +393,16 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
             throw new BusinessException("已有其他營業日開店，無法同時重開。", "BUSINESS_PERIOD_ALREADY_ACTIVE");
         if(action is "close" or "settle")
         {
-            var unfinished=await connection.ExecuteScalarAsync<int>(new CommandDefinition("SELECT COUNT(*) FROM ORDERS O JOIN CUSTOMER_ORDER_SESSIONS S ON S.ID=O.SESSION_ID WHERE S.BUSINESS_DATE=@BusinessDate AND O.ORDER_STATUS IN ('submitted','partially_confirmed','needs_reschedule','confirmed','in_service')",before,transaction,cancellationToken:cancellationToken));
+            var unfinished=await connection.ExecuteScalarAsync<int>(new CommandDefinition("""
+                SELECT COUNT(*) FROM ORDERS O JOIN CUSTOMER_ORDER_SESSIONS S ON S.ID=O.SESSION_ID
+                WHERE S.BUSINESS_DATE=@BusinessDate AND (
+                    (O.FLOW_VERSION<2 AND O.ORDER_STATUS IN ('submitted','partially_confirmed','needs_reschedule','confirmed','in_service'))
+                    OR (O.FLOW_VERSION>=2 AND O.ORDER_STATUS IN ('submitted','partially_confirmed','needs_reschedule','confirmed','in_service')
+                        AND EXISTS (SELECT 1 FROM ORDER_FULFILLMENT_UNITS U WHERE U.ORDER_ID=O.ID
+                            AND U.UNIT_STATUS NOT IN ('completed','cancelled')
+                            AND COALESCE(U.FULFILLMENT_PERIOD_ID,U.BUSINESS_PERIOD_ID)=S.BUSINESS_PERIOD_ID))
+                )
+                """,before,transaction,cancellationToken:cancellationToken));
             if(unfinished>0) throw new BusinessException("仍有未完成訂單，請先處理。", "BUSINESS_PERIOD_HAS_UNFINISHED_ORDERS");
         }
         var (status, mode, closedAt, settledAt) = action switch

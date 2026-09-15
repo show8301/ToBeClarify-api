@@ -253,10 +253,15 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
             SELECT MAX(P.`ID`) AS BusinessPeriodId, COALESCE(MAX(P.`PERIOD_STATUS`), 'scheduled') AS PeriodStatus,
                    COALESCE(MAX(P.`INTAKE_MODE`), 'staff_only') AS IntakeMode,
                    MAX(P.`ACTUAL_CLOSED_AT`) AS ActualClosedAt, MAX(P.`SETTLED_AT`) AS SettledAt,
-                   (SELECT COUNT(DISTINCT O.`ID`) FROM `ORDERS` O
-                    INNER JOIN `CUSTOMER_ORDER_SESSIONS` S2 ON S2.`ID`=O.`SESSION_ID`
-                    WHERE S2.`BUSINESS_DATE`=@BusinessDate
-                      AND O.`ORDER_STATUS` IN ('submitted','partially_confirmed','needs_reschedule','confirmed','in_service')) AS UnfinishedOrderCount,
+                    (SELECT COUNT(DISTINCT O.`ID`) FROM `ORDERS` O
+                     INNER JOIN `CUSTOMER_ORDER_SESSIONS` S2 ON S2.`ID`=O.`SESSION_ID`
+                     WHERE S2.`BUSINESS_DATE`=@BusinessDate
+                       AND ((O.`FLOW_VERSION` < 2 AND O.`ORDER_STATUS` IN ('submitted','partially_confirmed','needs_reschedule','confirmed','in_service'))
+                            OR (O.`FLOW_VERSION` >= 2 AND O.`ORDER_STATUS` IN ('submitted','partially_confirmed','needs_reschedule','confirmed','in_service')
+                                AND EXISTS (SELECT 1 FROM `ORDER_FULFILLMENT_UNITS` U
+                                            WHERE U.`ORDER_ID`=O.`ID`
+                                              AND U.`UNIT_STATUS` NOT IN ('completed','cancelled')
+                                              AND COALESCE(U.`FULFILLMENT_PERIOD_ID`,U.`BUSINESS_PERIOD_ID`)=S2.`BUSINESS_PERIOD_ID`))) AS UnfinishedOrderCount,
                    (SELECT COUNT(*) FROM `ORDER_FULFILLMENT_UNITS` U
                     INNER JOIN `ORDERS` O2 ON O2.`ID`=U.`ORDER_ID`
                     INNER JOIN `CUSTOMER_ORDER_SESSIONS` S3 ON S3.`ID`=O2.`SESSION_ID`

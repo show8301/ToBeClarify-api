@@ -765,6 +765,13 @@ public sealed partial class OrderingService : IOrderingService
             _clock.LocalDateTime, cancellationToken);
     }
 
+    public async Task<int> RunExpiryMaintenanceAsync(ClaimsPrincipal actor, CancellationToken cancellationToken)
+    {
+        if (ActorRole(actor) is not (AdminRole.Manager or AdminRole.Developer))
+            throw new ForbiddenException("只有店經理或開發者可以執行等待單逾時處理。", "ORDER_EXPIRY_SCOPE_FORBIDDEN");
+        return await ExpireWaitingOrdersAsync(cancellationToken);
+    }
+
     private async Task<OrderSessionRow> ValidateTokenAsync(string token, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(token))
