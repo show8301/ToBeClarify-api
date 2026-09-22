@@ -37,6 +37,35 @@ function Test-ArtifactExcludedItem {
     return $Item.Name -ieq 'web.config' -or $Item.Name -ilike 'appsettings*.json'
 }
 
+function Remove-ItemWithRetry {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+
+        [int]$MaxAttempts = 15,
+
+        [int]$DelaySeconds = 2
+    )
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            if (Test-Path -LiteralPath $Path) {
+                Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+            }
+
+            return
+        }
+        catch {
+            if ($attempt -eq $MaxAttempts) {
+                throw
+            }
+
+            Write-Host "Waiting for IIS to release $Path (attempt $attempt/$MaxAttempts)."
+            Start-Sleep -Seconds $DelaySeconds
+        }
+    }
+}
+
 $artifactRoot = (Resolve-Path -LiteralPath $ArtifactPath).Path
 $deployRoot = (Resolve-Path -LiteralPath $DeployPath).Path
 $deployRoot = $deployRoot.TrimEnd(
@@ -90,7 +119,7 @@ try {
     Start-Sleep -Seconds 5
 
     foreach ($item in $existingApplicationItems) {
-        Remove-Item -LiteralPath $item.FullName -Recurse -Force
+        Remove-ItemWithRetry -Path $item.FullName
     }
 
     foreach ($item in (Get-ChildItem -LiteralPath $artifactRoot -Force)) {
@@ -145,7 +174,7 @@ catch {
 
     Get-ChildItem -LiteralPath $deployRoot -Force |
         Where-Object { -not (Test-PreservedItem $_) } |
-        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force }
+        ForEach-Object { Remove-ItemWithRetry -Path $_.FullName }
 
     foreach ($item in (Get-ChildItem -LiteralPath $backupRoot -Force)) {
         Copy-Item -LiteralPath $item.FullName -Destination $deployRoot -Recurse -Force
