@@ -220,6 +220,12 @@ public sealed class CreateOrderSessionRequest
     [StringLength(100)]
     public string? CustomerName { get; init; }
 
+    // Optional explicit historical UID selection made by a manager after
+    // reviewing game-ID candidates. When omitted, the service reuses a
+    // unique candidate or leaves an ambiguous match for later review.
+    [StringLength(40)]
+    public string? CustomerUid { get; init; }
+
     [Range(0, 100)]
     public int? MaxNominatedStaff { get; init; }
 }

@@ -121,9 +121,11 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
         const string sql = """
             INSERT INTO `CUSTOMER_ORDER_SESSIONS`
                 (`ID`, `GAME_ID`, `CUSTOMER_NAME`, `BUSINESS_DATE`, `BUSINESS_PERIOD_ID`, `ACCESS_TOKEN_HASH`, `SHORT_CODE_HASH`, `RECOVERY_CODE_HASH`,
+                 `RECOVERY_CODE_ISSUED_AT`, `RECOVERY_CODE_VERSION`,
                  `MAX_NOMINATED_STAFF`, `PREPAID_MEAL_CREDIT`, `REMAINING_MEAL_CREDIT`, `SESSION_STATUS`,
                  `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
             VALUES (@Id, @GameId, @CustomerName, @BusinessDate, @BusinessPeriodId, @AccessTokenHash, @ShortCodeHash, @RecoveryCodeHash,
+                    @RecoveryCodeIssuedAt, @RecoveryCodeVersion,
                     @MaxNominatedStaff, @PrepaidMealCredit, @RemainingMealCredit, 'active',
                     @CreatedAt, @ActorId, @CreatedAt, @ActorId);
             INSERT INTO `ORDER_AUDIT_LOG`
@@ -139,6 +141,7 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
         {
             session.Id, session.GameId, session.CustomerName, session.BusinessPeriodId,
             BusinessDate = session.BusinessDate.Date, session.AccessTokenHash, session.ShortCodeHash, session.RecoveryCodeHash,
+            session.RecoveryCodeIssuedAt, session.RecoveryCodeVersion,
             session.MaxNominatedStaff, session.PrepaidMealCredit, session.RemainingMealCredit,
             session.CreatedAt, ActorId = actorId, AuditId = NewId(), AfterJson = JsonSerializer.Serialize(session)
         }, transaction, cancellationToken: cancellationToken));
@@ -152,6 +155,8 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
             UPDATE `CUSTOMER_ORDER_SESSIONS`
             SET `ACCESS_TOKEN_HASH` = @TokenHash,
                 `RECOVERY_CODE_HASH` = COALESCE(@RecoveryCodeHash, `RECOVERY_CODE_HASH`),
+                `RECOVERY_CODE_ISSUED_AT` = CASE WHEN @RecoveryCodeHash IS NULL THEN `RECOVERY_CODE_ISSUED_AT` ELSE @Now END,
+                `RECOVERY_CODE_VERSION` = CASE WHEN @RecoveryCodeHash IS NULL THEN `RECOVERY_CODE_VERSION` ELSE COALESCE(`RECOVERY_CODE_VERSION`,1)+1 END,
                 `SHORT_CODE_HASH` = COALESCE(@ShortCodeHash, `SHORT_CODE_HASH`),
                 `LAST_ACCESSED_AT` = @Now, `UPDATED_AT` = @Now
             WHERE `ID` = @SessionId;
@@ -2053,6 +2058,7 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
         CAST(S.`BUSINESS_PERIOD_ID` AS CHAR(36)) AS BusinessPeriodId, COALESCE((SELECT P.FLOW_VERSION FROM BUSINESS_PERIODS P WHERE P.ID=S.BUSINESS_PERIOD_ID),1) AS FlowVersion,
         S.`BUSINESS_DATE` AS BusinessDate, S.`ACCESS_TOKEN_HASH` AS AccessTokenHash,
         S.`SHORT_CODE_HASH` AS ShortCodeHash, S.`RECOVERY_CODE_HASH` AS RecoveryCodeHash,
+        S.`RECOVERY_CODE_ISSUED_AT` AS RecoveryCodeIssuedAt, COALESCE(S.`RECOVERY_CODE_VERSION`,1) AS RecoveryCodeVersion,
         S.`MAX_NOMINATED_STAFF` AS MaxNominatedStaff,
         S.`PREPAID_MEAL_CREDIT` AS PrepaidMealCredit, S.`REMAINING_MEAL_CREDIT` AS RemainingMealCredit,
         S.`SESSION_STATUS` AS SessionStatus, COALESCE(S.`ENTRY_STATUS`, 'open') AS EntryStatus,

@@ -12,7 +12,8 @@ public sealed class GuestbookStore(AppDbContext db)
 {
     private const string Columns = """
         ID AS Id, DISPLAY_NAME AS DisplayName, CONTENT AS Content, AUTHOR_TYPE AS AuthorType,
-        IS_VISIBLE AS IsVisible, VERSION AS Version, CREATED_AT AS CreatedAt, EDITED_AT AS EditedAt
+        IS_VISIBLE AS IsVisible, VERSION AS Version, CREATED_AT AS CreatedAt, EDITED_AT AS EditedAt,
+        CUSTOMER_UID AS CustomerUid, IMAGE_ID AS ImageId
         """;
     private const string ThreadColumns = Columns + ", ID AS ThreadId, IS_PINNED AS IsPinned, SORT_ORDER AS SortOrder, ALLOW_REPLIES AS AllowReplies";
     private const string ReplyColumns = Columns + ", COMMENT_ID AS ThreadId";
@@ -78,7 +79,7 @@ public sealed class GuestbookStore(AppDbContext db)
         return await c.QuerySingleOrDefaultAsync<string>(new CommandDefinition("SELECT S.DISPLAY_NAME FROM ADMIN_USERS A JOIN STAFF_MEMBERS S ON S.ID=A.STAFF_MEMBER_ID WHERE A.ID=@Id AND A.IS_ACTIVE=TRUE;", new { Id = actorId }, cancellationToken: ct));
     }
 
-    public async Task<GuestbookMessage> Create(string? threadId, string name, string content, string authorType, string? actorId, string? staffId, string? visitorKey, CancellationToken ct)
+    public async Task<GuestbookMessage> Create(string? threadId, string name, string content, string authorType, string? actorId, string? staffId, string? visitorKey, CancellationToken ct, string? customerUid = null, byte[]? imageBytes = null)
     {
         await using var c = await db.CreateOpenConnectionAsync(ct);
         await using var tx = await c.BeginTransactionAsync(ct);
@@ -101,14 +102,35 @@ public sealed class GuestbookStore(AppDbContext db)
         var id = Guid.NewGuid().ToString();
         var reply = threadId is not null;
         var table = reply ? "GUESTBOOK_REPLIES" : "GUESTBOOK_COMMENTS";
+        var imageId = imageBytes is null ? null : Guid.NewGuid().ToString();
+        if (imageBytes is not null)
+        {
+            if (customerUid is null) throw new ForbiddenException("圖片留言需要顧客 UID。", "CUSTOMER_UID_REQUIRED");
+            await c.ExecuteAsync(new CommandDefinition(
+                "INSERT INTO GUESTBOOK_IMAGES (ID,IMAGE_BYTES) VALUES (@Id,@Bytes);",
+                new { Id = imageId, Bytes = imageBytes }, tx, cancellationToken: ct));
+        }
         await c.ExecuteAsync(new CommandDefinition($"""
-            INSERT INTO {table} (ID,DISPLAY_NAME,CONTENT,AUTHOR_TYPE,AUTHOR_ADMIN_ID,AUTHOR_STAFF_ID,IS_VISIBLE,CREATED_AT,UPDATED_AT,CREATED_BY,UPDATED_BY,{(reply ? "COMMENT_ID" : "IS_PINNED,SORT_ORDER")})
-            VALUES (@Id,@Name,@Content,@AuthorType,@ActorId,@StaffId,TRUE,NOW(6),NOW(6),@ActorId,@ActorId,{(reply ? "@ThreadId" : "FALSE,0")});
-            """, new { Id = id, Name = name, Content = content, AuthorType = authorType, ActorId = actorId, StaffId = staffId, ThreadId = threadId }, tx, cancellationToken: ct));
+            INSERT INTO {table} (ID,DISPLAY_NAME,CONTENT,AUTHOR_TYPE,AUTHOR_ADMIN_ID,AUTHOR_STAFF_ID,IS_VISIBLE,CREATED_AT,UPDATED_AT,CREATED_BY,UPDATED_BY,CUSTOMER_UID,IMAGE_ID,{(reply ? "COMMENT_ID" : "IS_PINNED,SORT_ORDER")})
+            VALUES (@Id,@Name,@Content,@AuthorType,@ActorId,@StaffId,TRUE,NOW(6),NOW(6),@ActorId,@ActorId,@CustomerUid,@ImageId,{(reply ? "@ThreadId" : "FALSE,0")});
+            """, new { Id = id, Name = name, Content = content, AuthorType = authorType, ActorId = actorId, StaffId = staffId, ThreadId = threadId, CustomerUid = customerUid, ImageId = imageId }, tx, cancellationToken: ct));
         var row = await Get(c, tx, id, reply, true, false, ct);
         if (actorId is not null) await Audit(c, tx, threadId ?? id, id, actorId, "create", null, row, ct);
         await tx.CommitAsync(ct);
         return row;
+    }
+
+    public async Task<byte[]> GetImage(string id, bool admin, CancellationToken ct)
+    {
+        await using var c = await db.CreateOpenConnectionAsync(ct);
+        var bytes = await c.ExecuteScalarAsync<byte[]>(new CommandDefinition("""
+            SELECT I.IMAGE_BYTES FROM GUESTBOOK_IMAGES I WHERE I.ID=@Id AND (
+              EXISTS (SELECT 1 FROM GUESTBOOK_COMMENTS C WHERE C.IMAGE_ID=I.ID AND (@Admin OR C.IS_VISIBLE=TRUE))
+              OR EXISTS (SELECT 1 FROM GUESTBOOK_REPLIES R JOIN GUESTBOOK_COMMENTS C ON C.ID=R.COMMENT_ID
+                         WHERE R.IMAGE_ID=I.ID AND (@Admin OR (R.IS_VISIBLE=TRUE AND C.IS_VISIBLE=TRUE)))
+            );
+            """, new { Id = id, Admin = admin }, cancellationToken: ct));
+        return bytes ?? throw new NotFoundException("找不到留言圖片。", "GUESTBOOK_IMAGE_NOT_FOUND");
     }
 
     public async Task<GuestbookMessage> Change(string threadId, string? replyId, string actor, GuestbookEdit? edit, GuestbookModerate? moderation, CancellationToken ct)

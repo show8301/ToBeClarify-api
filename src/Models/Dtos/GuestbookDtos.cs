@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 
 namespace ToBeClarify.Api.Models.Dtos;
 
@@ -17,6 +18,11 @@ public sealed class GuestbookMessage
     public int Version { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? EditedAt { get; set; }
+    // CustomerUid is populated for admin responses only. Public responses must
+    // map through a DTO that omits this field.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CustomerUid { get; set; }
+    public string? ImageId { get; set; }
 }
 public sealed record GuestbookList(int Page, int PageSize, int TotalCount,
     IReadOnlyList<GuestbookMessage> Items, IReadOnlyList<GuestbookMessage> PinnedItems, string? NextCursor = null);
@@ -28,6 +34,8 @@ public sealed class GuestbookWrite
     [Required, StringLength(2000, MinimumLength = 1)] public string Content { get; init; } = "";
     [StringLength(24)] public string AuthorType { get; init; } = "staff";
     [StringLength(200)] public string Website { get; init; } = "";
+    [StringLength(40)] public string? CustomerUid { get; init; }
+    [StringLength(2796204)] public string? ImageBase64 { get; init; }
 }
 public sealed class GuestbookEdit
 {

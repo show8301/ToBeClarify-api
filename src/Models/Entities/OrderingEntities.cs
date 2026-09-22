@@ -71,6 +71,8 @@ public class OrderSessionRow
     public string AccessTokenHash { get; set; } = string.Empty;
     public string? ShortCodeHash { get; set; }
     public string RecoveryCodeHash { get; set; } = string.Empty;
+    public DateTime? RecoveryCodeIssuedAt { get; set; }
+    public int RecoveryCodeVersion { get; set; } = 1;
     public int MaxNominatedStaff { get; set; }
     public int PrepaidMealCredit { get; set; }
     public int RemainingMealCredit { get; set; }

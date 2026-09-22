@@ -88,6 +88,9 @@ builder.Services.AddSingleton<IOneTimeTokenService, OneTimeTokenService>();
 builder.Services.AddSingleton<IOrderingTokenService, OrderingTokenService>();
 builder.Services.AddScoped<IOrderingRepository, OrderingRepository>();
 builder.Services.AddScoped<IOrderingService, OrderingService>();
+builder.Services.AddScoped<ToBeClarify.Api.Repositories.Customers.CustomerDeliveryRepository>();
+builder.Services.AddScoped<ToBeClarify.Api.Services.Customers.CustomerIdentityService>();
+builder.Services.AddScoped<ToBeClarify.Api.Services.Customers.ArtDeliveryService>();
 builder.Services.AddScoped<IBusinessDayContext, BusinessDayContextService>();
 builder.Services.AddScoped<BusinessDayPlanService>();
 builder.Services.AddScoped<OrderingFinanceRepository>();
@@ -134,6 +137,12 @@ builder.Services.AddScoped<MediaFileService>();
 builder.Services.AddSingleton<JwtTokenService>();
 builder.Services.AddRateLimiter(options =>
 {
+    options.AddPolicy("customer-access", httpContext => RateLimitPartition.GetFixedWindowLimiter(
+        httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 30, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true }));
+    options.AddPolicy("customer-media", httpContext => RateLimitPartition.GetFixedWindowLimiter(
+        httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 120, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true }));
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
     options.OnRejected = async (context, cancellationToken) =>
     {

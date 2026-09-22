@@ -12,6 +12,7 @@ using ToBeClarify.Api.Services.Client.Menu;
 using ToBeClarify.Api.Services.Client.Rooms;
 using ToBeClarify.Api.Services.Client.Shared;
 using ToBeClarify.Api.Services.Client.Staff;
+using ToBeClarify.Api.Services.Customers;
 
 namespace ToBeClarify.Api.Services.Ordering;
 
@@ -30,9 +31,10 @@ public sealed partial class OrderingService : IOrderingService
     private readonly IBusinessDayContext _businessDay;
     private readonly BusinessDayPlanService _plans;
     private readonly OrderingFinanceRepository _finance;
+    private readonly CustomerIdentityService _customerIdentity;
 
     public OrderingService(IOrderingRepository repository, IOrderingTokenService tokens,
-        IMenuService menuService, IRoomService roomService, IStaffService staffService, IAppClock clock, MenuQuoteService quotes, IConfiguration configuration, IBusinessDayContext businessDay, BusinessDayPlanService plans, OrderingFinanceRepository finance)
+        IMenuService menuService, IRoomService roomService, IStaffService staffService, IAppClock clock, MenuQuoteService quotes, IConfiguration configuration, IBusinessDayContext businessDay, BusinessDayPlanService plans, OrderingFinanceRepository finance, CustomerIdentityService customerIdentity)
     {
         _repository = repository;
         _tokens = tokens;
@@ -45,12 +47,17 @@ public sealed partial class OrderingService : IOrderingService
         _businessDay = businessDay;
         _plans = plans;
         _finance = finance;
+        _customerIdentity = customerIdentity;
     }
 
     public async Task<OrderSessionIssuedDto> CreateSessionAsync(CreateOrderSessionRequest request,
         ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
         var gameId = Required(request.GameId, "GAME_ID_REQUIRED");
+        if (!string.IsNullOrWhiteSpace(request.CustomerUid) && !CustomerIdentityService.IsManager(actor))
+            throw new ForbiddenException("連結既有 UID 需要管理員核對顧客。", "CUSTOMER_LINK_FORBIDDEN");
+        if (!string.IsNullOrWhiteSpace(request.CustomerUid))
+            _ = await _customerIdentity.ResolveUid(request.CustomerUid, cancellationToken);
         var settings = await _repository.GetSettingsAsync(cancellationToken);
         var context = await ResolveBusinessContextAsync(settings, _clock.LocalDateTime, cancellationToken);
         var day = context.CurrentBusinessDate
@@ -73,6 +80,8 @@ public sealed partial class OrderingService : IOrderingService
             AccessTokenHash = _tokens.Hash(token),
             ShortCodeHash = _tokens.Hash(shortCode),
             RecoveryCodeHash = _tokens.Hash(recoveryCode),
+            RecoveryCodeIssuedAt = now,
+            RecoveryCodeVersion = 1,
             MaxNominatedStaff = request.MaxNominatedStaff ?? 1,
             PrepaidMealCredit = settings.MinimumMealCredit,
             RemainingMealCredit = settings.MinimumMealCredit,
@@ -80,6 +89,10 @@ public sealed partial class OrderingService : IOrderingService
             CreatedAt = now
         };
         await _repository.CreateSessionAsync(row, ActorId(actor), cancellationToken);
+        if (!string.IsNullOrWhiteSpace(request.CustomerUid))
+            await _customerIdentity.LinkFromAdmin(id, new LinkCustomerProfileRequest { CustomerUid = request.CustomerUid }, actor, cancellationToken);
+        else
+            await _customerIdentity.LinkFromOrdering(id, gameId, ActorId(actor), cancellationToken);
         return Issued(row, token, shortCode, recoveryCode);
     }
 

@@ -5,10 +5,11 @@ using System.Text;
 using ToBeClarify.Api.Exceptions;
 using ToBeClarify.Api.Models.Dtos;
 using ToBeClarify.Api.Repositories.Shared;
+using ToBeClarify.Api.Services.Customers;
 
 namespace ToBeClarify.Api.Services.Client.Guestbook;
 
-public sealed class GuestbookBoardService(GuestbookStore store, IConfiguration config, IHttpContextAccessor context)
+public sealed class GuestbookBoardService(GuestbookStore store, IConfiguration config, IHttpContextAccessor context, CustomerIdentityService identities)
 {
     public static void Page(int page, int size)
     {
@@ -21,25 +22,54 @@ public sealed class GuestbookBoardService(GuestbookStore store, IConfiguration c
             throw new BusinessException($"請輸入 1–{max} 字的有效文字。", "INVALID_TEXT");
         return text;
     }
-    public Task<GuestbookList> List(int page, int size, CancellationToken ct, string? cursor = null)
+    public async Task<GuestbookList> List(int page, int size, CancellationToken ct, string? cursor = null)
     {
         Page(page, size);
-        return store.List(page, size, false, "all", ct, cursor);
+        return Public(await store.List(page, size, false, "all", ct, cursor));
     }
-    public Task<GuestbookReplies> Replies(string id, int page, int size, CancellationToken ct, string? cursor = null)
+    public async Task<GuestbookReplies> Replies(string id, int page, int size, CancellationToken ct, string? cursor = null)
     {
         Page(page, size);
-        return store.Replies(id, page, size, false, ct, cursor);
+        return Public(await store.Replies(id, page, size, false, ct, cursor));
     }
-    public Task<GuestbookMessage> Get(string id, CancellationToken ct) => store.Get(id, false, false, ct);
-    public Task<GuestbookMessage> Create(string? thread, GuestbookWrite write, CancellationToken ct)
+    public async Task<GuestbookMessage> Get(string id, CancellationToken ct)
+        => Public(await store.Get(id, false, false, ct));
+    public async Task<GuestbookMessage> Create(string? thread, GuestbookWrite write, CancellationToken ct)
     {
-        var name = Text(write.DisplayName, 60);
+        var name = Text(string.IsNullOrWhiteSpace(write.DisplayName) ? "匿名旅人" : write.DisplayName, 60);
         var content = Text(write.Content, 2000);
         var key = VisitorKey();
         // Return a plausible receipt without storing honeypot submissions.
-        if (!string.IsNullOrEmpty(write.Website)) return Task.FromResult(new GuestbookMessage { Id = Guid.NewGuid().ToString(), DisplayName = name, Content = content, ThreadId = thread ?? "", IsVisible = true, AllowReplies = true, CreatedAt = DateTime.UtcNow.AddHours(8) });
-        return store.Create(thread, name, content, "customer", null, null, key, ct);
+        if (!string.IsNullOrEmpty(write.Website)) return new GuestbookMessage { Id = Guid.NewGuid().ToString(), DisplayName = name, Content = content, ThreadId = thread ?? "", IsVisible = true, AllowReplies = true, CreatedAt = DateTime.UtcNow.AddHours(8) };
+        CustomerProfileDto? profile = null;
+        if (!string.IsNullOrWhiteSpace(write.CustomerUid))
+            profile = await identities.ResolveUid(write.CustomerUid, ct);
+        byte[]? image = null;
+        if (write.ImageBase64 is not null)
+        {
+            if (profile is null) throw new ForbiddenException("圖片留言需要顧客 UID。", "CUSTOMER_UID_REQUIRED");
+            image = await GuestbookImage.Decode(write.ImageBase64, ct);
+        }
+        return Public(await store.Create(thread, name, content, "customer", null, null, key, ct, profile?.Uid, image));
+    }
+
+    private static GuestbookList Public(GuestbookList value)
+    {
+        foreach (var item in value.Items) item.CustomerUid = null;
+        foreach (var item in value.PinnedItems) item.CustomerUid = null;
+        return value;
+    }
+
+    private static GuestbookReplies Public(GuestbookReplies value)
+    {
+        foreach (var item in value.Items) item.CustomerUid = null;
+        return value;
+    }
+
+    private static GuestbookMessage Public(GuestbookMessage value)
+    {
+        value.CustomerUid = null;
+        return value;
     }
     private string VisitorKey()
     {

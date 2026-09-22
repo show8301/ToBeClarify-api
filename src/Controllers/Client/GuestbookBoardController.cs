@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using ToBeClarify.Api.Models.Common;
 using ToBeClarify.Api.Models.Dtos;
 using ToBeClarify.Api.Services.Client.Guestbook;
@@ -17,10 +18,10 @@ public sealed class GuestbookBoardController(GuestbookBoardService service) : Co
     [HttpGet("{id}/replies")]
     public async Task<IActionResult> Replies(string id, [FromQuery] int page = 1, [FromQuery] int pageSize = 20, [FromQuery] string? cursor = null, CancellationToken ct = default)
         => Ok(ApiResponse<GuestbookReplies>.Ok(await service.Replies(id, page, pageSize, ct, cursor)));
-    [HttpPost, RequestSizeLimit(16384)]
+    [HttpPost, RequestSizeLimit(3145728), EnableRateLimiting("customer-access")]
     public async Task<IActionResult> Create(GuestbookWrite write, CancellationToken ct)
         => StatusCode(201, ApiResponse<GuestbookMessage>.Ok(await service.Create(null, write, ct)));
-    [HttpPost("{id}/replies"), RequestSizeLimit(16384)]
+    [HttpPost("{id}/replies"), RequestSizeLimit(3145728), EnableRateLimiting("customer-access")]
     public async Task<IActionResult> Reply(string id, GuestbookWrite write, CancellationToken ct)
         => StatusCode(201, ApiResponse<GuestbookMessage>.Ok(await service.Create(id, write, ct)));
 }

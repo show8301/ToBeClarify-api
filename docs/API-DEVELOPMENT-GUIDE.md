@@ -1,5 +1,7 @@
 # ToBeClarify API 開發說明
 
+> 2026-09-21 新增：[顧客 UID、歷史顧客與委託交付](CUSTOMER-ART-DELIVERY.md)。該文件列出新端點、權限、五張增量資料表、私有作品 BLOB 儲存、領取授權與部署前提；不改動當日結帳或付款流程。
+
 > 文件日期：2026-08-25<br>
 > 程式碼基準：`main` / `982c957`<br>
 > 正式 API：<https://api.marchgroup.net><br>
