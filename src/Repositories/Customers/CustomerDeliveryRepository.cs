@@ -107,7 +107,7 @@ public sealed partial class CustomerDeliveryRepository(AppDbContext db)
 
     private const string VisitColumns = """
         S.ID AS SessionId,V.CUSTOMER_UID AS CustomerUid,S.GAME_ID AS GameId,S.CUSTOMER_NAME AS CustomerName,
-        S.BUSINESS_DATE AS BusinessDate,S.BUSINESS_PERIOD_ID AS BusinessPeriodId,S.SESSION_STATUS AS SessionStatus,
+        S.BUSINESS_DATE AS BusinessDate,CAST(S.BUSINESS_PERIOD_ID AS CHAR(36)) AS BusinessPeriodId,S.SESSION_STATUS AS SessionStatus,
         S.ENTRY_STATUS AS EntryStatus,S.CREATED_AT AS CreatedAt,
         COALESCE(S.RECOVERY_CODE_ISSUED_AT,S.UPDATED_AT,S.CREATED_AT) AS RecoveryCodeIssuedAt,
         COALESCE(S.RECOVERY_CODE_VERSION,1) AS RecoveryCodeVersion,
