@@ -32,7 +32,8 @@ public sealed class AdminGuestbookService(GuestbookStore store)
             "anonymous_staff" => "匿名店員",
             _ => throw new BusinessException("請選擇有效的發言身分。")
         };
-        return await store.Create(thread, GuestbookBoardService.Text(name, 60), GuestbookBoardService.Text(write.Content, 2000), write.AuthorType, id, write.AuthorType == "staff" ? staffId : null, null, ct);
+        var image = write.ImageBase64 is null ? null : await GuestbookImage.Decode(write.ImageBase64, ct);
+        return await store.Create(thread, GuestbookBoardService.Text(name, 60), GuestbookBoardService.Text(write.Content, 2000), write.AuthorType, id, write.AuthorType == "staff" ? staffId : null, null, ct, imageBytes: image);
     }
     public Task<GuestbookMessage> Edit(string thread, string? reply, GuestbookEdit edit, ClaimsPrincipal actor, CancellationToken ct)
         => store.Change(thread, reply, Actor(actor), new GuestbookEdit { DisplayName = GuestbookBoardService.Text(edit.DisplayName, 60), Content = GuestbookBoardService.Text(edit.Content, 2000), Version = edit.Version }, null, ct);

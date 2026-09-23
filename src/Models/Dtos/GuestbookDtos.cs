@@ -23,6 +23,8 @@ public sealed class GuestbookMessage
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? CustomerUid { get; set; }
     public string? ImageId { get; set; }
+    public int LikeCount { get; set; }
+    public bool ViewerLiked { get; set; }
 }
 public sealed record GuestbookList(int Page, int PageSize, int TotalCount,
     IReadOnlyList<GuestbookMessage> Items, IReadOnlyList<GuestbookMessage> PinnedItems, string? NextCursor = null);
@@ -46,3 +48,5 @@ public sealed class GuestbookEdit
 public sealed record GuestbookModerate(int Version, bool? IsVisible, bool? AllowReplies, bool? IsPinned);
 public sealed record GuestbookPin(string Id, int Version);
 public sealed record GuestbookPinOrder(IReadOnlyList<GuestbookPin> Items);
+public sealed record GuestbookLikeRequest(bool Liked);
+public sealed record GuestbookLikeResult(int LikeCount, bool Liked);

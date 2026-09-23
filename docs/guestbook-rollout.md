@@ -2,7 +2,7 @@
 
 ## 狀態與部署閘門
 
-程式在 Web／API 的 feature/guestbook，尚未執行 migration 或部署。
+本次留言板改版在 Web／API 的 feature/guestbook，尚未執行 migration 或部署。本機 API build、Web TypeScript 檢查及留言板相關 lint 已通過；尚未連線真實 DB 或做整合驗收。
 建置通過不等於資料庫整合驗證完成；先使用獨立、可丟棄的 MySQL／MariaDB 資料庫驗證。
 禁止以正式留言測試隱藏、編輯、限流或並行寫入。
 
@@ -19,7 +19,7 @@
 設定須注入實際執行 Web／API 的程序，不只是 runner 建置環境；變更後重新啟動對應程序。
 密鑰不得提交 Git、放入前端 bundle、貼到 log 或聊天。
 
-Web 只接受指定來源的 JSON POST，讀取可信 IP，簽署 IP 與時間後交給 API。
+Web 只接受指定來源的 JSON mutation，讀取可信 IP，簽署 IP 與時間後交給 API。新版本另簽署隨機瀏覽器識別碼，供點讚狀態去重；API 仍接受不含該識別碼的舊 IP／時間簽章，以支援尚未更新的 Web。
 API 要求簽章在 60 秒內，伺服器時鐘必須同步。直接呼叫舊／新 public POST 都不能繞過簽章。
 缺少密鑰／可信 IP 時公開寫入拒絕服務，不會退回不受限的寫入。
 
@@ -34,13 +34,14 @@ API 要求簽章在 60 秒內，伺服器時鐘必須同步。直接呼叫舊／
 
 ## 首次發布順序
 
-1. 在獨立 DB 還原原始 schema／去識別測試資料，備份並執行 API 的 db/migrations/20260911_01_guestbook.sql。
-2. 完成下方驗收，確認伺服器 IP 信任鏈、密鑰、外部 origin 和資料庫時區（沿用現有台灣時間）設定。
-3. 安排維護窗口。舊 Web 不簽署提交，新 API 上線後舊 Web 將無法寫入；不支援無縫 API-first 混版。
-4. 備份正式資料庫及 Web／API 發布檔案，停止或阻擋留言寫入，再於批准後執行 migration。
-5. 依既有分支規範發布：Web 先 dev 驗收，使用者確認才 dev → main；API dev 只有建置，main 才正式部署。API 無 dev host，不能讓未驗證 Web dev 修改正式留言來代替測試。
-6. 部署配對版本與私有環境設定；確認匿名閱讀、登入管理、IIS 運行狀態後再開放。
-7. 不快取 /api/guestbook、/api/client/guestbook、/api/admin/guestbook 回應；確認 CDN 沒有覆蓋 no-store。若以前有快取留言頁／API，清除相關快取。
+1. 在獨立 DB 還原原始 schema／去識別測試資料，備份並確認既有留言板 migration 已套用。
+2. 依序套用 `20260921_01_customer_commissions.sql`、`20260921_02_guestbook_identity_media.sql`、`20260922_01_customer_identity_uid_only.sql`、`20260923_01_guestbook_likes.sql`；先核對每支 migration 的前置條件與執行結果。
+3. 完成下方驗收，確認伺服器 IP 信任鏈、密鑰、外部 origin 和資料庫時區（沿用現有台灣時間）設定。
+4. 安排維護窗口。舊 Web 使用的 IP／時間簽章仍受新版 API 接受；新版點讚功能需配對新 Web，附圖及資料模型需確認 migration 完成。
+5. 備份正式資料庫及 Web／API 發布檔案，停止或阻擋留言寫入，再依批准的遷移計畫執行 migration。
+6. 依既有分支規範發布：API main 是正式部署；Web 先 dev 驗收，使用者確認才 dev → main。API dev 只有建置，無測試主機。
+7. 部署配對版本與私有環境設定；確認匿名閱讀、登入管理、IIS 運行狀態後再開放。
+8. 不快取 /api/guestbook、/api/client/guestbook、/api/admin/guestbook 回應；確認 CDN 沒有覆蓋 no-store。若以前有快取留言頁／API，清除相關快取。
 
 migration 含 ALTER TABLE，不能假設整份 SQL 可交易回滾，也不能重複執行。
 失敗時先核對已成功的欄位／表，再由維運處理剩餘步驟，不要直接重跑。
@@ -49,7 +50,7 @@ migration 含 ALTER TABLE，不能假設整份 SQL 可交易回滾，也不能�
 
 ## 獨立 DB 驗收清單（尚未執行）
 
-- Migration 能保留舊留言／回覆，新增三張表均為 InnoDB／utf8mb4；繁體字、emoji、換行正常。
+- Migration 能保留舊留言／回覆，新增資料表為 InnoDB／utf8mb4；繁體字、emoji、換行正常。
 - 訪客只填名字／內容即可立即公開；純文字顯示，不把 HTML 當標籤執行。
 - 新留言與回覆共用 180 秒限制；同 IP 同時兩次送出只能成功一次，另一筆不得寫入；429 帶 Retry-After。
 - Honeypot 非空不寫 DB；無簽章／錯誤簽章／逾時簽章不可提交；舊 comments POST 同樣受限制。
@@ -59,6 +60,10 @@ migration 含 ALTER TABLE，不能假設整份 SQL 可交易回滾，也不能�
 - 隱藏整串後，公開列表與直接回覆查詢都不可讀；恢復整串不會恢復單獨隱藏的回覆。
 - 關閉／重新開啟回覆、置頂排序與版本衝突正常；公開載入更多採 nextCursor，一般留言不重複顯示置頂。
 - 吉祥物更名只影響新留言；匿名店員公開 DTO 不包含真正帳號／staff ID，後台仍可稽核。
+- UID 純文字與匿名文字皆可送出；附圖留言必須 UID 有效，找回碼不能代替 UID；後台店員附圖不要求顧客 UID。
+- 前端壓縮後圖片上限、API 格式／畫素／重編碼、管理端預覽、公開端隱藏限制及圖片直連行為正常。
+- 同一瀏覽器可喜歡／取消喜歡；重複送相同狀態不增加點讚數。列表、回覆及分享頁呈現正確的點讚狀態。
+- 留言串分享預覽使用留言摘要與固定 `/og.png`；單則回覆分享可展開並定位，隱藏串／回覆不會由公開 API 取回。
 - 桌面／手機、現有明暗色系、編輯 dialog、錯誤提示與無資料狀態人工檢查。
 
 ## 資料保留

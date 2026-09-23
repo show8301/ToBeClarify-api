@@ -38,7 +38,11 @@
 
 ## 留言 API
 
-匿名文字留言仍可建立；UID 文字留言可建立；附圖必須提供有效 `CustomerUid`。舊版顧客私密憑證與找回碼都不再接受。圖片限制、重編碼、限流與管理員隱藏流程沿用既有規則。公開留言／回覆／單筆查詢會清除 `customerUid`，只有後台稽核資料保留關聯。
+匿名文字留言仍可建立；UID 文字留言可建立；訪客附圖必須提供有效 `CustomerUid`。店員由登入後台發言時可直接附圖，不需要顧客 UID。舊版顧客私密憑證與找回碼都不接受作為留言圖片驗證。
+
+Web 在瀏覽器端將單張 JPEG／PNG／WebP 壓縮成 WebP 後送出；API 仍重新檢查格式、大小與畫素，重編碼並移除 metadata。公開留言／回覆／單筆查詢不回傳 `customerUid`；管理端可查看 UID 關聯、圖片及既有稽核資料。隱藏留言或整串時，圖片讀取端點也會拒絕公開存取。
+
+點讚以匿名瀏覽器識別碼去重，原始識別碼由 Web/API 簽章後以 HMAC 形式保存；它只限制同一瀏覽器識別碼重複點讚，不代表登入身分或跨裝置的一人一票。回覆分享連結由 Web 提供單筆回覆查詢，並先檢查所屬留言串及回覆是否公開。
 
 ## 找回碼狀態
 
@@ -46,8 +50,8 @@
 
 ## 資料庫與發布
 
-依序套用既有 `20260921_01_customer_commissions.sql`、`20260921_02_guestbook_identity_media.sql`，再套用 `20260922_01_customer_identity_uid_only.sql`。最後一支會將舊 `CREDENTIAL_HASH` 改為 nullable 並加入找回碼狀態欄位；本次實作未替任何環境自動套用 migration。
+依序套用原留言板 migration、`20260921_01_customer_commissions.sql`、`20260921_02_guestbook_identity_media.sql`、`20260922_01_customer_identity_uid_only.sql`、`20260923_01_guestbook_likes.sql`。最後一支 likes migration 建立匿名點讚資料表。migration、真實資料庫套用及部署皆須另行安排；本次開發沒有連線或修改任何環境資料庫。
 
 作品附件仍獨立保存，未發布前顧客只能看到進度；`ready`／`delivered` 才能讀取附件。委託不改變原訂單、付款、離場或結算狀態。
 
-本機驗證執行 Release build 與 Web TypeScript 檢查；尚未連線真實 DB、套用 migration、部署或執行自動化測試套件。
+本機驗證執行 API build、Web TypeScript 檢查及留言板相關 lint；尚未連線真實 DB、套用 migration、部署或執行自動化測試套件。

@@ -18,27 +18,41 @@ public sealed class GuestbookStore(AppDbContext db)
     private const string ThreadColumns = Columns + ", ID AS ThreadId, IS_PINNED AS IsPinned, SORT_ORDER AS SortOrder, ALLOW_REPLIES AS AllowReplies";
     private const string ReplyColumns = Columns + ", COMMENT_ID AS ThreadId";
 
-    public async Task<GuestbookList> List(int page, int size, bool admin, string filter, CancellationToken ct, string? cursor = null)
+    public async Task<GuestbookList> List(int page, int size, bool admin, string filter, CancellationToken ct, string? cursor = null, string? viewerKey = null)
     {
         await using var c = await db.CreateOpenConnectionAsync(ct);
         var where = admin ? filter switch { "hidden" => "IS_VISIBLE=FALSE", "locked" => "ALLOW_REPLIES=FALSE", _ => "TRUE" } : "IS_VISIBLE=TRUE";
         var visibleReplies = admin ? "" : " AND R.IS_VISIBLE=TRUE";
-        var select = $"SELECT {ThreadColumns}, (SELECT COUNT(*) FROM GUESTBOOK_REPLIES R WHERE R.COMMENT_ID=GUESTBOOK_COMMENTS.ID{visibleReplies}) AS ReplyCount FROM GUESTBOOK_COMMENTS";
-        var pins = (await c.QueryAsync<GuestbookMessage>(new CommandDefinition($"{select} WHERE {where} AND IS_PINNED=TRUE ORDER BY SORT_ORDER, CREATED_AT DESC, ID DESC;", cancellationToken: ct))).AsList();
+        var select = $"SELECT {ThreadColumns}, (SELECT COUNT(*) FROM GUESTBOOK_REPLIES R WHERE R.COMMENT_ID=GUESTBOOK_COMMENTS.ID{visibleReplies}) AS ReplyCount, (SELECT COUNT(*) FROM GUESTBOOK_LIKES L WHERE L.MESSAGE_ID=GUESTBOOK_COMMENTS.ID) AS LikeCount, EXISTS(SELECT 1 FROM GUESTBOOK_LIKES L WHERE L.MESSAGE_ID=GUESTBOOK_COMMENTS.ID AND L.VISITOR_KEY=@ViewerKey) AS ViewerLiked FROM GUESTBOOK_COMMENTS";
+        var pins = (await c.QueryAsync<GuestbookMessage>(new CommandDefinition($"{select} WHERE {where} AND IS_PINNED=TRUE ORDER BY SORT_ORDER, CREATED_AT DESC, ID DESC;", new { ViewerKey = viewerKey }, cancellationToken: ct))).AsList();
         var count = await c.ExecuteScalarAsync<int>(new CommandDefinition($"SELECT COUNT(*) FROM GUESTBOOK_COMMENTS WHERE {where} AND IS_PINNED=FALSE;", cancellationToken: ct));
         if (cursor is not null && (cursor.Length == 0 || cursor.Length > 40)) throw new BusinessException("分頁游標不正確。", "INVALID_CURSOR");
         var anchor = cursor is null ? null : await Get(c, null, cursor, false, true, false, ct);
         var seek = anchor is null ? "" : " AND (CREATED_AT<@CreatedAt OR (CREATED_AT=@CreatedAt AND ID<@Id))";
-        var rows = (await c.QueryAsync<GuestbookMessage>(new CommandDefinition($"{select} WHERE {where} AND IS_PINNED=FALSE{seek} ORDER BY CREATED_AT DESC, ID DESC LIMIT @Size OFFSET @Offset;", new { Size = size + 1, Offset = cursor is null ? (page - 1) * size : 0, CreatedAt = anchor?.CreatedAt, Id = anchor?.Id }, cancellationToken: ct))).AsList();
+        var rows = (await c.QueryAsync<GuestbookMessage>(new CommandDefinition($"{select} WHERE {where} AND IS_PINNED=FALSE{seek} ORDER BY CREATED_AT DESC, ID DESC LIMIT @Size OFFSET @Offset;", new { Size = size + 1, Offset = cursor is null ? (page - 1) * size : 0, CreatedAt = anchor?.CreatedAt, Id = anchor?.Id, ViewerKey = viewerKey }, cancellationToken: ct))).AsList();
         var more = rows.Count > size;
         if (more) rows.RemoveAt(size);
         return new(page, size, count, rows, pins, more ? rows[^1].Id : null);
     }
 
-    public async Task<GuestbookMessage> Get(string id, bool reply, bool admin, CancellationToken ct)
+    public async Task<GuestbookMessage> Get(string id, bool reply, bool admin, CancellationToken ct, string? viewerKey = null)
     {
         await using var c = await db.CreateOpenConnectionAsync(ct);
+        if (!admin)
+        {
+            var table = reply ? "GUESTBOOK_REPLIES" : "GUESTBOOK_COMMENTS";
+            var columns = reply ? ReplyColumns : ThreadColumns;
+            var row = await c.QuerySingleOrDefaultAsync<GuestbookMessage>(new CommandDefinition($"SELECT {columns}, (SELECT COUNT(*) FROM GUESTBOOK_LIKES L WHERE L.MESSAGE_ID={table}.ID) AS LikeCount, EXISTS(SELECT 1 FROM GUESTBOOK_LIKES L WHERE L.MESSAGE_ID={table}.ID AND L.VISITOR_KEY=@ViewerKey) AS ViewerLiked FROM {table} WHERE ID=@Id AND IS_VISIBLE=TRUE;", new { Id = id, ViewerKey = viewerKey }, cancellationToken: ct));
+            return row ?? throw new NotFoundException("找不到留言。", "GUESTBOOK_NOT_FOUND");
+        }
         return await Get(c, null, id, reply, admin, false, ct);
+    }
+
+    public async Task<GuestbookMessage> GetReply(string threadId, string replyId, string? viewerKey, CancellationToken ct)
+    {
+        await using var c = await db.CreateOpenConnectionAsync(ct);
+        var row = await c.QuerySingleOrDefaultAsync<GuestbookMessage>(new CommandDefinition($"SELECT {ReplyColumns}, (SELECT COUNT(*) FROM GUESTBOOK_LIKES L WHERE L.MESSAGE_ID=GUESTBOOK_REPLIES.ID) AS LikeCount, EXISTS(SELECT 1 FROM GUESTBOOK_LIKES L WHERE L.MESSAGE_ID=GUESTBOOK_REPLIES.ID AND L.VISITOR_KEY=@ViewerKey) AS ViewerLiked FROM GUESTBOOK_REPLIES WHERE GUESTBOOK_REPLIES.ID=@ReplyId AND GUESTBOOK_REPLIES.COMMENT_ID=@ThreadId AND GUESTBOOK_REPLIES.IS_VISIBLE=TRUE AND EXISTS(SELECT 1 FROM GUESTBOOK_COMMENTS C WHERE C.ID=GUESTBOOK_REPLIES.COMMENT_ID AND C.IS_VISIBLE=TRUE);", new { ThreadId = threadId, ReplyId = replyId, ViewerKey = viewerKey }, cancellationToken: ct));
+        return row ?? throw new NotFoundException("找不到回覆。", "GUESTBOOK_NOT_FOUND");
     }
 
     private static async Task<GuestbookMessage> Get(MySqlConnection c, MySqlTransaction? tx, string id, bool reply, bool admin, bool locking, CancellationToken ct)
@@ -50,7 +64,7 @@ public sealed class GuestbookStore(AppDbContext db)
         return row ?? throw new NotFoundException("找不到留言。", "GUESTBOOK_NOT_FOUND");
     }
 
-    public async Task<GuestbookReplies> Replies(string id, int page, int size, bool admin, CancellationToken ct, string? cursor = null)
+    public async Task<GuestbookReplies> Replies(string id, int page, int size, bool admin, CancellationToken ct, string? cursor = null, string? viewerKey = null)
     {
         await using var c = await db.CreateOpenConnectionAsync(ct);
         // The public lookup must also verify parent visibility.
@@ -61,10 +75,29 @@ public sealed class GuestbookStore(AppDbContext db)
         var anchor = cursor is null ? null : await Get(c, null, cursor, true, true, false, ct);
         if (anchor is not null && anchor.ThreadId != id) throw new BusinessException("回覆游標不正確。", "INVALID_CURSOR");
         var seek = anchor is null ? "" : " AND (CREATED_AT>@CreatedAt OR (CREATED_AT=@CreatedAt AND ID>@CursorId))";
-        var rows = (await c.QueryAsync<GuestbookMessage>(new CommandDefinition($"SELECT {ReplyColumns} FROM GUESTBOOK_REPLIES WHERE {where}{seek} ORDER BY CREATED_AT, ID LIMIT @Size OFFSET @Offset;", new { Id = id, Size = size + 1, Offset = cursor is null ? (page - 1) * size : 0, CreatedAt = anchor?.CreatedAt, CursorId = anchor?.Id }, cancellationToken: ct))).AsList();
+        var rows = (await c.QueryAsync<GuestbookMessage>(new CommandDefinition($"SELECT {ReplyColumns}, (SELECT COUNT(*) FROM GUESTBOOK_LIKES L WHERE L.MESSAGE_ID=GUESTBOOK_REPLIES.ID) AS LikeCount, EXISTS(SELECT 1 FROM GUESTBOOK_LIKES L WHERE L.MESSAGE_ID=GUESTBOOK_REPLIES.ID AND L.VISITOR_KEY=@ViewerKey) AS ViewerLiked FROM GUESTBOOK_REPLIES WHERE {where}{seek} ORDER BY CREATED_AT, ID LIMIT @Size OFFSET @Offset;", new { Id = id, Size = size + 1, Offset = cursor is null ? (page - 1) * size : 0, CreatedAt = anchor?.CreatedAt, CursorId = anchor?.Id, ViewerKey = viewerKey }, cancellationToken: ct))).AsList();
         var more = rows.Count > size;
         if (more) rows.RemoveAt(size);
         return new(page, size, count, rows, more ? rows[^1].Id : null);
+    }
+
+    public async Task<GuestbookLikeResult> SetLike(string id, string viewerKey, bool liked, CancellationToken ct)
+    {
+        await using var c = await db.CreateOpenConnectionAsync(ct);
+        await using var tx = await c.BeginTransactionAsync(ct);
+        var exists = await c.ExecuteScalarAsync<bool>(new CommandDefinition("""
+            SELECT EXISTS(SELECT 1 FROM GUESTBOOK_COMMENTS WHERE ID=@Id AND IS_VISIBLE=TRUE)
+              OR EXISTS(SELECT 1 FROM GUESTBOOK_REPLIES R JOIN GUESTBOOK_COMMENTS C ON C.ID=R.COMMENT_ID
+                        WHERE R.ID=@Id AND R.IS_VISIBLE=TRUE AND C.IS_VISIBLE=TRUE);
+            """, new { Id = id }, tx, cancellationToken: ct));
+        if (!exists) throw new NotFoundException("找不到留言。", "GUESTBOOK_NOT_FOUND");
+        if (liked)
+            await c.ExecuteAsync(new CommandDefinition("INSERT IGNORE INTO GUESTBOOK_LIKES (MESSAGE_ID,VISITOR_KEY,CREATED_AT) VALUES (@Id,@ViewerKey,UTC_TIMESTAMP(6));", new { Id = id, ViewerKey = viewerKey }, tx, cancellationToken: ct));
+        else
+            await c.ExecuteAsync(new CommandDefinition("DELETE FROM GUESTBOOK_LIKES WHERE MESSAGE_ID=@Id AND VISITOR_KEY=@ViewerKey;", new { Id = id, ViewerKey = viewerKey }, tx, cancellationToken: ct));
+        var count = await c.ExecuteScalarAsync<int>(new CommandDefinition("SELECT COUNT(*) FROM GUESTBOOK_LIKES WHERE MESSAGE_ID=@Id;", new { Id = id }, tx, cancellationToken: ct));
+        await tx.CommitAsync(ct);
+        return new(count, liked);
     }
 
     public async Task<GuestbookSettings> Settings(CancellationToken ct)
@@ -105,7 +138,6 @@ public sealed class GuestbookStore(AppDbContext db)
         var imageId = imageBytes is null ? null : Guid.NewGuid().ToString();
         if (imageBytes is not null)
         {
-            if (customerUid is null) throw new ForbiddenException("圖片留言需要顧客 UID。", "CUSTOMER_UID_REQUIRED");
             await c.ExecuteAsync(new CommandDefinition(
                 "INSERT INTO GUESTBOOK_IMAGES (ID,IMAGE_BYTES) VALUES (@Id,@Bytes);",
                 new { Id = imageId, Bytes = imageBytes }, tx, cancellationToken: ct));
