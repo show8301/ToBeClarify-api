@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System.ComponentModel.DataAnnotations;
 using ToBeClarify.Api.Models.Common;
 using ToBeClarify.Api.Models.Dtos;
 using ToBeClarify.Api.Services.Admin.Guestbook;
@@ -12,8 +13,14 @@ namespace ToBeClarify.Api.Controllers.Admin;
 public sealed class AdminGuestbookController(AdminGuestbookService service) : ControllerBase
 {
     [HttpGet("threads")]
-    public async Task<IActionResult> List([FromQuery] int page = 1, [FromQuery] int pageSize = 20, [FromQuery] string filter = "all", CancellationToken ct = default)
-        => Ok(ApiResponse<GuestbookList>.Ok(await service.List(page, pageSize, filter, ct)));
+    public async Task<IActionResult> List(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        [FromQuery] string filter = "all",
+        [FromQuery] string? search = null,
+        [FromQuery] string hasImage = "all",
+        CancellationToken ct = default)
+        => Ok(ApiResponse<GuestbookList>.Ok(await service.List(page, pageSize, filter, search, hasImage, ct)));
     [HttpGet("threads/{id}/replies")]
     public async Task<IActionResult> Replies(string id, [FromQuery] int page = 1, [FromQuery] int pageSize = 20, [FromQuery] string? cursor = null, CancellationToken ct = default)
         => Ok(ApiResponse<GuestbookReplies>.Ok(await service.Replies(id, page, pageSize, ct, cursor)));
@@ -23,6 +30,9 @@ public sealed class AdminGuestbookController(AdminGuestbookService service) : Co
     public async Task<IActionResult> Reply(string id, GuestbookWrite write, CancellationToken ct) => StatusCode(201, ApiResponse<GuestbookMessage>.Ok(await service.Create(id, write, User, ct)));
     [HttpPut("threads/{id}"), HttpPut("threads/{id}/replies/{replyId}")]
     public async Task<IActionResult> Edit(string id, GuestbookEdit edit, CancellationToken ct, string? replyId = null) => Ok(ApiResponse<GuestbookMessage>.Ok(await service.Edit(id, replyId, edit, User, ct)));
+    [HttpDelete("threads/{id}/image"), HttpDelete("threads/{id}/replies/{replyId}/image")]
+    public async Task<IActionResult> RemoveImage(string id, [FromQuery, Range(1, int.MaxValue)] int version, CancellationToken ct, string? replyId = null)
+        => Ok(ApiResponse<GuestbookMessage>.Ok(await service.RemoveImage(id, replyId, version, User, ct)));
     [HttpPatch("threads/{id}"), HttpPatch("threads/{id}/replies/{replyId}")]
     public async Task<IActionResult> Moderate(string id, GuestbookModerate change, CancellationToken ct, string? replyId = null) => Ok(ApiResponse<GuestbookMessage>.Ok(await service.Moderate(id, replyId, change, User, ct)));
     [HttpPut("pins")]

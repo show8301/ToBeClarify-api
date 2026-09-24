@@ -15,6 +15,8 @@ public sealed class GuestbookMessage
     public int SortOrder { get; set; }
     public bool AllowReplies { get; set; }
     public int ReplyCount { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int HiddenReplyCount { get; set; }
     public int Version { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? EditedAt { get; set; }

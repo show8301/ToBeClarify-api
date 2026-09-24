@@ -10,11 +10,14 @@ namespace ToBeClarify.Api.Services.Admin.Guestbook;
 public sealed class AdminGuestbookService(GuestbookStore store)
 {
     private static string Actor(ClaimsPrincipal actor) => actor.FindFirstValue(AdminAuthConstants.UserIdClaimType) ?? throw new UnauthorizedException("登入已失效。");
-    public Task<GuestbookList> List(int page, int size, string filter, CancellationToken ct)
+    public Task<GuestbookList> List(int page, int size, string filter, string? search, string hasImage, CancellationToken ct)
     {
         GuestbookBoardService.Page(page, size);
-        if (filter is not ("all" or "hidden" or "locked")) throw new BusinessException("篩選條件不正確。");
-        return store.List(page, size, true, filter, ct);
+        if (filter is not ("all" or "hidden" or "locked" or "hidden-replies")) throw new BusinessException("篩選條件不正確。");
+        if (hasImage is not ("all" or "yes" or "no")) throw new BusinessException("圖片篩選條件不正確。");
+        var query = (search ?? "").Trim();
+        if (query.Length > 100) throw new BusinessException("搜尋文字不可超過 100 字。");
+        return store.List(page, size, true, filter, ct, searchTerm: query, hasImage: hasImage);
     }
     public Task<GuestbookReplies> Replies(string id, int page, int size, CancellationToken ct, string? cursor = null)
     {
@@ -37,6 +40,8 @@ public sealed class AdminGuestbookService(GuestbookStore store)
     }
     public Task<GuestbookMessage> Edit(string thread, string? reply, GuestbookEdit edit, ClaimsPrincipal actor, CancellationToken ct)
         => store.Change(thread, reply, Actor(actor), new GuestbookEdit { DisplayName = GuestbookBoardService.Text(edit.DisplayName, 60), Content = GuestbookBoardService.Text(edit.Content, 2000), Version = edit.Version }, null, ct);
+    public Task<GuestbookMessage> RemoveImage(string thread, string? reply, int version, ClaimsPrincipal actor, CancellationToken ct)
+        => store.RemoveImage(thread, reply, version, Actor(actor), ct);
     public Task<GuestbookMessage> Moderate(string thread, string? reply, GuestbookModerate change, ClaimsPrincipal actor, CancellationToken ct)
         => store.Change(thread, reply, Actor(actor), null, change, ct);
     public Task Reorder(GuestbookPinOrder order, ClaimsPrincipal actor, CancellationToken ct)

@@ -18,18 +18,65 @@ public sealed class GuestbookStore(AppDbContext db)
     private const string ThreadColumns = Columns + ", ID AS ThreadId, IS_PINNED AS IsPinned, SORT_ORDER AS SortOrder, ALLOW_REPLIES AS AllowReplies";
     private const string ReplyColumns = Columns + ", COMMENT_ID AS ThreadId";
 
-    public async Task<GuestbookList> List(int page, int size, bool admin, string filter, CancellationToken ct, string? cursor = null, string? viewerKey = null)
+    public async Task<GuestbookList> List(
+        int page,
+        int size,
+        bool admin,
+        string filter,
+        CancellationToken ct,
+        string? cursor = null,
+        string? viewerKey = null,
+        string? searchTerm = null,
+        string hasImage = "all")
     {
         await using var c = await db.CreateOpenConnectionAsync(ct);
-        var where = admin ? filter switch { "hidden" => "IS_VISIBLE=FALSE", "locked" => "ALLOW_REPLIES=FALSE", _ => "TRUE" } : "IS_VISIBLE=TRUE";
+        var where = admin ? filter switch
+        {
+            "hidden" => "IS_VISIBLE=FALSE",
+            "locked" => "ALLOW_REPLIES=FALSE",
+            "hidden-replies" => "EXISTS(SELECT 1 FROM GUESTBOOK_REPLIES HR WHERE HR.COMMENT_ID=GUESTBOOK_COMMENTS.ID AND HR.IS_VISIBLE=FALSE)",
+            _ => "TRUE"
+        } : "IS_VISIBLE=TRUE";
+        if (admin && !string.IsNullOrWhiteSpace(searchTerm))
+        {
+            where += """
+                 AND (
+                    LOCATE(LOWER(@Search), LOWER(DISPLAY_NAME)) > 0
+                    OR LOCATE(LOWER(@Search), LOWER(CONTENT)) > 0
+                    OR LOCATE(LOWER(@Search), LOWER(COALESCE(CUSTOMER_UID, ''))) > 0
+                    OR EXISTS (
+                        SELECT 1 FROM GUESTBOOK_REPLIES SR
+                        WHERE SR.COMMENT_ID=GUESTBOOK_COMMENTS.ID
+                          AND (
+                            LOCATE(LOWER(@Search), LOWER(SR.DISPLAY_NAME)) > 0
+                            OR LOCATE(LOWER(@Search), LOWER(SR.CONTENT)) > 0
+                            OR LOCATE(LOWER(@Search), LOWER(COALESCE(SR.CUSTOMER_UID, ''))) > 0
+                          )
+                    )
+                 )
+                """;
+        }
+        if (admin)
+        {
+            where += hasImage switch
+            {
+                "yes" => " AND (IMAGE_ID IS NOT NULL OR EXISTS(SELECT 1 FROM GUESTBOOK_REPLIES IR WHERE IR.COMMENT_ID=GUESTBOOK_COMMENTS.ID AND IR.IMAGE_ID IS NOT NULL))",
+                "no" => " AND IMAGE_ID IS NULL AND NOT EXISTS(SELECT 1 FROM GUESTBOOK_REPLIES IR WHERE IR.COMMENT_ID=GUESTBOOK_COMMENTS.ID AND IR.IMAGE_ID IS NOT NULL)",
+                _ => ""
+            };
+        }
         var visibleReplies = admin ? "" : " AND R.IS_VISIBLE=TRUE";
-        var select = $"SELECT {ThreadColumns}, (SELECT COUNT(*) FROM GUESTBOOK_REPLIES R WHERE R.COMMENT_ID=GUESTBOOK_COMMENTS.ID{visibleReplies}) AS ReplyCount, (SELECT COUNT(*) FROM GUESTBOOK_LIKES L WHERE L.MESSAGE_ID=GUESTBOOK_COMMENTS.ID) AS LikeCount, EXISTS(SELECT 1 FROM GUESTBOOK_LIKES L WHERE L.MESSAGE_ID=GUESTBOOK_COMMENTS.ID AND L.VISITOR_KEY=@ViewerKey) AS ViewerLiked FROM GUESTBOOK_COMMENTS";
-        var pins = (await c.QueryAsync<GuestbookMessage>(new CommandDefinition($"{select} WHERE {where} AND IS_PINNED=TRUE ORDER BY SORT_ORDER, CREATED_AT DESC, ID DESC;", new { ViewerKey = viewerKey }, cancellationToken: ct))).AsList();
-        var count = await c.ExecuteScalarAsync<int>(new CommandDefinition($"SELECT COUNT(*) FROM GUESTBOOK_COMMENTS WHERE {where} AND IS_PINNED=FALSE;", cancellationToken: ct));
+        var hiddenReplyCount = admin
+            ? ", (SELECT COUNT(*) FROM GUESTBOOK_REPLIES HR WHERE HR.COMMENT_ID=GUESTBOOK_COMMENTS.ID AND HR.IS_VISIBLE=FALSE) AS HiddenReplyCount"
+            : "";
+        var select = $"SELECT {ThreadColumns}, (SELECT COUNT(*) FROM GUESTBOOK_REPLIES R WHERE R.COMMENT_ID=GUESTBOOK_COMMENTS.ID{visibleReplies}) AS ReplyCount, (SELECT COUNT(*) FROM GUESTBOOK_LIKES L WHERE L.MESSAGE_ID=GUESTBOOK_COMMENTS.ID) AS LikeCount, EXISTS(SELECT 1 FROM GUESTBOOK_LIKES L WHERE L.MESSAGE_ID=GUESTBOOK_COMMENTS.ID AND L.VISITOR_KEY=@ViewerKey) AS ViewerLiked{hiddenReplyCount} FROM GUESTBOOK_COMMENTS";
+        var parameters = new { ViewerKey = viewerKey, Search = searchTerm };
+        var pins = (await c.QueryAsync<GuestbookMessage>(new CommandDefinition($"{select} WHERE {where} AND IS_PINNED=TRUE ORDER BY SORT_ORDER, CREATED_AT DESC, ID DESC;", parameters, cancellationToken: ct))).AsList();
+        var count = await c.ExecuteScalarAsync<int>(new CommandDefinition($"SELECT COUNT(*) FROM GUESTBOOK_COMMENTS WHERE {where} AND IS_PINNED=FALSE;", parameters, cancellationToken: ct));
         if (cursor is not null && (cursor.Length == 0 || cursor.Length > 40)) throw new BusinessException("分頁游標不正確。", "INVALID_CURSOR");
         var anchor = cursor is null ? null : await Get(c, null, cursor, false, true, false, ct);
         var seek = anchor is null ? "" : " AND (CREATED_AT<@CreatedAt OR (CREATED_AT=@CreatedAt AND ID<@Id))";
-        var rows = (await c.QueryAsync<GuestbookMessage>(new CommandDefinition($"{select} WHERE {where} AND IS_PINNED=FALSE{seek} ORDER BY CREATED_AT DESC, ID DESC LIMIT @Size OFFSET @Offset;", new { Size = size + 1, Offset = cursor is null ? (page - 1) * size : 0, CreatedAt = anchor?.CreatedAt, Id = anchor?.Id, ViewerKey = viewerKey }, cancellationToken: ct))).AsList();
+        var rows = (await c.QueryAsync<GuestbookMessage>(new CommandDefinition($"{select} WHERE {where} AND IS_PINNED=FALSE{seek} ORDER BY CREATED_AT DESC, ID DESC LIMIT @Size OFFSET @Offset;", new { Size = size + 1, Offset = cursor is null ? (page - 1) * size : 0, CreatedAt = anchor?.CreatedAt, Id = anchor?.Id, ViewerKey = viewerKey, Search = searchTerm }, cancellationToken: ct))).AsList();
         var more = rows.Count > size;
         if (more) rows.RemoveAt(size);
         return new(page, size, count, rows, pins, more ? rows[^1].Id : null);
@@ -188,6 +235,30 @@ public sealed class GuestbookStore(AppDbContext db)
         }
         var after = await Get(c, tx, id, replyId is not null, true, false, ct);
         await Audit(c, tx, threadId, id, actor, edit is null ? "moderate" : "edit", before, after, ct);
+        await tx.CommitAsync(ct);
+        return after;
+    }
+
+    public async Task<GuestbookMessage> RemoveImage(string threadId, string? replyId, int version, string actor, CancellationToken ct)
+    {
+        await using var c = await db.CreateOpenConnectionAsync(ct);
+        await using var tx = await c.BeginTransactionAsync(ct);
+        var parent = await Get(c, tx, threadId, false, true, true, ct);
+        var before = replyId is null ? parent : await Get(c, tx, replyId, true, true, true, ct);
+        if (before.ThreadId != threadId) throw new NotFoundException("找不到回覆。", "GUESTBOOK_NOT_FOUND");
+        if (before.Version != version) throw new ConflictException("留言已被其他店員更新，請重新整理。", "VERSION_CONFLICT");
+        if (before.ImageId is null) throw new ConflictException("此留言已沒有圖片，請重新整理。", "VERSION_CONFLICT");
+
+        var table = replyId is null ? "GUESTBOOK_COMMENTS" : "GUESTBOOK_REPLIES";
+        var id = replyId ?? threadId;
+        await c.ExecuteAsync(new CommandDefinition(
+            $"UPDATE {table} SET IMAGE_ID=NULL,EDITED_AT=NOW(6),UPDATED_AT=NOW(6),UPDATED_BY=@Actor,VERSION=VERSION+1 WHERE ID=@Id;",
+            new { Actor = actor, Id = id },
+            tx,
+            cancellationToken: ct));
+        await c.ExecuteAsync(new CommandDefinition("DELETE FROM GUESTBOOK_IMAGES WHERE ID=@Id;", new { Id = before.ImageId }, tx, cancellationToken: ct));
+        var after = await Get(c, tx, id, replyId is not null, true, false, ct);
+        await Audit(c, tx, threadId, id, actor, "image_remove", new { ImageId = before.ImageId }, new { ImageId = (string?)null }, ct);
         await tx.CommitAsync(ct);
         return after;
     }
