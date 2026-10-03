@@ -23,7 +23,7 @@ public sealed partial class CustomerDeliveryRepository(AppDbContext db)
         string normalizedGameId, CancellationToken ct)
     {
         await using var c = await db.CreateOpenConnectionAsync(ct);
-        return (await c.QueryAsync<CustomerIdentityCandidateDto>(new CommandDefinition("""
+        var rows = (await c.QueryAsync<CustomerIdentityCandidateRow>(new CommandDefinition("""
             SELECT P.UID AS Uid,P.DISPLAY_NAME AS DisplayName,P.CREATED_AT AS CreatedAt,
                    MAX(S.CREATED_AT) AS LastVisitAt,COUNT(DISTINCT V.SESSION_ID) AS VisitCount,
                    COUNT(DISTINCT O.ID) AS OrderCount,
@@ -37,6 +37,36 @@ public sealed partial class CustomerDeliveryRepository(AppDbContext db)
             GROUP BY P.UID,P.DISPLAY_NAME,P.CREATED_AT
             ORDER BY LastVisitAt DESC,P.UID;
             """, new { GameId = normalizedGameId }, cancellationToken: ct))).AsList();
+        return rows.Select(ToIdentityCandidateDto).ToArray();
+    }
+
+    private static CustomerIdentityCandidateDto ToIdentityCandidateDto(CustomerIdentityCandidateRow row)
+    {
+        if (row.VisitCount is < 0 or > int.MaxValue || row.OrderCount is < 0 or > int.MaxValue)
+            throw new InvalidOperationException("顧客候選統計超出 API 支援範圍。");
+        if (row.OrderAmount != decimal.Truncate(row.OrderAmount)
+            || row.OrderAmount < long.MinValue || row.OrderAmount > long.MaxValue)
+            throw new InvalidOperationException("顧客候選金額格式不正確。");
+
+        return new CustomerIdentityCandidateDto(
+            row.Uid,
+            row.DisplayName,
+            row.CreatedAt,
+            row.LastVisitAt,
+            checked((int)row.VisitCount),
+            checked((int)row.OrderCount),
+            checked((long)row.OrderAmount));
+    }
+
+    private sealed class CustomerIdentityCandidateRow
+    {
+        public string Uid { get; set; } = "";
+        public string DisplayName { get; set; } = "";
+        public DateTime CreatedAt { get; set; }
+        public DateTime LastVisitAt { get; set; }
+        public long VisitCount { get; set; }
+        public long OrderCount { get; set; }
+        public decimal OrderAmount { get; set; }
     }
 
     public async Task<CustomerProfileDto> LinkProfile(
