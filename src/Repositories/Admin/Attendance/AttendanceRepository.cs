@@ -74,17 +74,30 @@ public sealed class AttendanceRepository(AppDbContext dbContext)
                    EVENT_TYPE AS EventType, EVENT_AT AS EventAt, EVENT_END_AT AS EventEndAt, SOURCE AS Source,
                    MINUTES_DELTA AS MinutesDelta, BASE_EVENT_ID AS BaseEventId, OPERATION_ID AS OperationId,
                    REASON AS Reason, CREATED_AT AS CreatedAt
-            FROM STAFF_ATTENDANCE_EVENTS WHERE OPERATION_ID=@OperationId;
+            FROM STAFF_ATTENDANCE_EVENTS WHERE OPERATION_ID=@OperationId FOR UPDATE;
             """, new { request.OperationId }, tx, cancellationToken:ct));
         if (prior is not null) return MapEvent(prior);
-        if (await connection.ExecuteScalarAsync<int>(new CommandDefinition(
-            "SELECT COUNT(*) FROM STAFF_MEMBERS WHERE ID=@StaffId AND IS_ACTIVE=TRUE;", new {StaffId=staffId}, tx, cancellationToken:ct)) != 1)
+        var activeStaffId = await connection.QuerySingleOrDefaultAsync<string>(new CommandDefinition(
+            "SELECT ID FROM STAFF_MEMBERS WHERE ID=@StaffId AND IS_ACTIVE=TRUE FOR UPDATE;",
+            new { StaffId = staffId }, tx, cancellationToken:ct));
+        if (activeStaffId is null)
             throw new BusinessException("找不到可出勤的店員。", "ATTENDANCE_STAFF_NOT_FOUND");
+        // Serialize attendance actions per staff member. Recheck the operation
+        // after waiting on the row lock so a retried request can still return
+        // its original event instead of creating a duplicate event.
+        prior = await connection.QuerySingleOrDefaultAsync<EventRow>(new CommandDefinition("""
+            SELECT ID AS Id, STAFF_MEMBER_ID AS StaffId, BUSINESS_DATE AS BusinessDate, DUTY_PLAN_ID AS DutyPlanId,
+                   EVENT_TYPE AS EventType, EVENT_AT AS EventAt, EVENT_END_AT AS EventEndAt, SOURCE AS Source,
+                   MINUTES_DELTA AS MinutesDelta, BASE_EVENT_ID AS BaseEventId, OPERATION_ID AS OperationId,
+                   REASON AS Reason, CREATED_AT AS CreatedAt
+            FROM STAFF_ATTENDANCE_EVENTS WHERE OPERATION_ID=@OperationId FOR UPDATE;
+            """, new { request.OperationId }, tx, cancellationToken:ct));
+        if (prior is not null) return MapEvent(prior);
         var action = request.Action.Trim().ToLowerInvariant();
         var eventAt = (request.OccurredAt ?? nowOffset).ToOffset(TimeSpan.FromHours(8)).DateTime;
         var eventType = action; var source = "manual"; var delta = 0; DateTime? endAt = null; string? baseId = null;
         if (eventAt > now.AddMinutes(5)) throw new BusinessException("不能預先登記尚未發生的出勤。", "ATTENDANCE_TIME_FUTURE");
-        if (action == "clock_out")
+        if (action == "clock_in")
         {
             var open = await connection.QuerySingleOrDefaultAsync<EventRow>(new CommandDefinition("""
                 SELECT E.ID AS Id, E.STAFF_MEMBER_ID AS StaffId, E.BUSINESS_DATE AS BusinessDate, E.DUTY_PLAN_ID AS DutyPlanId,
@@ -96,7 +109,22 @@ public sealed class AttendanceRepository(AppDbContext dbContext)
                   AND NOT EXISTS (SELECT 1 FROM STAFF_ATTENDANCE_EVENTS X WHERE X.BASE_EVENT_ID=E.ID)
                 ORDER BY E.EVENT_AT DESC LIMIT 1 FOR UPDATE;
                 """, new {StaffId=staffId, BusinessDate=businessDate.ToDateTime(TimeOnly.MinValue)}, tx, cancellationToken:ct));
-            if (open is null) throw new BusinessException("沒有可結束的進行中班次，請使用修改時間。", "ATTENDANCE_NO_OPEN_SHIFT");
+            if (open is not null)
+                throw new ConflictException("目前已有進行中的上班紀錄。", "ATTENDANCE_SHIFT_ALREADY_OPEN");
+        }
+        else if (action == "clock_out")
+        {
+            var open = await connection.QuerySingleOrDefaultAsync<EventRow>(new CommandDefinition("""
+                SELECT E.ID AS Id, E.STAFF_MEMBER_ID AS StaffId, E.BUSINESS_DATE AS BusinessDate, E.DUTY_PLAN_ID AS DutyPlanId,
+                       E.EVENT_TYPE AS EventType, E.EVENT_AT AS EventAt, E.EVENT_END_AT AS EventEndAt, E.SOURCE AS Source,
+                       E.MINUTES_DELTA AS MinutesDelta, E.BASE_EVENT_ID AS BaseEventId, E.OPERATION_ID AS OperationId,
+                       E.REASON AS Reason, E.CREATED_AT AS CreatedAt
+                FROM STAFF_ATTENDANCE_EVENTS E
+                WHERE E.STAFF_MEMBER_ID=@StaffId AND E.BUSINESS_DATE=@BusinessDate AND E.EVENT_TYPE='clock_in'
+                  AND NOT EXISTS (SELECT 1 FROM STAFF_ATTENDANCE_EVENTS X WHERE X.BASE_EVENT_ID=E.ID)
+                ORDER BY E.EVENT_AT DESC LIMIT 1 FOR UPDATE;
+                """, new {StaffId=staffId, BusinessDate=businessDate.ToDateTime(TimeOnly.MinValue)}, tx, cancellationToken:ct));
+            if (open is null) throw new ConflictException("目前沒有進行中的上班紀錄，可能已在其他分頁完成下班打卡。", "ATTENDANCE_NO_OPEN_SHIFT");
             if (eventAt < open.EventAt) throw new BusinessException("下班時間不能早於上班時間。", "ATTENDANCE_TIME_RANGE_INVALID");
             baseId = open.Id; delta = Math.Max(0, (int)Math.Floor((eventAt - open.EventAt).TotalMinutes));
         }
