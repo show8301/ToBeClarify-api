@@ -261,7 +261,7 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
                                 AND EXISTS (SELECT 1 FROM `ORDER_FULFILLMENT_UNITS` U
                                             WHERE U.`ORDER_ID`=O.`ID`
                                               AND U.`UNIT_STATUS` NOT IN ('completed','cancelled','carried_forward')
-                                              AND COALESCE(U.`FULFILLMENT_PERIOD_ID`,U.`BUSINESS_PERIOD_ID`)=S2.`BUSINESS_PERIOD_ID`))) AS UnfinishedOrderCount,
+                                              AND COALESCE(U.`FULFILLMENT_PERIOD_ID`,U.`BUSINESS_PERIOD_ID`)=S2.`BUSINESS_PERIOD_ID`)))) AS UnfinishedOrderCount,
                    (SELECT COUNT(*) FROM `ORDER_FULFILLMENT_UNITS` U
                     INNER JOIN `ORDERS` O2 ON O2.`ID`=U.`ORDER_ID`
                     INNER JOIN `CUSTOMER_ORDER_SESSIONS` S3 ON S3.`ID`=O2.`SESSION_ID`
