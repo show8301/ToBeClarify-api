@@ -717,7 +717,7 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
             }
 
             await InsertHistoryAsync(connection, transaction, order.Id, null, order.Status,
-                order.ActorType == "staff" ? "店員代客送出訂單" : "顧客送出訂單",
+                order.ActorType == "manager_transfer" ? "經理建立指名承接請求" : order.ActorType == "staff" ? "店員代客送出訂單" : "顧客送出訂單",
                 order.ActorType, order.ActorId, order.SubmittedAt, cancellationToken);
             await MenuNotifications.EnqueueAsync(connection, transaction, order, cancellationToken);
             await InitializeFulfillmentAsync(connection, transaction, order.Id, order.SessionId, order.SubmittedAt, cancellationToken);
@@ -845,6 +845,7 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
                 SELECT O.`SESSION_ID`, SUM(O.`MEAL_CREDIT_APPLIED`) AS Credit
                 FROM `ORDERS` O
                 WHERE O.`FLOW_VERSION`=1 AND O.`ORDER_STATUS` IN ('submitted', 'partially_confirmed', 'needs_reschedule') AND O.`QUEUE_ENTERED_AT` <= @Cutoff
+                AND NOT EXISTS(SELECT 1 FROM ORDER_NOMINEES N WHERE N.ORDER_ID=O.ID AND N.CONFIRMATION_STATUS='needs_coordination')
                 GROUP BY O.`SESSION_ID`
             ) X ON X.`SESSION_ID` = S.`ID`
             SET S.`REMAINING_MEAL_CREDIT` = S.`REMAINING_MEAL_CREDIT` + X.Credit,
@@ -853,10 +854,12 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
                 (`ID`, `ORDER_ID`, `FROM_STATUS`, `TO_STATUS`, `REASON`, `ACTOR_TYPE`, `CREATED_AT`)
             SELECT UUID(), O.`ID`, O.`ORDER_STATUS`, 'expired', '等待確認逾時，自動失效。', 'system', @Now
             FROM `ORDERS` O
-            WHERE O.`FLOW_VERSION`=1 AND O.`ORDER_STATUS` IN ('submitted', 'partially_confirmed', 'needs_reschedule') AND O.`QUEUE_ENTERED_AT` <= @Cutoff;
+            WHERE O.`FLOW_VERSION`=1 AND O.`ORDER_STATUS` IN ('submitted', 'partially_confirmed', 'needs_reschedule') AND O.`QUEUE_ENTERED_AT` <= @Cutoff
+                AND NOT EXISTS(SELECT 1 FROM ORDER_NOMINEES N WHERE N.ORDER_ID=O.ID AND N.CONFIRMATION_STATUS='needs_coordination');
             UPDATE `ORDERS` O
             SET O.`ORDER_STATUS` = 'expired', O.`CANCELLED_AT` = @Now, O.`UPDATED_AT` = @Now
-            WHERE O.`FLOW_VERSION`=1 AND O.`ORDER_STATUS` IN ('submitted', 'partially_confirmed', 'needs_reschedule') AND O.`QUEUE_ENTERED_AT` <= @Cutoff;
+            WHERE O.`FLOW_VERSION`=1 AND O.`ORDER_STATUS` IN ('submitted', 'partially_confirmed', 'needs_reschedule') AND O.`QUEUE_ENTERED_AT` <= @Cutoff
+                AND NOT EXISTS(SELECT 1 FROM ORDER_NOMINEES N WHERE N.ORDER_ID=O.ID AND N.CONFIRMATION_STATUS='needs_coordination');
             UPDATE `ROOM_SERVICE_ORDERS` R JOIN `ORDERS` O ON O.`ID` = R.`ORDER_ID`
             SET R.`ORDER_STATUS` = 'cancelled', R.`UPDATED_AT` = @Now
             WHERE O.`FLOW_VERSION`=1 AND O.`ORDER_STATUS` = 'expired' AND R.`ORDER_STATUS` IN ('scheduled', 'in_service');
@@ -888,7 +891,8 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
             var orderIds = (await connection.QueryAsync<string>(new CommandDefinition("""
                 SELECT `ID` FROM `ORDERS`
                 WHERE `FLOW_VERSION`=1 AND `ORDER_STATUS` IN ('submitted', 'partially_confirmed', 'needs_reschedule')
-                  AND `QUEUE_ENTERED_AT` <= @Cutoff FOR UPDATE;
+                  AND `QUEUE_ENTERED_AT` <= @Cutoff
+                  AND NOT EXISTS(SELECT 1 FROM ORDER_NOMINEES N WHERE N.ORDER_ID=ORDERS.ID AND N.CONFIRMATION_STATUS='needs_coordination') FOR UPDATE;
                 """, new { Cutoff = cutoff }, transaction, cancellationToken: cancellationToken))).ToArray();
             foreach (var orderId in orderIds)
                 await MenuNotifications.InvalidateNominationSchedulesAsync(connection, transaction, orderId, now,

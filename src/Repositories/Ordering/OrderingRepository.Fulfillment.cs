@@ -261,7 +261,8 @@ public sealed partial class OrderingRepository
             "SELECT ID FROM CUSTOMER_ORDER_SESSIONS WHERE ID=@SessionId FOR UPDATE;", new { SessionId = sessionId }, tx, cancellationToken: ct));
         var order = await connection.QuerySingleAsync<FulfillmentOrder>(new CommandDefinition("""
             SELECT ID AS Id, SESSION_ID AS SessionId, FLOW_VERSION AS FlowVersion,
-                   CAST(BUSINESS_PERIOD_ID AS CHAR(36)) AS BusinessPeriodId, ORDER_STATUS AS OrderStatus
+                   CAST(BUSINESS_PERIOD_ID AS CHAR(36)) AS BusinessPeriodId, ORDER_STATUS AS OrderStatus,
+                   STORE_CONFIRMATION_STATUS AS StoreConfirmationStatus
             FROM ORDERS WHERE ID=@OrderId FOR UPDATE;
             """, new { OrderId = orderId }, tx, cancellationToken: ct));
         if (order.FlowVersion < 2) throw new BusinessException("此歷史訂單沿用整單操作。", "FULFILLMENT_LEGACY_ORDER");
@@ -281,11 +282,22 @@ public sealed partial class OrderingRepository
             return JsonSerializer.Deserialize<OrderFulfillmentDto>(previous.ResultJson)!;
         }
         if (unit.Version != request.ExpectedVersion) throw new ConflictException("其他店員已更新此項目，請重新載入後操作。", "FULFILLMENT_VERSION_CONFLICT");
+        if (unit.Kind == "nominee" && order.StoreConfirmationStatus == "pending")
+            throw new BusinessException("請先等待店家承接協調單。", "STORE_CONFIRMATION_REQUIRED");
+        if (unit.Status == "needs_coordination" &&
+            (actorRole is not (AdminRole.Manager or AdminRole.Developer) || request.Action is not ("reschedule" or "carry_forward" or "cancel")))
+            throw new ForbiddenException("此請求已交回經理，須由經理重新協調。", "NOMINEE_COORDINATION_REQUIRED");
+        if (request.Action == "decline" && unit.StaffId != staffId)
+            throw new ForbiddenException("只有收到請求的指名人員本人可以回應。", "NOMINEE_RESPONSE_SCOPE");
         var before = JsonSerializer.Serialize(unit);
         var q = request.Quantity;
         var oldCancelled = unit.CancelledQuantity;
         switch (request.Action)
         {
+            case "decline" when unit.Kind == "nominee" && unit.Status == "waiting" && unit.AcceptedQuantity == 0 && unit.StartedQuantity == 0 && unit.CancelledQuantity == 0:
+                // Declining a request is not a cancellation or a financial adjustment.
+                unit.Status = "needs_coordination";
+                break;
             case "accept" when q <= unit.Quantity - unit.CancelledQuantity - unit.AcceptedQuantity:
                 unit.AcceptedQuantity += q;
                 break;
@@ -388,6 +400,7 @@ public sealed partial class OrderingRepository
             : unit.AcceptedQuantity + unit.CancelledQuantity == unit.Quantity ? "accepted" : "waiting";
         if (request.Action == "carry_forward" && string.IsNullOrWhiteSpace(request.TargetBusinessPeriodId))
             unit.Status = "carried_forward";
+        if (request.Action == "decline") unit.Status = "needs_coordination";
         if (unit.CancelledQuantity > oldCancelled)
         {
             var cancelledAmount = (int)((long)unit.OriginalAmount * unit.CancelledQuantity / unit.Quantity);
@@ -421,7 +434,9 @@ public sealed partial class OrderingRepository
         var data = await ReadFulfillmentAsync(connection, tx, orderId, ct);
         var active = data.Units.Where(u => u.Status != "cancelled").ToArray();
         var nextStatus = active.Length == 0 ? "cancelled" : active.All(u => u.Status == "completed") ? "completed"
-            : active.Any(u => u.StartedQuantity > 0) ? "in_service"
+            : active.Any(u => u.StartedQuantity > u.CompletedQuantity) ? "in_service"
+            : active.Any(u => u.Status == "needs_coordination")
+                ? (active.Any(u => u.AcceptedQuantity > 0 && u.Kind != "tip" && u.Status != "completed") ? "partially_confirmed" : "needs_reschedule")
             : active.Any(u => u.Kind is "nominee" or "addon" && u.AcceptedQuantity == 0)
                 ? (active.Any(u => u.AcceptedQuantity > 0 && u.Kind != "tip") ? "partially_confirmed" : "submitted") : "confirmed";
         await connection.ExecuteAsync(new CommandDefinition("""
@@ -515,7 +530,7 @@ public sealed partial class OrderingRepository
                 WHERE ORDER_NOMINEE_ID=@NomineeId AND BLOCK_STATUS='active';
                 """, new { unit.NomineeId, Now = now, BusyUntil = now.AddMinutes(nominee.BufferMinutesSnapshot) }, tx, cancellationToken: ct));
         }
-        var confirmation = action switch { "cancel" => "cancelled", "reschedule" or "carry_forward" => "waiting", "complete" => "completed", "backfill" when unit.CompletedQuantity > 0 => "completed", _ => "confirmed" };
+        var confirmation = action switch { "decline" => "needs_coordination", "cancel" => "cancelled", "reschedule" or "carry_forward" => "waiting", "complete" => "completed", "backfill" when unit.CompletedQuantity > 0 => "completed", _ => "confirmed" };
         await connection.ExecuteAsync(new CommandDefinition("""
             UPDATE ORDER_NOMINEES SET CONFIRMATION_STATUS=@Confirmation,
                 CONFIRMED_AT=CASE WHEN @Action IN ('accept','start_now') THEN @Now WHEN @Action IN ('reschedule','carry_forward') THEN NULL ELSE CONFIRMED_AT END,
@@ -739,6 +754,7 @@ public sealed partial class OrderingRepository
         public int FlowVersion { get; set; }
         public int MealCreditApplied { get; set; }
         public string OrderStatus { get; set; } = "";
+        public string StoreConfirmationStatus { get; set; } = "";
     }
     private sealed class FulfillmentOperation
     {

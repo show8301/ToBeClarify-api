@@ -38,7 +38,10 @@ public sealed class MenuQuoteService(AppDbContext db, IAppClock clock)
         order.Subtotal, order.MealCreditApplied, order.TotalAmount, order.StoreConfirmationStatus,
         order.CustomerLocation, order.MenuSnapshotJson
     });
-    private static string RequestJson(SubmitOrderRequest request) => JsonSerializer.Serialize(new {
+    private static string RequestJson(SubmitOrderRequest request) => request.IsManagerTransfer ? JsonSerializer.Serialize(new {
+        request.Meals, request.Nominations, request.Rooms, request.Tips, request.CustomerNote, request.CustomerLocation,
+        request.IsManagerTransfer
+    }, MenuPolicies.Json) : JsonSerializer.Serialize(new {
         request.Meals, request.Nominations, request.Rooms, request.Tips, request.CustomerNote, request.CustomerLocation
     }, MenuPolicies.Json);
     public async Task<MenuQuoteDto> CreateAsync(OrderSessionRow session, SubmitOrderRequest request, NewOrderAggregate order, CancellationToken ct)

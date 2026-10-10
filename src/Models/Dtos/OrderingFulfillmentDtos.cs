@@ -39,3 +39,11 @@ public sealed class FulfillmentTransitionRequest
     public DateTimeOffset? ActualStartsAt { get; set; }
     public DateTimeOffset? ActualEndsAt { get; set; }
 }
+
+public sealed class NomineeResponseRequest
+{
+    public string OperationId { get; set; } = string.Empty;
+    public int ExpectedVersion { get; set; }
+    public string Decision { get; set; } = string.Empty;
+    public string? Reason { get; set; }
+}
