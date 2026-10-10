@@ -38,6 +38,7 @@ public sealed partial class CustomerDeliveryRepository
                 Url = x.Kind == "image" ? $"/api/{(publicAccess ? "client" : "admin")}/art-deliveries/{row.Id}/assets/{x.Id}" : x.Url
             }).ToArray();
         }
+        if (!publicAccess) await FillWorkflow(c, rows, ct);
         return rows;
     }
 
@@ -47,6 +48,7 @@ public sealed partial class CustomerDeliveryRepository
         var row = await c.QuerySingleOrDefaultAsync<ArtDeliveryDto>(new CommandDefinition($"{DeliverySelect} WHERE D.ID=@Id;", new { Id = id }, cancellationToken: ct))
             ?? throw new NotFoundException("找不到委託。", "DELIVERY_NOT_FOUND");
         row.Assets = await Assets(c, id, false, ct);
+        await FillWorkflow(c, new[] { row }, ct);
         return row;
     }
 
@@ -57,7 +59,7 @@ public sealed partial class CustomerDeliveryRepository
         return rows;
     }
 
-    public async Task<string> CreateDelivery(CreateArtDeliveryRequest r, string claimHash, string actorId, CancellationToken ct)
+    public async Task<string> CreateDelivery(string id, CreateArtDeliveryRequest r, string claimHash, string cipher, string actorId, CancellationToken ct)
     {
         await using var c = await db.CreateOpenConnectionAsync(ct);
         await using var tx = await c.BeginTransactionAsync(ct);
@@ -67,11 +69,11 @@ public sealed partial class CustomerDeliveryRepository
             throw new BusinessException("訂單不屬於此入場資料。", "DELIVERY_ORDER_MISMATCH");
         if (r.OrderItemId is not null && (r.OrderId is null || await c.ExecuteScalarAsync<int>(new CommandDefinition("SELECT COUNT(*) FROM ORDER_ITEMS WHERE ID=@Id AND ORDER_ID=@OrderId;", new { Id = r.OrderItemId, r.OrderId }, tx, cancellationToken: ct)) == 0))
             throw new BusinessException("訂單明細不屬於此訂單。", "DELIVERY_ITEM_MISMATCH");
-        var id = Guid.NewGuid().ToString();
         await c.ExecuteAsync(new CommandDefinition("""
             INSERT INTO ART_DELIVERIES (ID,SESSION_ID,ORDER_ID,ORDER_ITEM_ID,TITLE,DESCRIPTION,DUE_DATE,CLAIM_CODE_HASH,CREATED_AT,UPDATED_AT,CREATED_BY,UPDATED_BY)
             VALUES (@Id,@SessionId,@OrderId,@OrderItemId,@Title,@Description,@DueDate,@Hash,NOW(6),NOW(6),@ActorId,@ActorId);
             """, new { Id = id, r.SessionId, r.OrderId, r.OrderItemId, Title = r.Title.Trim(), Description = r.Description?.Trim(), DueDate = r.DueDate?.ToDateTime(TimeOnly.MinValue), Hash = claimHash, ActorId = actorId }, tx, cancellationToken: ct));
+        await SaveCode(c, tx, id, cipher, r.AssignedStaffId, true, ct);
         await Audit(c, tx, "delivery", id, "created", actorId, ct);
         await tx.CommitAsync(ct);
         return id;
@@ -90,16 +92,19 @@ public sealed partial class CustomerDeliveryRepository
             VERSION=VERSION+1,UPDATED_AT=NOW(6),UPDATED_BY=@ActorId,
             DELIVERED_AT=CASE WHEN @Status='delivered' THEN COALESCE(DELIVERED_AT,NOW(6)) ELSE NULL END WHERE ID=@Id;
             """, new { Id = id, Title = r.Title.Trim(), Description = r.Description?.Trim(), r.Status, DueDate = r.DueDate?.ToDateTime(TimeOnly.MinValue), ActorId = actorId }, tx, cancellationToken: ct));
+        if (r.Status is "pending" or "in_progress" or "cancelled") await ClearNotification(c, tx, id, ct);
         await Audit(c, tx, "delivery", id, $"updated_{r.Status}", actorId, ct);
         await tx.CommitAsync(ct);
     }
 
-    public async Task ReissueCode(string id, string hash, string actorId, CancellationToken ct)
+    public async Task ReissueCode(string id, string hash, string cipher, string actorId, CancellationToken ct)
     {
         await using var c = await db.CreateOpenConnectionAsync(ct);
         await using var tx = await c.BeginTransactionAsync(ct);
         _ = await LockDelivery(c, tx, id, ct);
         await c.ExecuteAsync(new CommandDefinition("UPDATE ART_DELIVERIES SET CLAIM_CODE_HASH=@Hash,VERSION=VERSION+1,UPDATED_AT=NOW(6),UPDATED_BY=@ActorId WHERE ID=@Id;", new { Id = id, Hash = hash, ActorId = actorId }, tx, cancellationToken: ct));
+        await SaveCode(c, tx, id, cipher, null, false, ct);
+        await ClearNotification(c, tx, id, ct);
         await Audit(c, tx, "delivery", id, "claim_code_reissued", actorId, ct);
         await tx.CommitAsync(ct);
     }
@@ -117,6 +122,7 @@ public sealed partial class CustomerDeliveryRepository
             VALUES (@Id,@DeliveryId,@Kind,@Label,@Url,@ContentType,@Size,@Bytes,NOW(6),@ActorId);
             UPDATE ART_DELIVERIES SET STATUS='in_progress',VERSION=VERSION+1,UPDATED_AT=NOW(6),UPDATED_BY=@ActorId WHERE ID=@DeliveryId;
             """, new { Id = Guid.NewGuid().ToString(), DeliveryId = id, Kind = bytes is null ? "link" : "image", Label = label, Url = url, ContentType = bytes is null ? null : "image/png", Size = bytes?.Length ?? 0, Bytes = bytes, ActorId = actorId }, tx, cancellationToken: ct));
+        await ClearNotification(c, tx, id, ct);
         await Audit(c, tx, "delivery", id, "asset_added", actorId, ct);
         await tx.CommitAsync(ct);
     }
@@ -130,6 +136,7 @@ public sealed partial class CustomerDeliveryRepository
         if (await c.ExecuteAsync(new CommandDefinition("UPDATE ART_DELIVERY_ASSETS SET IS_REMOVED=TRUE WHERE ID=@AssetId AND DELIVERY_ID=@Id AND IS_REMOVED=FALSE;", new { Id = id, AssetId = assetId }, tx, cancellationToken: ct)) == 0)
             throw new NotFoundException("找不到作品。", "DELIVERY_ASSET_NOT_FOUND");
         await c.ExecuteAsync(new CommandDefinition("UPDATE ART_DELIVERIES SET STATUS='in_progress',VERSION=VERSION+1,UPDATED_AT=NOW(6),UPDATED_BY=@ActorId WHERE ID=@Id;", new { Id = id, ActorId = actorId }, tx, cancellationToken: ct));
+        await ClearNotification(c, tx, id, ct);
         await Audit(c, tx, "delivery", id, "asset_removed", actorId, ct);
         await tx.CommitAsync(ct);
     }

@@ -11,7 +11,7 @@ using ToBeClarify.Api.Repositories.Customers;
 
 namespace ToBeClarify.Api.Services.Customers;
 
-public sealed class ArtDeliveryService(CustomerDeliveryRepository repository, CustomerIdentityService identities)
+public sealed class ArtDeliveryService(CustomerDeliveryRepository repository, CustomerIdentityService identities, DeliveryCodeProtector codes)
 {
     private static string ClaimCode() => "D-" + string.Join('-', Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).Chunk(8).Select(x => new string(x)));
     private static string ClaimHash(string code)
@@ -38,7 +38,8 @@ public sealed class ArtDeliveryService(CustomerDeliveryRepository repository, Cu
     {
         _ = Required(r.Title, 160);
         var code = ClaimCode();
-        var id = await repository.CreateDelivery(r, ClaimHash(code), CustomerIdentityService.ActorId(actor), ct);
+        var id = Guid.NewGuid().ToString();
+        await repository.CreateDelivery(id, r, ClaimHash(code), codes.Protect(id, code), CustomerIdentityService.ActorId(actor), ct);
         return new(await repository.Delivery(id, ct), code);
     }
     public async Task<ArtDeliveryDto> Update(string id, UpdateArtDeliveryRequest r, ClaimsPrincipal actor, CancellationToken ct)
@@ -50,7 +51,7 @@ public sealed class ArtDeliveryService(CustomerDeliveryRepository repository, Cu
     public async Task<ArtDeliveryIssuedDto> Reissue(string id, ClaimsPrincipal actor, CancellationToken ct)
     {
         var code = ClaimCode();
-        await repository.ReissueCode(id, ClaimHash(code), CustomerIdentityService.ActorId(actor), ct);
+        await repository.ReissueCode(id, ClaimHash(code), codes.Protect(id, code), CustomerIdentityService.ActorId(actor), ct);
         return new(await repository.Delivery(id, ct), code);
     }
     public async Task<ArtDeliveryDto> AddLink(string id, AddDeliveryLinkRequest r, ClaimsPrincipal actor, CancellationToken ct)
@@ -102,6 +103,43 @@ public sealed class ArtDeliveryService(CustomerDeliveryRepository repository, Cu
         return await repository.Delivery(id, ct);
     }
     public Task<byte[]> AdminImage(string id, string assetId, CancellationToken ct) => repository.ImageBytes(id, assetId, null, null, false, ct);
+
+    public Task<DeliveryWorkspaceDto> Workspace(string? sessionId, string? status, string? search, string scope,
+        string sort, int page, int size, ClaimsPrincipal actor, CancellationToken ct)
+    {
+        if (scope is not ("mine" or "all" or "unassigned") || sort is not ("due" or "updated") || page is < 1 or > 100000 || size is < 1 or > 50
+            || sessionId?.Length > 36 || search?.Length > 100 || (status is not null && status is not ("pending" or "in_progress" or "ready" or "delivered" or "cancelled")))
+            throw new BusinessException("搜尋參數不正確。", "VALIDATION_ERROR");
+        var staffId = actor.FindFirst("staff_member_id")?.Value;
+        return repository.Workspace(sessionId, status, string.IsNullOrWhiteSpace(search) ? null : search.Trim(), scope, staffId, sort, page, size, ct);
+    }
+    public async Task<ArtDeliveryDto> Assign(string id, AssignDeliveryRequest r, ClaimsPrincipal actor, CancellationToken ct)
+    {
+        await repository.Assign(id, r, CustomerIdentityService.ActorId(actor), ct);
+        return await repository.Delivery(id, ct);
+    }
+    public async Task<ArtDeliveryDto> Notify(string id, NotifyDeliveryRequest r, ClaimsPrincipal actor, CancellationToken ct)
+    {
+        await repository.Notify(id, r.Version, CustomerIdentityService.ActorId(actor), ct);
+        return await repository.Delivery(id, ct);
+    }
+    public async Task<DeliveryClaimCodeDto> ViewCode(string id, ClaimsPrincipal actor, CancellationToken ct)
+    {
+        var code = await repository.ViewClaimCode(id, CustomerIdentityService.ActorId(actor), (cipher, hash) =>
+        {
+            try
+            {
+                var plain = codes.Unprotect(id, cipher);
+                if (!CryptographicOperations.FixedTimeEquals(Convert.FromHexString(ClaimHash(plain)), Convert.FromHexString(hash)))
+                    throw new CryptographicException();
+                return plain;
+            }
+            catch (Exception e) when (e is CryptographicException or FormatException or InvalidOperationException)
+            { throw new ConflictException("領取碼暫時無法解密，請聯絡管理員檢查加密金鑰。", "DELIVERY_CODE_UNAVAILABLE"); }
+        }, ct);
+        return new(code);
+    }
+    public Task<IReadOnlyList<DeliveryHistoryDto>> History(string id, CancellationToken ct) => repository.DeliveryHistory(id, ct);
 
     private async Task<(string? Uid, string? Hash)> Access(DeliveryAccessRequest r, CancellationToken ct)
     {

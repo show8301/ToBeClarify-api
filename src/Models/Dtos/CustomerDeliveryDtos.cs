@@ -52,6 +52,7 @@ public sealed class DeliveryAccessRequest
 }
 public sealed class CreateArtDeliveryRequest
 {
+    [StringLength(40)] public string? AssignedStaffId { get; init; }
     [Required, StringLength(36)] public string SessionId { get; init; } = "";
     [StringLength(36)] public string? OrderId { get; init; }
     [StringLength(36)] public string? OrderItemId { get; init; }
@@ -92,6 +93,31 @@ public sealed class ArtDeliveryDto
     public DateTime UpdatedAt { get; set; }
     public DateTime? DeliveredAt { get; set; }
     public IReadOnlyList<ArtDeliveryAssetDto> Assets { get; set; } = [];
+    public bool WorkspaceAvailable { get; set; }
+    public string? AssignedStaffId { get; set; }
+    public string? AssignedStaffName { get; set; }
+    public bool CanViewClaimCode { get; set; }
+    public DateTime? NotifiedAt { get; set; }
+}
+public sealed record DeliveryStaffDto(string Id, string DisplayName);
+public sealed record DeliveryWorkspaceDto(IReadOnlyList<ArtDeliveryDto> Items, int TotalCount, int Page,
+    int PageSize, IReadOnlyList<DeliveryStaffDto> Staff);
+public sealed class AssignDeliveryRequest
+{
+    [Range(1, int.MaxValue)] public int Version { get; init; }
+    [StringLength(40)] public string? StaffMemberId { get; init; }
+}
+public sealed class NotifyDeliveryRequest
+{
+    [Range(1, int.MaxValue)] public int Version { get; init; }
+}
+public sealed record DeliveryClaimCodeDto(string ClaimCode);
+public sealed class DeliveryHistoryDto
+{
+    public string Id { get; set; } = "";
+    public string Action { get; set; } = "";
+    public string? ActorName { get; set; }
+    public DateTime CreatedAt { get; set; }
 }
 public sealed class ArtDeliveryAssetDto
 {

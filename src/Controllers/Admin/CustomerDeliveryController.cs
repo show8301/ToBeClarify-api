@@ -36,6 +36,30 @@ public sealed class CustomerDeliveryController(CustomerIdentityService customers
     public async Task<IActionResult> Delivery(string id, CancellationToken ct)
         => Ok(ApiResponse<ArtDeliveryDto>.Ok(await deliveries.Get(id, ct)));
 
+    [HttpGet("art-deliveries/workspace")]
+    public async Task<IActionResult> Workspace([FromQuery] string? sessionId, [FromQuery] string? status, [FromQuery] string? search,
+        [FromQuery] string scope = "mine", [FromQuery] string sort = "due", [FromQuery] int page = 1, [FromQuery] int pageSize = 20, CancellationToken ct = default)
+        => Ok(ApiResponse<DeliveryWorkspaceDto>.Ok(await deliveries.Workspace(sessionId, status, search, scope, sort, page, pageSize, User, ct)));
+
+    [HttpPut("art-deliveries/{id}/assignment")]
+    public async Task<IActionResult> Assign(string id, AssignDeliveryRequest request, CancellationToken ct)
+        => Ok(ApiResponse<ArtDeliveryDto>.Ok(await deliveries.Assign(id, request, User, ct)));
+
+    [HttpPost("art-deliveries/{id}/notify")]
+    public async Task<IActionResult> Notify(string id, NotifyDeliveryRequest request, CancellationToken ct)
+        => Ok(ApiResponse<ArtDeliveryDto>.Ok(await deliveries.Notify(id, request, User, ct)));
+
+    [HttpPost("art-deliveries/{id}/view-code")]
+    public async Task<IActionResult> ViewCode(string id, CancellationToken ct)
+    {
+        Response.Headers["Referrer-Policy"] = "no-referrer";
+        return Ok(ApiResponse<DeliveryClaimCodeDto>.Ok(await deliveries.ViewCode(id, User, ct)));
+    }
+
+    [HttpGet("art-deliveries/{id}/history")]
+    public async Task<IActionResult> DeliveryHistory(string id, CancellationToken ct)
+        => Ok(ApiResponse<IReadOnlyList<DeliveryHistoryDto>>.Ok(await deliveries.History(id, ct)));
+
     [HttpPost("art-deliveries")]
     public async Task<IActionResult> Create(CreateArtDeliveryRequest request, CancellationToken ct)
         => StatusCode(201, ApiResponse<ArtDeliveryIssuedDto>.Ok(await deliveries.Create(request, User, ct)));
