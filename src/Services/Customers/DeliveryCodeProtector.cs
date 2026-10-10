@@ -8,8 +8,9 @@ public sealed class DeliveryCodeProtector(IConfiguration configuration)
 {
     private byte[] Key()
     {
-        var secret = configuration["ArtDelivery:CodeEncryptionKey"]
-            ?? configuration["OrderingToken:Secret"] ?? configuration["JwtAuth:SigningKey"];
+        // Optional sections commonly contain empty defaults; match OrderingTokenService's fallback.
+        var secret = new[] { configuration["ArtDelivery:CodeEncryptionKey"], configuration["OrderingToken:Secret"], configuration["JwtAuth:SigningKey"] }
+            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
         if (string.IsNullOrWhiteSpace(secret) || secret.Length < 32)
             throw new InvalidOperationException("A stable delivery encryption secret of at least 32 characters is required.");
         return SHA256.HashData(Encoding.UTF8.GetBytes("lucid-dream:delivery-code:v1:" + secret));
