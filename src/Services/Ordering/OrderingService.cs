@@ -182,6 +182,7 @@ public sealed partial class OrderingService : IOrderingService
 
     public async Task<MenuQuoteDto> QuoteOrderAsync(string token, SubmitOrderRequest request, CancellationToken cancellationToken)
     {
+        if (request.IsManagerTransfer) throw new ForbiddenException("轉單須由經理建立。", "MANAGER_TRANSFER_REQUIRED");
         var session = await ValidateTokenAsync(token, cancellationToken);
         var order = await BuildOrderAsync(session, request, cancellationToken);
         return await _quotes.CreateAsync(session, request, order, cancellationToken);
@@ -189,6 +190,7 @@ public sealed partial class OrderingService : IOrderingService
 
     public async Task<OrderDto> SubmitOrderAsync(string token, SubmitOrderRequest request, CancellationToken cancellationToken)
     {
+        if (request.IsManagerTransfer) throw new ForbiddenException("轉單須由經理建立。", "MANAGER_TRANSFER_REQUIRED");
         var session = await ValidateTokenAsync(token, cancellationToken);
         var existing = await _quotes.ExistingOrderAsync(session.Id, request.QuoteToken, cancellationToken);
         if (existing is not null)
@@ -206,15 +208,16 @@ public sealed partial class OrderingService : IOrderingService
     public async Task<MenuQuoteDto> QuoteAdminOrderAsync(string sessionId, SubmitOrderRequest request,
         ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
-        _ = actor;
+        ValidateManagerTransfer(request, actor);
         var session = await GetSessionByIdAsync(sessionId, cancellationToken);
-        var order = await BuildOrderAsync(session, request, cancellationToken, allowStaffAssist: true);
+        var order = await BuildAdminOrderAsync(session, request, cancellationToken);
         return await _quotes.CreateAsync(session, request, order, cancellationToken);
     }
 
     public async Task<OrderDto> SubmitAdminOrderAsync(string sessionId, SubmitOrderRequest request,
         ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
+        ValidateManagerTransfer(request, actor);
         var session = await GetSessionByIdAsync(sessionId, cancellationToken);
         var existing = await _quotes.ExistingOrderAsync(session.Id, request.QuoteToken, cancellationToken);
         if (existing is not null)
@@ -222,15 +225,32 @@ public sealed partial class OrderingService : IOrderingService
         if (_configuration.GetValue<bool>("Menu:RequireQuote") && request.Meals.Count > 0 &&
             string.IsNullOrWhiteSpace(request.QuoteToken))
             throw new ConflictException("請先取得最新報價並確認訂單。", "MENU_QUOTE_REQUIRED");
-        var order = await BuildOrderAsync(session, request, cancellationToken, allowStaffAssist: true);
+        var order = await BuildAdminOrderAsync(session, request, cancellationToken);
         await _quotes.ValidateAsync(session.Id, request, order, cancellationToken);
         var id = await _repository.CreateOrderAsync(order with {
             QuoteId = request.QuoteToken,
             QuoteFingerprint = MenuQuoteService.Fingerprint(order),
-            ActorType = "staff",
+            ActorType = request.IsManagerTransfer ? "manager_transfer" : "staff",
             ActorId = ActorId(actor)
         }, cancellationToken);
         return (await MapOrdersAsync(await _repository.GetOrderAsync(id, cancellationToken), cancellationToken)).Single();
+    }
+
+    private static void ValidateManagerTransfer(SubmitOrderRequest request, ClaimsPrincipal actor)
+    {
+        if (!request.IsManagerTransfer) return;
+        if (ActorRole(actor) is not (AdminRole.Manager or AdminRole.Developer))
+            throw new ForbiddenException("轉單須由經理建立。", "MANAGER_TRANSFER_REQUIRED");
+        if (request.Nominations.Count == 0 || request.Meals.Count > 0 || request.Rooms.Count > 0 || request.Tips.Count > 0)
+            throw new BusinessException("轉單請求只包含新指名需求。", "MANAGER_TRANSFER_NOMINATION_REQUIRED");
+    }
+
+    private async Task<NewOrderAggregate> BuildAdminOrderAsync(OrderSessionRow session, SubmitOrderRequest request,
+        CancellationToken cancellationToken)
+    {
+        var order = await BuildOrderAsync(session, request, cancellationToken, allowStaffAssist: true);
+        // The manager has already agreed to take this request; the designated person still responds normally.
+        return request.IsManagerTransfer ? order with { StoreConfirmationStatus = "approved" } : order;
     }
 
     private async Task<NewOrderAggregate> BuildOrderAsync(OrderSessionRow session, SubmitOrderRequest request,

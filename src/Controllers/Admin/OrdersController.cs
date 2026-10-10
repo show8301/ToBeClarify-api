@@ -21,6 +21,12 @@ public sealed class OrdersController : ControllerBase
         => Ok(ApiResponse<IReadOnlyList<AdminOrderSessionDto>>.Ok(
             await _service.GetAdminSessionsAsync(businessDate, search, cancellationToken)));
 
+    [HttpGet("designated-order-sessions")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<AdminOrderSessionDto>>>> DesignatedSessions(
+        [FromQuery] DateOnly? businessDate, CancellationToken cancellationToken)
+        => Ok(ApiResponse<IReadOnlyList<AdminOrderSessionDto>>.Ok(
+            await _service.GetDesignatedSessionsAsync(businessDate, User, cancellationToken)));
+
     [HttpPost("order-sessions")]
     public async Task<ActionResult<ApiResponse<OrderSessionIssuedDto>>> CreateSession(
         CreateOrderSessionRequest request, CancellationToken cancellationToken)
@@ -138,6 +144,11 @@ public sealed class OrdersController : ControllerBase
     public async Task<ActionResult<ApiResponse<OrderDto>>> ConfirmNominee(
         string orderId, CancellationToken cancellationToken)
         => Ok(ApiResponse<OrderDto>.Ok(await _service.ConfirmNomineeAsync(orderId, User, cancellationToken)));
+
+    [HttpPost("orders/{orderId}/nominees/{nomineeId}/response")]
+    public async Task<ActionResult<ApiResponse<OrderDto>>> RespondNominee(
+        string orderId, string nomineeId, NomineeResponseRequest request, CancellationToken cancellationToken)
+        => Ok(ApiResponse<OrderDto>.Ok(await _service.RespondNomineeAsync(orderId, nomineeId, request, User, cancellationToken)));
 
     [HttpPost("orders/{orderId}/store-confirmation")]
     public async Task<ActionResult<ApiResponse<OrderDto>>> StoreConfirmation(

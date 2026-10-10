@@ -315,6 +315,7 @@ public sealed class TipOrderLineRequest
 
 public sealed class SubmitOrderRequest
 {
+    public bool IsManagerTransfer { get; init; }
     [StringLength(40)]
     public string? QuoteToken { get; init; }
     [Required, MaxLength(100)]
