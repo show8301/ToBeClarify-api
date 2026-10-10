@@ -7,7 +7,7 @@
 - `GAME_ID` 是店員輸入的顧客遊戲 ID，保留在每次入場 session；它是查找線索，不是授權資料。
 - `C-` 加 16 個 hex 字元是穩定顧客 UID。UID 用於歷史歸戶、CRM 統計、UID 作品查詢與 UID 留言；知道 UID 即可使用低強度的持有式功能，因此前台不把 UID 當成高強度身分驗證。
 - 找回碼是某次入場 session 的短期點餐恢復碼，只服務原有當日點單找回流程。它不接受作品查詢、不接受留言圖片驗證，也不延長有效期。
-- 作品領取碼是單筆作品的獨立短期領取碼；API 只保存雜湊，發行或重發時只回傳一次明文。
+- 作品領取碼是單筆作品的獨立領取碼。公開存取仍驗證雜湊；2026-10-10 的工作台增量 schema 另保存加密副本，供登入後台再次檢視。未套用增量 schema 的舊環境仍只保存雜湊。
 - `CUSTOMER_PROFILES.CREDENTIAL_HASH` 只為相容舊 schema 保留；新 API 不發行、不驗證、不回傳舊版顧客私密憑證。
 
 ## UID 歸戶規則
@@ -55,3 +55,25 @@ Web 在瀏覽器端將單張 JPEG／PNG／WebP 壓縮成 WebP 後送出；API �
 作品附件仍獨立保存，未發布前顧客只能看到進度；`ready`／`delivered` 才能讀取附件。委託不改變原訂單、付款、離場或結算狀態。
 
 本機驗證執行 API build、Web TypeScript 檢查及留言板相關 lint；尚未連線真實 DB、套用 migration、部署或執行自動化測試套件。
+
+## 2026-10-10 個人交付工作台
+
+新增 migration `db/migrations/20261010_01_art_delivery_workspace.sql`，只建立 `ART_DELIVERY_WORKFLOWS`。本地實作完成後，使用者於 2026-10-10 明確授權套用與發布；已確認連線帳號具備 CREATE 權限並套用至既有 `tobeclarify` 資料庫，核對 5 個欄位、負責人索引及 delivery 外鍵。沒有改寫既有作品、指派或領取碼。API 發布目標為 main，Web 為 dev。
+
+| Method | Route | 功能 | 權限 |
+|---|---|---|---|
+| GET | `/api/admin/art-deliveries/workspace` | scope `mine/all/unassigned`、sort `due/updated`、原 session/status/search、分頁與啟用人員清單 | AdminOnly |
+| PUT | `/api/admin/art-deliveries/{id}/assignment` | `{version,staffMemberId?}` 指派／取消指派負責人 | AdminOnly |
+| POST | `/api/admin/art-deliveries/{id}/view-code` | 檢視現行領取碼，寫入不含碼值的稽核紀錄 | AdminOnly |
+| POST | `/api/admin/art-deliveries/{id}/notify` | `{version}` 人員確認實際通知顧客；僅 ready 接受，重複不新增紀錄 | AdminOnly |
+| GET | `/api/admin/art-deliveries/{id}/history` | 最近 200 筆操作紀錄，區分 customer_acknowledged 和 updated_delivered | AdminOnly |
+
+`mine` 依 JWT 的 `staff_member_id` 與明確指定的負責人篩選，只是工作分類，不新增資料授權限制。developer／manager／clerk 仍可查看全部交付與編輯既有作品；重發仍為 AdminManager。建立請求可選填 `assignedStaffId`；未提供時保持未指派，不將 CREATED_BY 視為作者。
+
+加密採 AES-GCM、隨機 nonce、以 delivery ID 綁定 AAD。金鑰優先使用 `ArtDelivery:CodeEncryptionKey`，其次沿用 `OrderingToken:Secret`／`JwtAuth:SigningKey` 的穩定秘密並作用途分離，至少 32 字元。建議發布前設定獨立且穩定的金鑰，透過部署秘密注入；不得提交值。金鑰變動後舊副本將無法解密，需先完成金鑰輪替方案。雜湊與加密副本在同一交易建立／重發，檢視時再次比對現行雜湊。API 不記錄碼值、回應不快取，Web 不將碼寫入瀏覽器儲存或 query。
+
+既有 hash-only 作品不會被自動重發，舊碼仍有效。只有管理員主動重發一次才會產生可再次檢視的新碼；重發仍使舊碼失效。公開 UID、單筆領取碼及作品 ready／delivered 可讀附件的規則不變。
+
+未套用 migration 時，舊 list/get/create/update/reissue 路徑仍能使用；工作台端點回傳穩定錯誤 `DELIVERY_WORKSPACE_UNAVAILABLE`。資料表存在後建立／重發即保存副本。新增／移除附件、回到製作狀態或重發領取碼會清除現行通知標記；歷史通知仍留在稽核紀錄。複製領取文字與檢視作品不會自動標為已通知或已領取。
+
+本次本地開發檢查：Release build；加密往返、隨機 nonce、跨作品／不同金鑰／竄改及錯誤封裝拒絕。SDK restore 的 NuGet 弱點查詢曾因網路限制產生 NU1900，不影響當時本地建置與加密檢查。2026-10-10 發布依規範略過所有自動化測試，只執行建置、schema／設定確認、部署狀態及 HTTP 可用性檢查；跨角色實際操作仍待使用者於 Web dev 確認。

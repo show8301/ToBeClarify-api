@@ -91,6 +91,7 @@ builder.Services.AddScoped<IOrderingService, OrderingService>();
 builder.Services.AddScoped<ToBeClarify.Api.Repositories.Customers.CustomerDeliveryRepository>();
 builder.Services.AddScoped<ToBeClarify.Api.Services.Customers.CustomerIdentityService>();
 builder.Services.AddScoped<ToBeClarify.Api.Services.Customers.ArtDeliveryService>();
+builder.Services.AddSingleton<ToBeClarify.Api.Services.Customers.DeliveryCodeProtector>();
 builder.Services.AddScoped<IBusinessDayContext, BusinessDayContextService>();
 builder.Services.AddScoped<BusinessDayPlanService>();
 builder.Services.AddScoped<OrderingFinanceRepository>();
