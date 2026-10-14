@@ -114,7 +114,8 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
     {
         const string sql = """
             SELECT O.`ID` AS OrderId, O.`TOTAL_AMOUNT` AS TotalAmount, O.`SUBTOTAL` AS Subtotal,
-                   COALESCE(SUM(T.`TIP_AMOUNT`), 0) AS TipAmount, A.`ADJUSTED_AMOUNT` AS AdjustedAmount
+                   COALESCE(SUM(T.`TIP_AMOUNT`), 0) AS TipAmount, A.`ADJUSTED_AMOUNT` AS AdjustedAmount,
+                   O.`MEAL_CREDIT_APPLIED` AS MealCreditApplied
             FROM `ORDERS` O
             INNER JOIN `CUSTOMER_ORDER_SESSIONS` S ON S.`ID` = O.`SESSION_ID`
             LEFT JOIN `ORDER_TIPS` T ON T.`ORDER_ID` = O.`ID`
@@ -122,14 +123,22 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
                 AND A.`SOURCE_TYPE` = 'order' AND A.`SOURCE_ID` = O.`ID`
             WHERE S.`BUSINESS_DATE` = @BusinessDate
               AND O.`ORDER_STATUS` NOT IN ('cancelled', 'expired', 'rejected')
-            GROUP BY O.`ID`, O.`TOTAL_AMOUNT`, O.`SUBTOTAL`, A.`ADJUSTED_AMOUNT`;
+            GROUP BY O.`ID`, O.`TOTAL_AMOUNT`, O.`SUBTOTAL`, O.`MEAL_CREDIT_APPLIED`, A.`ADJUSTED_AMOUNT`;
 
             SELECT O.`ID` AS OrderId, I.`ID` AS ItemId, I.`ITEM_TYPE` AS ItemType,
                    I.`REFERENCE_ID` AS ReferenceId, I.`PARENT_ITEM_ID` AS ParentItemId,
-                   I.`LINE_TOTAL` AS LineTotal
+                   CASE WHEN EXISTS (SELECT 1 FROM `ORDER_ITEMS` C WHERE C.`ORDER_ID` = O.`ID` AND C.`IS_CHAMPAGNE_TOWER`)
+                     THEN GREATEST(0, I.`LINE_TOTAL` - COALESCE(
+                       FLOOR(U.`CANCELLED_AMOUNT` * I.`LINE_TOTAL` / NULLIF(U.`ORIGINAL_AMOUNT`, 0)),
+                       FLOOR(PU.`CANCELLED_AMOUNT` * I.`LINE_TOTAL` / NULLIF(PU.`ORIGINAL_AMOUNT`, 0)), 0))
+                     ELSE I.`LINE_TOTAL` END AS LineTotal,
+                   I.`IS_CHAMPAGNE_TOWER` AS IsChampagneTower, I.`RECIPIENT_STAFF_ID` AS RecipientStaffId,
+                   I.`RECIPIENT_STAFF_NAME_SNAPSHOT` AS RecipientStaffName
             FROM `ORDERS` O
             INNER JOIN `CUSTOMER_ORDER_SESSIONS` S ON S.`ID` = O.`SESSION_ID`
             INNER JOIN `ORDER_ITEMS` I ON I.`ORDER_ID` = O.`ID`
+            LEFT JOIN `ORDER_FULFILLMENT_UNITS` U ON U.`ORDER_ITEM_ID` = I.`ID`
+            LEFT JOIN `ORDER_FULFILLMENT_UNITS` PU ON PU.`ORDER_ITEM_ID` = I.`PARENT_ITEM_ID`
             WHERE S.`BUSINESS_DATE` = @BusinessDate
               AND O.`ORDER_STATUS` NOT IN ('cancelled', 'expired', 'rejected');
 

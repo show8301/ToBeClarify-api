@@ -31,7 +31,7 @@ public sealed class MenuQuoteService(AppDbContext db, IAppClock clock)
     }
     private static BusinessException Unavailable() => new("餐點或套餐內容已停售，請更新菜單重新選擇。", "MENU_PRODUCT_UNAVAILABLE");
     public static string Fingerprint(NewOrderAggregate order) => MenuPolicies.Hash(new {
-        Items = order.Items.Select(x => new { x.ItemType, x.ReferenceId, x.Name, x.UnitPrice, x.Quantity, x.SegmentCount, x.DurationMinutes, x.LineTotal, x.PriceRule }),
+        Items = order.Items.Select(x => new { x.ItemType, x.ReferenceId, x.Name, x.UnitPrice, x.Quantity, x.SegmentCount, x.DurationMinutes, x.LineTotal, x.PriceRule, x.IsChampagneTower, x.RecipientStaffId, x.RecipientStaffName }),
         Nominees = order.Nominees.Select(x => new { x.StaffId, x.ServiceId, x.StartsAt, x.ServiceEndsAt, x.BusyUntil }),
         Rooms = order.Rooms.Select(x => new { x.RoomId, x.StartsAt, x.EndsAt, x.UnitPrice }),
         Tips = order.Tips.Select(x => new { x.StaffId, x.Amount, x.StaffPercentage, x.StorePercentage }),
@@ -55,7 +55,7 @@ public sealed class MenuQuoteService(AppDbContext db, IAppClock clock)
             """, new { Id = id, SessionId = session.Id, Request = RequestJson(request), Snapshot = order.MenuSnapshotJson,
                 Fingerprint = Fingerprint(order), Expires = expires }, cancellationToken: ct));
         var snapshot = JsonSerializer.Deserialize<MenuOrderSnapshot>(order.MenuSnapshotJson!, MenuPolicies.Json)!;
-        return new(id, order.Subtotal, snapshot.Lines.Sum(x => checked(x.UnitPrice * x.Quantity)), order.MealCreditApplied,
+        return new(id, order.Subtotal, snapshot.Lines.Where(x => !x.EventCategories.Contains("champagne_tower")).Sum(x => checked(x.UnitPrice * x.Quantity)), order.MealCreditApplied,
             session.RemainingMealCredit - order.MealCreditApplied, order.TotalAmount, snapshot.Lines, snapshot.Rules,
             new DateTimeOffset(expires, TimeSpan.FromHours(8))) {
                 Charges = order.Items.Select(x=>new OrderQuoteCharge(x.Name,x.Quantity,x.UnitPrice,x.LineTotal)).ToArray(),
@@ -110,6 +110,13 @@ public sealed class MenuQuoteService(AppDbContext db, IAppClock clock)
             "SELECT SET_ID AS SetId, MENU_ITEM_ID AS ItemId, ITEM_ROLE AS Role, QUANTITY AS Quantity FROM MENU_SET_ITEMS ORDER BY SET_ID,SORT_ORDER,ID FOR UPDATE;", transaction: tx, cancellationToken: ct))).ToArray();
         foreach (var line in snapshot.Lines)
         {
+            if (line.RecipientStaffId is not null)
+            {
+                var recipientName = await connection.QuerySingleOrDefaultAsync<string>(new CommandDefinition(
+                    "SELECT DISPLAY_NAME FROM STAFF_MEMBERS WHERE ID=@Id AND IS_ACTIVE=TRUE FOR UPDATE;",
+                    new { Id = line.RecipientStaffId }, tx, cancellationToken: ct));
+                if (recipientName is null || recipientName != line.RecipientStaffName) throw Changed();
+            }
             var source = line.Kind == "set" ? sets : items;
             if (!source.TryGetValue(line.ReferenceId, out var product) || !product.Available || product.Price != line.UnitPrice || product.Name != line.Name) throw Changed();
             var policy = MenuPolicies.Read<ProductPolicy>(product.PolicyJson);

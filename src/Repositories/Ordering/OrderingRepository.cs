@@ -611,14 +611,17 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
             const string insertItem = """
                 INSERT INTO `ORDER_ITEMS`
                     (`ID`, `ORDER_ID`, `ITEM_TYPE`, `REFERENCE_ID`, `PARENT_ITEM_ID`, `NAME_SNAPSHOT`, `UNIT_PRICE`,
-                     `QUANTITY`, `SEGMENT_COUNT`, `DURATION_MINUTES`, `LINE_TOTAL`, `PRICE_RULE`, `SORT_ORDER`, `CREATED_AT`, `UPDATED_AT`)
+                     `QUANTITY`, `SEGMENT_COUNT`, `DURATION_MINUTES`, `LINE_TOTAL`, `PRICE_RULE`, `SORT_ORDER`, `CREATED_AT`, `UPDATED_AT`,
+                     `IS_CHAMPAGNE_TOWER`, `RECIPIENT_STAFF_ID`, `RECIPIENT_STAFF_NAME_SNAPSHOT`)
                 VALUES (@Id, @OrderId, @ItemType, @ReferenceId, @ParentItemId, @Name, @UnitPrice,
-                        @Quantity, @SegmentCount, @DurationMinutes, @LineTotal, @PriceRule, @SortOrder, @Now, @Now);
+                        @Quantity, @SegmentCount, @DurationMinutes, @LineTotal, @PriceRule, @SortOrder, @Now, @Now,
+                        @IsChampagneTower, @RecipientStaffId, @RecipientStaffName);
                 """;
             await connection.ExecuteAsync(new CommandDefinition(insertItem,
                 order.Items.Select(item => new { item.Id, OrderId = order.Id, item.ItemType, item.ReferenceId,
                     item.ParentItemId, item.Name, item.UnitPrice, item.Quantity, item.SegmentCount,
-                    item.DurationMinutes, item.LineTotal, item.PriceRule, item.SortOrder, Now = order.SubmittedAt }),
+                    item.DurationMinutes, item.LineTotal, item.PriceRule, item.SortOrder, item.IsChampagneTower,
+                    item.RecipientStaffId, item.RecipientStaffName, Now = order.SubmittedAt }),
                 transaction, cancellationToken: cancellationToken));
 
             foreach (var room in order.Rooms)
@@ -758,7 +761,9 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
                    I.`NAME_SNAPSHOT` AS NameSnapshot, I.`UNIT_PRICE` AS UnitPrice,
                    I.`QUANTITY` AS Quantity, I.`SEGMENT_COUNT` AS SegmentCount,
                    I.`DURATION_MINUTES` AS DurationMinutes, I.`LINE_TOTAL` AS LineTotal,
-                   I.`PRICE_RULE` AS PriceRule, I.`SORT_ORDER` AS SortOrder
+                   I.`PRICE_RULE` AS PriceRule, I.`SORT_ORDER` AS SortOrder,
+                   I.`IS_CHAMPAGNE_TOWER` AS IsChampagneTower, I.`RECIPIENT_STAFF_ID` AS RecipientStaffId,
+                   I.`RECIPIENT_STAFF_NAME_SNAPSHOT` AS RecipientStaffName
             FROM `ORDER_ITEMS` I JOIN `ORDERS` O ON O.`ID` = I.`ORDER_ID` WHERE {where}
             ORDER BY I.`ORDER_ID`, I.`SORT_ORDER`;
             SELECT N.`ID` AS Id, N.`ORDER_ID` AS OrderId, N.`STAFF_ID` AS StaffId,
@@ -1959,7 +1964,9 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
             SELECT I.`ID` AS Id, I.`ORDER_ID` AS OrderId, I.`ITEM_TYPE` AS ItemType,
                    I.`REFERENCE_ID` AS ReferenceId, I.`PARENT_ITEM_ID` AS ParentItemId,
                    I.`NAME_SNAPSHOT` AS NameSnapshot, I.`UNIT_PRICE` AS UnitPrice,
-                   I.`QUANTITY` AS Quantity, I.`LINE_TOTAL` AS LineTotal
+                   I.`QUANTITY` AS Quantity, I.`LINE_TOTAL` AS LineTotal,
+                   I.`IS_CHAMPAGNE_TOWER` AS IsChampagneTower, I.`RECIPIENT_STAFF_ID` AS RecipientStaffId,
+                   I.`RECIPIENT_STAFF_NAME_SNAPSHOT` AS RecipientStaffName
             FROM `ORDER_ITEMS` I JOIN `ORDERS` O ON O.`ID` = I.`ORDER_ID`
             WHERE I.`ID` = @ItemId AND I.`ORDER_ID` = @OrderId
               AND O.`ORDER_STATUS` NOT IN ('in_service','completed','cancelled','expired','rejected') FOR UPDATE;
@@ -1976,7 +1983,7 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
             """, new { OrderId = orderId }, transaction, cancellationToken: cancellationToken));
         var mealSubtotal = await connection.ExecuteScalarAsync<int>(new CommandDefinition("""
             SELECT COALESCE(SUM(`LINE_TOTAL`), 0) FROM `ORDER_ITEMS`
-            WHERE `ORDER_ID` = @OrderId AND `ITEM_TYPE` IN ('menu_item', 'menu_set');
+            WHERE `ORDER_ID` = @OrderId AND `ITEM_TYPE` IN ('menu_item', 'menu_set') AND `IS_CHAMPAGNE_TOWER` = FALSE;
             """, new { OrderId = orderId }, transaction, cancellationToken: cancellationToken));
         var nextCredit = Math.Min(order.MealCreditApplied, mealSubtotal);
         var creditRefund = order.MealCreditApplied - nextCredit;

@@ -97,7 +97,12 @@ public sealed record OrderItemDto(
     int? SegmentCount,
     int? DurationMinutes,
     int LineTotal,
-    string? PriceRule);
+    string? PriceRule)
+{
+    public bool IsChampagneTower { get; init; }
+    public string? RecipientStaffId { get; init; }
+    public string? RecipientStaffName { get; init; }
+}
 
 public sealed record OrderNomineeDto(
     string Id,
@@ -262,6 +267,9 @@ public sealed class RecoverOrderSessionRequest
 
 public sealed class MealOrderLineRequest
 {
+    [StringLength(40)]
+    public string? RecipientStaffId { get; init; }
+
     [Required]
     public string ReferenceId { get; init; } = string.Empty;
 

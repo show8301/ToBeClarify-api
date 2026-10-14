@@ -24,7 +24,11 @@ public sealed record ProductPolicy
 public sealed record MenuComponentSnapshot(string MenuItemId, string ItemName, string ItemRole,
     int Quantity, string[] EventCategories);
 public sealed record MenuLineSnapshot(string Kind, string ReferenceId, string Name, int UnitPrice,
-    int Quantity, string[] EventCategories, IReadOnlyList<MenuComponentSnapshot> Components);
+    int Quantity, string[] EventCategories, IReadOnlyList<MenuComponentSnapshot> Components)
+{
+    public string? RecipientStaffId { get; init; }
+    public string? RecipientStaffName { get; init; }
+}
 public sealed record MenuRuleSnapshot(string Id, string Title, string Description, string? PriceText,
     PricingPolicy Policy);
 

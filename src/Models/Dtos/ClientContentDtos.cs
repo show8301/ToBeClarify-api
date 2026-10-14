@@ -214,6 +214,7 @@ public sealed record MenuDto(
     IReadOnlyList<MenuSetDto> Sets,
     bool ShowSets)
 {
+    public int ChampagnePolicyVersion { get; init; } = 1;
     public int ContractVersion { get; init; } = 2;
     public DateTimeOffset UpdatedAt { get; init; } = DateTimeOffset.UtcNow;
 }

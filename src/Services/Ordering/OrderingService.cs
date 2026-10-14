@@ -286,11 +286,22 @@ public sealed partial class OrderingService : IOrderingService
         foreach (var line in request.Meals)
         {
             var snapshot = MenuQuoteService.ResolveLine(menu, line);
+            var isChampagne = snapshot.EventCategories.Contains("champagne_tower");
+            var recipientId = string.IsNullOrWhiteSpace(line.RecipientStaffId) ? null : line.RecipientStaffId.Trim();
+            if (!isChampagne && recipientId is not null)
+                throw new BusinessException("只有香檳塔可以指定贈送店員。", "MENU_RECIPIENT_NOT_ALLOWED");
+            var recipientName = recipientId is null ? null :
+                (await _repository.GetStaffNameAsync(recipientId, cancellationToken)
+                    ?? throw new BusinessException("找不到香檳塔贈送店員。", "CHAMPAGNE_RECIPIENT_NOT_FOUND"));
+            snapshot = snapshot with { RecipientStaffId = recipientId, RecipientStaffName = recipientName };
             menuLines.Add(snapshot);
             var total = checked(snapshot.UnitPrice * line.Quantity);
-            mealSubtotal = checked(mealSubtotal + total);
+            if (!isChampagne) mealSubtotal = checked(mealSubtotal + total);
             items.Add(new NewOrderItem(NewId(), line.Kind == "set" ? "menu_set" : "menu_item", snapshot.ReferenceId,
-                null, snapshot.Name, snapshot.UnitPrice, line.Quantity, null, null, total, "fixed", sort++));
+                null, snapshot.Name, snapshot.UnitPrice, line.Quantity, null, null, total, "fixed", sort++)
+            {
+                IsChampagneTower = isChampagne, RecipientStaffId = recipientId, RecipientStaffName = recipientName
+            });
         }
 
         foreach (var line in request.Nominations)
@@ -862,7 +873,11 @@ public sealed partial class OrderingService : IOrderingService
                 bundle.Items.Where(item => item.OrderId == order.Id).OrderBy(item => item.SortOrder).Select(item =>
                     new OrderItemDto(item.Id, item.ItemType, item.ReferenceId, item.ParentItemId,
                         item.NameSnapshot, item.UnitPrice, item.Quantity, item.SegmentCount,
-                        item.DurationMinutes, item.LineTotal, item.PriceRule)).ToArray(),
+                        item.DurationMinutes, item.LineTotal, item.PriceRule)
+                    {
+                        IsChampagneTower = item.IsChampagneTower,
+                        RecipientStaffId = item.RecipientStaffId, RecipientStaffName = item.RecipientStaffName
+                    }).ToArray(),
                 bundle.Nominees.Where(item => item.OrderId == order.Id)
                     .Select(item => MapNominee(item, bundle)).ToArray(),
                 bundle.Tips.Where(item => item.OrderId == order.Id).Select(item =>

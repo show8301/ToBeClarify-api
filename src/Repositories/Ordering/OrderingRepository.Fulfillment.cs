@@ -134,7 +134,8 @@ public sealed partial class OrderingRepository
         if (order.FlowVersion < 2) return;
         var items = (await connection.QueryAsync<OrderItemRow>(new CommandDefinition("""
             SELECT ID AS Id, ITEM_TYPE AS ItemType, REFERENCE_ID AS ReferenceId, PARENT_ITEM_ID AS ParentItemId,
-                   NAME_SNAPSHOT AS NameSnapshot, QUANTITY AS Quantity, LINE_TOTAL AS LineTotal
+                   NAME_SNAPSHOT AS NameSnapshot, QUANTITY AS Quantity, LINE_TOTAL AS LineTotal,
+                   IS_CHAMPAGNE_TOWER AS IsChampagneTower, RECIPIENT_STAFF_NAME_SNAPSHOT AS RecipientStaffName
             FROM ORDER_ITEMS WHERE ORDER_ID=@OrderId ORDER BY SORT_ORDER,ID;
             """, new { OrderId = orderId }, tx, cancellationToken: ct))).ToArray();
         var nominees = (await connection.QueryAsync<OrderNomineeRow>(new CommandDefinition("""
@@ -144,7 +145,7 @@ public sealed partial class OrderingRepository
             FROM ORDER_NOMINEES WHERE ORDER_ID=@OrderId;
             """, new { OrderId = orderId }, tx, cancellationToken: ct))).ToArray();
         var units = new List<FulfillmentUnit>();
-        var mealTotal = items.Where(i => i.ItemType is "menu_item" or "menu_set").Sum(i => (long)i.LineTotal);
+        var mealTotal = items.Where(i => (i.ItemType is "menu_item" or "menu_set") && !i.IsChampagneTower).Sum(i => (long)i.LineTotal);
         long mealCumulative = 0;
         int creditAllocated = 0;
         foreach (var item in items.Where(i => i.ParentItemId is null))
@@ -154,8 +155,9 @@ public sealed partial class OrderingRepository
             if (item.ItemType is "menu_item" or "menu_set")
             {
                 unit.Kind = "meal";
+                if (item.IsChampagneTower) unit.Name += $"｜贈送：{item.RecipientStaffName ?? "店家"}";
                 unit.Quantity = item.Quantity;
-                mealCumulative += item.LineTotal;
+                if (!item.IsChampagneTower) mealCumulative += item.LineTotal;
                 var cumulativeCredit = mealTotal == 0 ? 0 : (int)(mealCumulative * order.MealCreditApplied / mealTotal);
                 unit.OriginalCredit = cumulativeCredit - creditAllocated;
                 creditAllocated = cumulativeCredit;

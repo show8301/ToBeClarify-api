@@ -260,6 +260,7 @@ public sealed class SettlementService : ISettlementService
         foreach (var input in source.StaffInputs) staffNames[input.StaffId] = input.DisplayName;
         var designatedBase = new Dictionary<string, decimal>(StringComparer.Ordinal);
         var designatedShare = new Dictionary<string, decimal>(StringComparer.Ordinal);
+        var champagneBase = new Dictionary<string, decimal>(StringComparer.Ordinal);
         var designatedTips = source.Tips.Where(x => !string.IsNullOrWhiteSpace(x.StaffId))
             .GroupBy(x => x.StaffId!, StringComparer.Ordinal).ToDictionary(x => x.Key, x => (decimal)x.Sum(t => t.StaffAmount), StringComparer.Ordinal);
         decimal directCompany = 0;
@@ -270,11 +271,18 @@ public sealed class SettlementService : ISettlementService
         var dedicatedShareByOwner = new Dictionary<string, decimal>(StringComparer.Ordinal);
         decimal publicRoomUnassigned = 0;
         decimal unknownRevenue = 0;
-        decimal AmountFor(string orderId, int rawAmount)
+        decimal AmountFor(string orderId, int rawAmount, bool eligibleMeal = false)
         {
             if (!orderMap.TryGetValue(orderId, out var order)) return rawAmount;
             var collected = order.AdjustedAmount ?? order.TotalAmount;
             var revenueCollected = Math.Max(0, collected - order.TipAmount);
+            if (itemMap.TryGetValue(orderId, out var lines) && lines.Any(x => x.IsChampagneTower))
+            {
+                var eligibleTotal = lines.Where(x => (x.ItemType is "menu_item" or "menu_set") && !x.IsChampagneTower).Sum(x => (decimal)x.LineTotal);
+                var credit = eligibleMeal && eligibleTotal > 0 ? order.MealCreditApplied * rawAmount / eligibleTotal : 0;
+                var payableSubtotal = Math.Max(0, order.TotalAmount - order.TipAmount);
+                return payableSubtotal <= 0 ? 0 : Math.Max(0, rawAmount - credit) * revenueCollected / payableSubtotal;
+            }
             var revenueSubtotal = Math.Max(0, order.Subtotal - order.TipAmount);
             return revenueSubtotal <= 0 ? 0 : rawAmount * (decimal)revenueCollected / revenueSubtotal;
         }
@@ -293,7 +301,8 @@ public sealed class SettlementService : ISettlementService
             foreach (var item in orderItems)
             {
                 if (item.ItemType == "tip" || item.ItemType == "room_service" || item.ItemType == "staff_service_addon") continue;
-                var amount = AmountFor(item.OrderId, item.LineTotal);
+                var amount = AmountFor(item.OrderId, item.LineTotal,
+                    (item.ItemType is "menu_item" or "menu_set") && !item.IsChampagneTower);
                 if (item.ItemType == "nomination_base")
                 {
                     AddDesignated(item.ReferenceId ?? string.Empty, amount, rule.DesignatedSharePercentage);
@@ -311,6 +320,12 @@ public sealed class SettlementService : ISettlementService
                         AddDesignated(staffId, amount, rule.DesignatedSharePercentage);
                         directCompany += amount * (100m - rule.DesignatedSharePercentage) / 100m;
                     }
+                }
+                else if (item.IsChampagneTower && item.RecipientStaffId is not null)
+                {
+                    champagneBase[item.RecipientStaffId] = champagneBase.GetValueOrDefault(item.RecipientStaffId) + amount;
+                    directCompany += amount * (100m - rule.DesignatedSharePercentage) / 100m;
+                    staffNames.TryAdd(item.RecipientStaffId, item.RecipientStaffName ?? item.RecipientStaffId);
                 }
                 else if (item.ItemType is "menu_item" or "menu_set") mealRevenue += amount;
                 else
@@ -365,7 +380,7 @@ public sealed class SettlementService : ISettlementService
         var admission = source.Admissions.FirstOrDefault();
         var admissionFee = run.AdmissionFeeOverride ?? ParseMoney(admission?.AdmissionFeeText);
         var admissionRevenue = (admission?.SessionCount ?? 0) * admissionFee;
-        var designatedRevenueBase = designatedBase.Values.Sum();
+        var designatedRevenueBase = designatedBase.Values.Sum() + champagneBase.Values.Sum();
         var companyRevenue = directCompany + dedicatedCompanyRemainder + publicRoomUnassigned + admissionRevenue + mealRevenue + unknownRevenue;
         var servicePool = companyRevenue * rule.ServiceManagerPoolPercentage / 100m;
         var backstagePool = companyRevenue * rule.BackstagePoolPercentage / 100m;
@@ -396,11 +411,16 @@ public sealed class SettlementService : ISettlementService
         runCopy.RetainedAmount = Math.Max(0, source.Cash.RetainedAmount);
         runCopy.PendingFinanceCount = source.Cash.PendingFinanceCount;
 
-        var results = run.DayType == "event"
-            ? CalculateEventResults(runCopy, source, rule, grossRevenue, anomalies)
+        var champagneShare = champagneBase.Values.Sum() * rule.DesignatedSharePercentage / 100m;
+        var results = (run.DayType == "event"
+            ? CalculateEventResults(runCopy, source, rule, grossRevenue - champagneShare, anomalies)
             : CalculateNormalResults(runCopy, source, rule, designatedBase, designatedShare, designatedTips,
-                servicePool, backstagePool, dedicatedShareByOwner, staffNames, anomalies);
-        runCopy.ActivityNetRevenue = run.DayType == "event" ? grossRevenue - run.ActivityExpense : 0;
+                servicePool, backstagePool, dedicatedShareByOwner, staffNames, anomalies)).ToList();
+        runCopy.ActivityNetRevenue = run.DayType == "event" ? grossRevenue - champagneShare - run.ActivityExpense : 0;
+        foreach (var recipient in champagneBase)
+            results.Add(MakeResult(runCopy, recipient.Key, "champagne_recipient", 0, 0, recipient.Value,
+                rule.DesignatedSharePercentage, recipient.Value * rule.DesignatedSharePercentage / 100m,
+                0, 0, 1, staffNames.GetValueOrDefault(recipient.Key), "normal", null));
         if (run.DayType == "event")
         {
             var activityHours = source.StaffInputs.Where(x => x.ActivityHours is > 0).Sum(x => x.ActivityHours!.Value);
@@ -411,7 +431,7 @@ public sealed class SettlementService : ISettlementService
             runCopy.CompanyIncome = activityDenominator <= 0 ? 0 : runCopy.ActivityNetRevenue * (run.CompanyShareHours ?? 0) / activityDenominator;
         }
         if (source.Cash.HasCashRecords)
-            ApplyCashSnapshot(runCopy, results);
+            ApplyCashSnapshot(runCopy, results, source.Items.Any(x => x.IsChampagneTower));
         var summary = new SettlementSummaryDto(runCopy.GrossRevenue, runCopy.DesignatedRevenueBase,
             runCopy.DedicatedRoomGross, runCopy.DedicatedRoomOwnerShare, runCopy.DedicatedRoomCompanyRemainder,
             runCopy.PublicRoomUnassignedRevenue, runCopy.AdmissionRevenue, runCopy.MealRevenue, runCopy.CompanyRevenue,
@@ -475,8 +495,9 @@ public sealed class SettlementService : ISettlementService
             ToOffset(row.CreatedAt), row.CreatedBy);
     }
 
-    private static void ApplyCashSnapshot(SettlementRunRow run, IReadOnlyList<SettlementResultLineRow> results)
+    private static void ApplyCashSnapshot(SettlementRunRow run, IReadOnlyList<SettlementResultLineRow> results, bool hasChampagne)
     {
+        var splitActivity = run.DayType == "event" && hasChampagne;
         var calculatedGross = run.GrossRevenue;
         var allocatableCash = Math.Max(0, run.NetCash - run.RetainedAmount);
         var factor = calculatedGross <= 0 ? 0 : allocatableCash / calculatedGross;
@@ -493,11 +514,22 @@ public sealed class SettlementService : ISettlementService
         run.ServiceManagerPool *= factor;
         run.BackstagePool *= factor;
         run.CompanyIncome *= factor;
-        run.ActivityNetRevenue = run.GrossRevenue - run.ActivityExpense;
+        run.ActivityNetRevenue = splitActivity
+            ? (run.ActivityNetRevenue + run.ActivityExpense) * factor - run.ActivityExpense
+            : run.GrossRevenue - run.ActivityExpense;
+        var activityDenominator = results.Where(x => x.Role != "champagne_recipient").Sum(x => x.RevenueBase)
+            + (run.CompanyShareHours ?? 0);
+        if (splitActivity) run.CompanyIncome = activityDenominator <= 0 ? 0
+            : run.ActivityNetRevenue * (run.CompanyShareHours ?? 0) / activityDenominator;
         foreach (var result in results)
         {
-            result.RevenueBase *= factor;
-            result.RevenueShare *= factor;
+            if (splitActivity && result.Role != "champagne_recipient")
+                result.RevenueShare = activityDenominator <= 0 ? 0 : run.ActivityNetRevenue * result.RevenueBase / activityDenominator;
+            else
+            {
+                result.RevenueBase *= factor;
+                result.RevenueShare *= factor;
+            }
             result.PreferredPay = result.Role == "dedicated_room_owner"
                 ? result.RevenueShare : Math.Max(result.BasePay, result.RevenueShare);
             result.BeforeRounding = result.PreferredPay + result.DesignatedTip + result.PublicTip;

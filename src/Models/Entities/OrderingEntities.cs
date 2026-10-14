@@ -149,6 +149,9 @@ public sealed class OrderRow
 
 public sealed class OrderItemRow
 {
+    public bool IsChampagneTower { get; set; }
+    public string? RecipientStaffId { get; set; }
+    public string? RecipientStaffName { get; set; }
     public string Id { get; set; } = string.Empty;
     public string OrderId { get; set; } = string.Empty;
     public string ItemType { get; set; } = string.Empty;
@@ -254,7 +257,12 @@ public sealed class AdminOrderSessionRow : OrderSessionRow
 public sealed record NewOrderItem(
     string Id, string ItemType, string? ReferenceId, string? ParentItemId,
     string Name, int UnitPrice, int Quantity, int? SegmentCount,
-    int? DurationMinutes, int LineTotal, string? PriceRule, int SortOrder);
+    int? DurationMinutes, int LineTotal, string? PriceRule, int SortOrder)
+{
+    public bool IsChampagneTower { get; init; }
+    public string? RecipientStaffId { get; init; }
+    public string? RecipientStaffName { get; init; }
+}
 
 public sealed record NewOrderNominee(
     string Id, string StaffId, string StaffName, string? ServiceId, string ServiceName, string NominationMode,

@@ -125,6 +125,7 @@ public sealed class SettlementResultLineRow
 
 public sealed class SettlementOrderRevenueRow
 {
+    public int MealCreditApplied { get; set; }
     public string OrderId { get; set; } = string.Empty;
     public int TotalAmount { get; set; }
     public int Subtotal { get; set; }
@@ -134,6 +135,9 @@ public sealed class SettlementOrderRevenueRow
 
 public sealed class SettlementOrderItemRevenueRow
 {
+    public bool IsChampagneTower { get; set; }
+    public string? RecipientStaffId { get; set; }
+    public string? RecipientStaffName { get; set; }
     public string OrderId { get; set; } = string.Empty;
     public string ItemId { get; set; } = string.Empty;
     public string ItemType { get; set; } = string.Empty;

@@ -898,7 +898,8 @@ public sealed class MenuNotifications(AppDbContext db, IAppClock clock, Notifica
             var champagneMatch=matches.Any(x=>x.Rule.RuleType=="champagne_order_received");
             var title=champagneMatch?"收到香檳塔點餐訂單":hasMenu&&designated?"收到點餐／指名訂單":hasMenu?"收到點餐訂單":"收到指名訂單";
             var nomineeText=hasNomination?" · 指名："+string.Join("、",order.Nominees.Select(x=>x.StaffName).Distinct(StringComparer.Ordinal)):"";
-            deliveries.Add(new(user.Id,new(order.Id,title,$"訂單 {order.OrderNumber}{nomineeText} · {text}",mode,chosen?.SoundId,isBroadcast,
+            var recipientText=champagne?" · 香檳塔贈送："+string.Join("、",snapshot!.Lines.Where(x=>x.EventCategories.Contains("champagne_tower")).Select(x=>x.RecipientStaffName??"店家").Distinct(StringComparer.Ordinal)):"";
+            deliveries.Add(new(user.Id,new(order.Id,title,$"訂單 {order.OrderNumber}{nomineeText}{recipientText} · {text}",mode,chosen?.SoundId,isBroadcast,
                 matches.Select(x=>$"{(x.Broadcast?"broadcast":"personal")}:{x.Rule.Id}:{x.Revision}").ToArray())
             {
                 PayloadVersion = 2,
