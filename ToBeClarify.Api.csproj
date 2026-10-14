@@ -11,6 +11,8 @@
     <Compile Remove="tests/**/*.cs" />
     <Content Remove="tests/**" />
     <None Remove="tests/**" />
+    <Content Remove="appsettings.Local.json" />
+    <None Remove="appsettings.Local.json" />
   </ItemGroup>
 
   <ItemGroup>
