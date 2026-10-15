@@ -375,8 +375,11 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
                 continue;
             }
             var alreadyEntered = await connection.ExecuteScalarAsync<int>(new CommandDefinition(
-                "SELECT COUNT(*) FROM `SETTLEMENT_STAFF_INPUTS` WHERE `SETTLEMENT_ID` = @SettlementId AND `STAFF_ID` = @StaffId;",
-                new { SettlementId = settlementId, input.StaffId }, transaction, cancellationToken: cancellationToken));
+                """
+                SELECT COUNT(*) FROM `SETTLEMENT_STAFF_INPUTS`
+                WHERE `SETTLEMENT_ID` = @SettlementId AND `STAFF_ID` = @StaffId
+                  AND (`ROLE` = @Role OR (@Role <> 'backstage' AND `ROLE` <> 'backstage'));
+                """, new { SettlementId = settlementId, input.StaffId, input.Role }, transaction, cancellationToken: cancellationToken));
             if (alreadyEntered > 0)
                 throw new ConflictException("計薪輸入已由其他操作更新，請重新計算。", "SETTLEMENT_INPUTS_CHANGED");
             await connection.ExecuteAsync(new CommandDefinition("""

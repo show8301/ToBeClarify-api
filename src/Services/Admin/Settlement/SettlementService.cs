@@ -741,7 +741,8 @@ public sealed class SettlementService : ISettlementService
         => new(MapRun(run), MapRule(rule), summary,
             source.StaffInputs.Select(x =>
             {
-                var payableHours = PayableHours(x.ActualMinutes, rule.TimeRoundMinutes);
+                var payableHours = run.DayType != "event" && x.Role == "backstage"
+                    ? 0 : PayableHours(x.ActualMinutes, rule.TimeRoundMinutes);
                 var backfill = source.AttendanceBackfillRequests
                     .Where(r => r.StaffId == x.StaffId && r.Role == x.Role)
                     .OrderByDescending(r => r.RequestedAt).FirstOrDefault();
