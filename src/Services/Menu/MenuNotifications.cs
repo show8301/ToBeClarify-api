@@ -8,6 +8,7 @@ using MySqlConnector;
 using ToBeClarify.Api.Auth;
 using ToBeClarify.Api.Exceptions;
 using ToBeClarify.Api.Infrastructure;
+using ToBeClarify.Api.Repositories.Shared;
 using ToBeClarify.Api.Models.Entities;
 
 namespace ToBeClarify.Api.Services.Menu;
@@ -332,18 +333,19 @@ public sealed class MenuNotifications(AppDbContext db, IAppClock clock, Notifica
             _ => false,
         };
     private static async Task<IReadOnlyList<UserRow>> LoadActiveUsersAsync(MySqlConnection connection,MySqlTransaction? tx,DateTime now,CancellationToken ct)
-        => (await connection.QueryAsync<UserRow>(new CommandDefinition("""
+        => (await connection.QueryAsync<UserRow>(new CommandDefinition($"""
             SELECT U.`ID` AS Id,U.`STAFF_MEMBER_ID` AS StaffId,
-                   COALESCE(D.`IS_WORKING`,P.`IS_WORKING`,S.`IS_WORKING`,TRUE) AS IsWorkingToday,
-                   COALESCE(D.`ACTIVE_ROLES_JSON`,
-                       CASE WHEN COALESCE(D.`IS_WORKING`,P.`IS_WORKING`,S.`IS_WORKING`,TRUE)=TRUE
-                            THEN COALESCE(P.`SCHEDULED_ROLES_JSON`,'["service"]') ELSE '[]' END) AS ActiveRolesJson
+                   {StaffDutySql.IsOnDuty} AS IsWorkingToday,
+                   COALESCE(D.`ACTIVE_ROLES_JSON`, P.`SCHEDULED_ROLES_JSON`, '[]') AS ActiveRolesJson
             FROM `ADMIN_USERS` U
-            LEFT JOIN `STAFF_SCHEDULES` S ON S.`STAFF_ID`=U.`STAFF_MEMBER_ID` AND S.`WORK_DATE`=DATE(@Now)
-            LEFT JOIN `STAFF_DAILY_WORK_MODES` D ON D.`STAFF_MEMBER_ID`=U.`STAFF_MEMBER_ID` AND D.`BUSINESS_DATE`=DATE(@Now)
-            LEFT JOIN `STAFF_DUTY_PLANS` P ON P.`STAFF_MEMBER_ID`=U.`STAFF_MEMBER_ID` AND P.`BUSINESS_DATE`=DATE(@Now) AND P.`APPROVAL_STATUS`='approved'
+            LEFT JOIN `STAFF_DUTY_PLANS` P ON P.`ID` = (
+                SELECT P.`ID` FROM `STAFF_DUTY_PLANS` P
+                WHERE P.`STAFF_MEMBER_ID` = U.`STAFF_MEMBER_ID` AND {StaffDutySql.IsOnDuty}
+                ORDER BY P.`BUSINESS_DATE` DESC LIMIT 1)
+            LEFT JOIN `STAFF_DAILY_WORK_MODES` D ON D.`STAFF_MEMBER_ID` = U.`STAFF_MEMBER_ID`
+                AND D.`BUSINESS_DATE` = P.`BUSINESS_DATE`
             WHERE U.`IS_ACTIVE`=TRUE;
-            """,new{Now=now},tx,cancellationToken:ct))).ToArray();
+            """,new{DutyAt=now},tx,cancellationToken:ct))).ToArray();
 
     public static async Task EnsureNominationSchedulesAsync(MySqlConnection connection,MySqlTransaction tx,
         IEnumerable<OrderNomineeRow> nominees,DateTime now,CancellationToken ct,bool nextScheduleRevision=false)

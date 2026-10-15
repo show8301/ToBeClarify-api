@@ -83,6 +83,7 @@ public sealed class AdminStaffMemberListRow
     public string? AvatarMediaId { get; set; }
     public string? RoleTitle { get; set; }
     public bool IsWorkingToday { get; set; }
+    public string? TodayShift { get; set; }
     public int? BufferMinutes { get; set; }
     public bool IsNominatable { get; set; }
     public int SortOrder { get; set; }

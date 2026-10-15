@@ -208,18 +208,12 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
     {
         const string sql = """
             SELECT M.`ID` AS StaffId, M.`DISPLAY_NAME` AS StaffName,
-                   COALESCE(P.`IS_WORKING`, COALESCE(SC.`IS_WORKING`, TRUE)) AS IsWorkingToday,
                    M.`IS_NOMINATABLE` AS StaffIsNominatable, M.`BUFFER_MINUTES` AS BufferMinutes,
                    SV.`ID` AS ServiceId, SV.`SERVICE_NAME` AS ServiceName, SV.`PRICE` AS Price,
                    SV.`DURATION_MINUTES` AS DurationMinutes, SV.`IS_NOMINATABLE` AS ServiceIsNominatable,
                    SV.`ADDITIONAL_PERSON_PRICE` AS AdditionalPersonPrice, SV.`IS_ENABLED` AS ServiceIsEnabled
             FROM `STAFF_MEMBERS` M
             JOIN `STAFF_SERVICES` SV ON SV.`STAFF_ID` = M.`ID`
-            LEFT JOIN `STAFF_SCHEDULES` SC
-                   ON SC.`STAFF_ID` = M.`ID` AND SC.`WORK_DATE` = @BusinessDate
-            LEFT JOIN `STAFF_DUTY_PLANS` P
-                   ON P.`STAFF_MEMBER_ID` = M.`ID` AND P.`BUSINESS_DATE` = @BusinessDate
-                  AND P.`APPROVAL_STATUS` = 'approved'
             WHERE M.`ID` = @StaffId AND SV.`ID` = @ServiceId AND M.`IS_ACTIVE` = TRUE LIMIT 1;
             """;
         return await QuerySingleOrDefaultAsync<StaffOfferRow>(sql, new
@@ -231,21 +225,14 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
     }
 
     public async Task<StaffNominationRow?> GetStaffNominationAsync(string staffId, DateOnly businessDate,
-        bool requireApprovedPlan, DateTime? requestedAt, CancellationToken cancellationToken)
+        DateTime requestedAt, CancellationToken cancellationToken)
     {
-        const string sql = """
+        const string sql = $"""
             SELECT M.`ID` AS StaffId, M.`DISPLAY_NAME` AS StaffName,
-                   CASE WHEN @RequireApprovedPlan = TRUE
-                        THEN COALESCE(P.`IS_WORKING`, FALSE) AND P.`START_TIME` IS NOT NULL AND P.`END_TIME` IS NOT NULL
-                             AND COALESCE(D.`IS_WORKING`, TRUE) AND COALESCE(D.`STOP_ACCEPTING_NEW_ORDERS`, FALSE) = FALSE
-                             AND (@RequestedAt IS NULL OR (@RequestedAt >= TIMESTAMP(P.`BUSINESS_DATE`, P.`START_TIME`)
-                                  AND @RequestedAt < TIMESTAMP(P.`BUSINESS_DATE`, P.`END_TIME`)
-                                      + INTERVAL (CASE WHEN P.`END_TIME` <= P.`START_TIME` THEN 1 ELSE 0 END) DAY))
-                        ELSE COALESCE(P.`IS_WORKING`, COALESCE(SC.`IS_WORKING`, TRUE)) END AS IsWorkingToday,
-                   M.`IS_NOMINATABLE` AS StaffIsNominatable, M.`BUFFER_MINUTES` AS BufferMinutes
+                   {StaffDutySql.IsOnDuty} AS IsWorkingToday,
+                   (M.`IS_NOMINATABLE` AND COALESCE(D.`STOP_ACCEPTING_NEW_ORDERS`, FALSE) = FALSE) AS StaffIsNominatable,
+                   M.`BUFFER_MINUTES` AS BufferMinutes
             FROM `STAFF_MEMBERS` M
-            LEFT JOIN `STAFF_SCHEDULES` SC
-                   ON SC.`STAFF_ID` = M.`ID` AND SC.`WORK_DATE` = @BusinessDate
             LEFT JOIN `STAFF_DUTY_PLANS` P
                    ON P.`STAFF_MEMBER_ID` = M.`ID` AND P.`BUSINESS_DATE` = @BusinessDate
                   AND P.`APPROVAL_STATUS` = 'approved'
@@ -257,8 +244,7 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
         {
             StaffId = staffId,
             BusinessDate = businessDate.ToDateTime(TimeOnly.MinValue),
-            RequireApprovedPlan = requireApprovedPlan,
-            RequestedAt = requestedAt
+            DutyAt = requestedAt
         }, cancellationToken);
     }
 
@@ -583,8 +569,7 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
                 "SELECT `REMAINING_MEAL_CREDIT` FROM `CUSTOMER_ORDER_SESSIONS` WHERE `ID` = @SessionId AND `SESSION_STATUS` = 'active' FOR UPDATE;",
                 new { order.SessionId }, transaction, cancellationToken: cancellationToken));
             if (!remaining.HasValue) throw new BusinessException("點餐碼已失效。", "ORDER_SESSION_INACTIVE");
-            if (currentPeriod?.FlowVersion >= 2)
-                await ValidateNewNominationEligibilityAsync(connection, transaction, order, cancellationToken);
+            await ValidateNewNominationEligibilityAsync(connection, transaction, order, cancellationToken);
             if (order.MealCreditApplied > remaining.Value)
                 throw new BusinessException("信物折抵餘額已變更，請重新確認訂單。", "MEAL_CREDIT_CHANGED");
             if (order.QuoteId is not null && order.MenuSnapshotJson is not null &&

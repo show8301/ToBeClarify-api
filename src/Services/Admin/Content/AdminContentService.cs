@@ -145,7 +145,7 @@ public sealed class AdminContentService : IAdminContentService
         return rows.Select(row => new AdminStaffMemberListItemDto(
             row.Id, row.DisplayName, row.AvatarMediaId, _mediaUrls.BuildUrl(row.AvatarMediaId, "card"),
             row.RoleTitle, row.IsWorkingToday, row.BufferMinutes, row.IsNominatable,
-            row.SortOrder, row.IsActive, MapDailyWorkMode(row))).ToArray();
+            row.SortOrder, row.IsActive, MapDailyWorkMode(row), row.TodayShift)).ToArray();
     }
 
     public async Task<AdminStaffMemberDto> GetStaffMemberAsync(string id, ClaimsPrincipal actor, CancellationToken cancellationToken)
@@ -169,13 +169,15 @@ public sealed class AdminContentService : IAdminContentService
 
     public async Task<AdminStaffMemberDto> UpdateStaffMemberStatusAsync(string id, UpdateStaffMemberStatusRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
-        if (!request.IsWorkingToday.HasValue && !request.IsActive.HasValue)
+        if (request.IsWorkingToday.HasValue)
+            throw new BusinessException("執勤狀態由已核准的值班時段決定，請至值班規劃調整。", "STAFF_DUTY_PLAN_REQUIRED");
+        if (!request.IsActive.HasValue)
             throw new BusinessException("At least one staff status is required.", "STAFF_STATUS_REQUIRED");
 
         var staffId = ResolveStaffId(id, actor);
         var existing = await _repository.GetStaffMemberAsync(staffId, cancellationToken)
             ?? throw new NotFoundException("Staff member not found.", "STAFF_NOT_FOUND");
-        await _repository.UpdateStaffMemberStatusAsync(staffId, request.IsWorkingToday, request.IsActive,
+        await _repository.UpdateStaffMemberStatusAsync(staffId, request.IsActive.Value,
             ActorId(actor), _clock.LocalDateTime, cancellationToken);
         return await GetStaffMemberAsync(existing.Id, actor, cancellationToken);
     }
@@ -192,12 +194,13 @@ public sealed class AdminContentService : IAdminContentService
 
         var normalizedRequest = new UpdateStaffDailyWorkModeRequest
         {
-            IsWorking = request.IsWorking,
+            // Legacy callers may send IsWorking; it cannot override the duty plan.
+            IsWorking = existing.IsWorkingToday,
             StopAcceptingNewOrders = request.StopAcceptingNewOrders ?? existing.StopAcceptingNewOrders,
             ScheduledRoles = scheduledRoles.ToList(),
-            ActiveRoles = request.IsWorking ? activeRoles.ToList() : [],
+            ActiveRoles = activeRoles.ToList(),
         };
-        await _repository.UpdateStaffDailyWorkModeAsync(staffId, normalizedRequest,
+        await _repository.UpdateStaffDailyWorkModeAsync(staffId, DateOnly.ParseExact(existing.BusinessDate, "yyyy-MM-dd"), normalizedRequest,
             ActorId(actor), _clock.LocalDateTime, cancellationToken);
         return await GetStaffMemberAsync(existing.Id, actor, cancellationToken);
     }

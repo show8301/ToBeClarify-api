@@ -96,7 +96,6 @@ public sealed class StaffOfferRow
 {
     public string StaffId { get; set; } = string.Empty;
     public string StaffName { get; set; } = string.Empty;
-    public bool IsWorkingToday { get; set; }
     public bool StaffIsNominatable { get; set; }
     public int BufferMinutes { get; set; }
     public string ServiceId { get; set; } = string.Empty;

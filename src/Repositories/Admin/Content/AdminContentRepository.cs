@@ -158,42 +158,45 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
     public async Task<IReadOnlyList<AdminStaffMemberListRow>> GetStaffMembersAsync(CancellationToken cancellationToken)
     {
         var day = await _businessDays.GetCurrentAsync(cancellationToken);
-        return await QueryAsync<AdminStaffMemberListRow>("""
+        return await QueryAsync<AdminStaffMemberListRow>($"""
             SELECT M.`ID` AS Id, M.`DISPLAY_NAME` AS DisplayName,
                    M.`AVATAR_MEDIA_ID` AS AvatarMediaId, M.`ROLE_TITLE` AS RoleTitle,
-                   (CASE WHEN @FlowVersion >= 2 THEN COALESCE(P.`IS_WORKING`, FALSE) AND COALESCE(D.`IS_WORKING`, TRUE) ELSE COALESCE(D.`IS_WORKING`, P.`IS_WORKING`, COALESCE(S.`IS_WORKING`, TRUE)) END) AS IsWorkingToday,
+                   {StaffDutySql.IsOnDuty} AS IsWorkingToday,
+                   CASE WHEN P.`IS_WORKING` = TRUE AND P.`START_TIME` IS NOT NULL AND P.`END_TIME` IS NOT NULL
+                        THEN CONCAT(DATE_FORMAT(TIMESTAMP(P.`BUSINESS_DATE`, P.`START_TIME`), '%m/%d %H:%i'), ' - ',
+                            DATE_FORMAT(TIMESTAMP(P.`BUSINESS_DATE`, P.`END_TIME`) + INTERVAL (CASE WHEN P.`END_TIME` <= P.`START_TIME` THEN 1 ELSE 0 END) DAY, '%m/%d %H:%i'))
+                        ELSE NULL END AS TodayShift,
                    M.`BUFFER_MINUTES` AS BufferMinutes, M.`IS_NOMINATABLE` AS IsNominatable,
                    M.`SORT_ORDER` AS SortOrder, M.`IS_ACTIVE` AS IsActive,
-                   DATE_FORMAT(@BusinessDate, '%Y-%m-%d') AS BusinessDate,
+                   DATE_FORMAT(COALESCE(P.`BUSINESS_DATE`, @BusinessDate), '%Y-%m-%d') AS BusinessDate,
                    COALESCE(D.`SCHEDULED_ROLES_JSON`, P.`SCHEDULED_ROLES_JSON`, '[\"service\"]') AS ScheduledRolesJson,
                    COALESCE(D.`ACTIVE_ROLES_JSON`,
-                       CASE WHEN (CASE WHEN @FlowVersion >= 2 THEN COALESCE(P.`IS_WORKING`, FALSE) AND COALESCE(D.`IS_WORKING`, TRUE) ELSE COALESCE(D.`IS_WORKING`, P.`IS_WORKING`, COALESCE(S.`IS_WORKING`, TRUE)) END) = TRUE
-                            THEN CASE WHEN @FlowVersion >= 2 THEN COALESCE(P.`SCHEDULED_ROLES_JSON`, '[]') ELSE '[\"service\"]' END
+                       CASE WHEN {StaffDutySql.IsOnDuty} = TRUE
+                            THEN COALESCE(P.`SCHEDULED_ROLES_JSON`, '[]')
                             ELSE '[]' END) AS ActiveRolesJson,
                    COALESCE(D.`STOP_ACCEPTING_NEW_ORDERS`, FALSE) AS StopAcceptingNewOrders
             FROM `STAFF_MEMBERS` M
-            LEFT JOIN `STAFF_SCHEDULES` S ON S.`STAFF_ID` = M.`ID` AND S.`WORK_DATE` = @BusinessDate
-            LEFT JOIN `STAFF_DAILY_WORK_MODES` D ON D.`STAFF_MEMBER_ID` = M.`ID` AND D.`BUSINESS_DATE` = @BusinessDate
-            LEFT JOIN `STAFF_DUTY_PLANS` P ON P.`STAFF_MEMBER_ID` = M.`ID`
-                AND P.`BUSINESS_DATE` = @BusinessDate AND P.`APPROVAL_STATUS` = 'approved'
+            {StaffDutySql.PlanJoin}
+            LEFT JOIN `STAFF_DAILY_WORK_MODES` D ON D.`STAFF_MEMBER_ID` = M.`ID`
+                AND D.`BUSINESS_DATE` = COALESCE(P.`BUSINESS_DATE`, @BusinessDate)
             ORDER BY `SORT_ORDER`, `DISPLAY_NAME`;
-            """, new { BusinessDate = day.BusinessDate.ToDateTime(TimeOnly.MinValue), day.FlowVersion, Now = _clock.LocalDateTime }, cancellationToken);
+            """, new { BusinessDate = day.BusinessDate.ToDateTime(TimeOnly.MinValue), UseCurrentPlan = true, DutyAt = _clock.LocalDateTime }, cancellationToken);
     }
 
     public async Task<AdminStaffMemberRow?> GetStaffMemberAsync(string id, CancellationToken cancellationToken)
     {
         var day = await _businessDays.GetCurrentAsync(cancellationToken);
-        return await QuerySingleOrDefaultAsync<AdminStaffMemberRow>("""
+        return await QuerySingleOrDefaultAsync<AdminStaffMemberRow>($"""
             SELECT M.`ID` AS Id, M.`DISPLAY_NAME` AS DisplayName, M.`NICKNAME` AS Nickname,
                    M.`AVATAR_MEDIA_ID` AS AvatarMediaId, M.`SIGNATURE_MEDIA_ID` AS SignatureMediaId,
                    M.`ROLE_TITLE` AS RoleTitle,
                    M.`SHORT_BIO` AS ShortBio, M.`PROFILE_BIO` AS ProfileBio,
-                   (CASE WHEN @FlowVersion >= 2 THEN COALESCE(P.`IS_WORKING`, FALSE) AND COALESCE(D.`IS_WORKING`, TRUE) ELSE COALESCE(D.`IS_WORKING`, P.`IS_WORKING`, COALESCE(S.`IS_WORKING`, TRUE)) END) AS IsWorkingToday,
-                   CASE WHEN (CASE WHEN @FlowVersion >= 2 THEN COALESCE(P.`IS_WORKING`, FALSE) AND COALESCE(D.`IS_WORKING`, TRUE) ELSE COALESCE(D.`IS_WORKING`, P.`IS_WORKING`, COALESCE(S.`IS_WORKING`, TRUE)) END) = FALSE THEN 'off'
+                   {StaffDutySql.IsOnDuty} AS IsWorkingToday,
+                   CASE WHEN {StaffDutySql.IsOnDuty} = FALSE THEN 'off'
                         WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= @Now AND R.`ENDS_AT` > @Now)
                           OR EXISTS (SELECT 1 FROM `STAFF_BUSY_BLOCKS` B WHERE B.`STAFF_ID` = M.`ID` AND B.`BLOCK_STATUS` = 'active' AND B.`STARTS_AT` <= @Now AND B.`ENDS_AT` > @Now) THEN 'busy'
                         ELSE 'available' END AS CurrentStatus,
-                   CASE WHEN (CASE WHEN @FlowVersion >= 2 THEN COALESCE(P.`IS_WORKING`, FALSE) AND COALESCE(D.`IS_WORKING`, TRUE) ELSE COALESCE(D.`IS_WORKING`, P.`IS_WORKING`, COALESCE(S.`IS_WORKING`, TRUE)) END) = FALSE THEN '未上班'
+                   CASE WHEN {StaffDutySql.IsOnDuty} = FALSE THEN '未執勤'
                         WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= @Now AND R.`ENDS_AT` > @Now)
                           OR EXISTS (SELECT 1 FROM `STAFF_BUSY_BLOCKS` B WHERE B.`STAFF_ID` = M.`ID` AND B.`BLOCK_STATUS` = 'active' AND B.`STARTS_AT` <= @Now AND B.`ENDS_AT` > @Now) THEN '指名中'
                         ELSE '待命中' END AS StatusText,
@@ -203,20 +206,19 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
                    M.`BUFFER_MINUTES` AS BufferMinutes,
                    M.`IS_NOMINATABLE` AS IsNominatable,
                    M.`SORT_ORDER` AS SortOrder, M.`IS_ACTIVE` AS IsActive,
-                   DATE_FORMAT(@BusinessDate, '%Y-%m-%d') AS BusinessDate,
+                   DATE_FORMAT(COALESCE(P.`BUSINESS_DATE`, @BusinessDate), '%Y-%m-%d') AS BusinessDate,
                    COALESCE(D.`SCHEDULED_ROLES_JSON`, P.`SCHEDULED_ROLES_JSON`, '[\"service\"]') AS ScheduledRolesJson,
                    COALESCE(D.`ACTIVE_ROLES_JSON`,
-                       CASE WHEN (CASE WHEN @FlowVersion >= 2 THEN COALESCE(P.`IS_WORKING`, FALSE) AND COALESCE(D.`IS_WORKING`, TRUE) ELSE COALESCE(D.`IS_WORKING`, P.`IS_WORKING`, COALESCE(S.`IS_WORKING`, TRUE)) END) = TRUE
-                            THEN CASE WHEN @FlowVersion >= 2 THEN COALESCE(P.`SCHEDULED_ROLES_JSON`, '[]') ELSE '[\"service\"]' END
+                       CASE WHEN {StaffDutySql.IsOnDuty} = TRUE
+                            THEN COALESCE(P.`SCHEDULED_ROLES_JSON`, '[]')
                             ELSE '[]' END) AS ActiveRolesJson,
                    COALESCE(D.`STOP_ACCEPTING_NEW_ORDERS`, FALSE) AS StopAcceptingNewOrders
             FROM `STAFF_MEMBERS` M
-            LEFT JOIN `STAFF_SCHEDULES` S ON S.`STAFF_ID` = M.`ID` AND S.`WORK_DATE` = @BusinessDate
-            LEFT JOIN `STAFF_DAILY_WORK_MODES` D ON D.`STAFF_MEMBER_ID` = M.`ID` AND D.`BUSINESS_DATE` = @BusinessDate
-            LEFT JOIN `STAFF_DUTY_PLANS` P ON P.`STAFF_MEMBER_ID` = M.`ID`
-                AND P.`BUSINESS_DATE` = @BusinessDate AND P.`APPROVAL_STATUS` = 'approved'
+            {StaffDutySql.PlanJoin}
+            LEFT JOIN `STAFF_DAILY_WORK_MODES` D ON D.`STAFF_MEMBER_ID` = M.`ID`
+                AND D.`BUSINESS_DATE` = COALESCE(P.`BUSINESS_DATE`, @BusinessDate)
             WHERE M.`ID` = @Id LIMIT 1;
-            """, new { Id = id, BusinessDate = day.BusinessDate.ToDateTime(TimeOnly.MinValue), day.FlowVersion, Now = _clock.LocalDateTime }, cancellationToken);
+            """, new { Id = id, BusinessDate = day.BusinessDate.ToDateTime(TimeOnly.MinValue), UseCurrentPlan = true, DutyAt = _clock.LocalDateTime, Now = _clock.LocalDateTime }, cancellationToken);
     }
 
     public Task<IReadOnlyList<AdminStaffServiceRow>> GetStaffServicesAsync(string staffId, CancellationToken cancellationToken)
@@ -283,53 +285,16 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
         await transaction.CommitAsync(cancellationToken);
     }
 
-    public async Task UpdateStaffMemberStatusAsync(string id, bool? isWorkingToday, bool? isActive, string actorId, DateTime now, CancellationToken cancellationToken)
+    public Task UpdateStaffMemberStatusAsync(string id, bool isActive, string actorId, DateTime now, CancellationToken cancellationToken)
+        => ExecuteAsync("""
+            UPDATE `STAFF_MEMBERS`
+            SET `IS_ACTIVE` = @IsActive, `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId
+            WHERE `ID` = @Id;
+            """, new { Id = id, IsActive = isActive, Now = now, ActorId = actorId }, cancellationToken);
+
+    public async Task UpdateStaffDailyWorkModeAsync(string id, DateOnly dutyDate, UpdateStaffDailyWorkModeRequest request, string actorId, DateTime now, CancellationToken cancellationToken)
     {
-        var businessDate = (await _businessDays.GetCurrentAsync(cancellationToken)).BusinessDate.ToDateTime(TimeOnly.MinValue);
-        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-
-        if (isActive.HasValue)
-        {
-            await connection.ExecuteAsync(new CommandDefinition("""
-                UPDATE `STAFF_MEMBERS`
-                SET `IS_ACTIVE` = @IsActive, `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId
-                WHERE `ID` = @Id;
-                """, new { Id = id, IsActive = isActive.Value, BusinessDate = businessDate, Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
-        }
-
-        if (isWorkingToday.HasValue)
-        {
-            await connection.ExecuteAsync(new CommandDefinition("""
-                INSERT INTO `STAFF_SCHEDULES`
-                    (`ID`, `STAFF_ID`, `WORK_DATE`, `IS_WORKING`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
-                VALUES (@ScheduleId, @StaffId, @BusinessDate, @IsWorkingToday, @Now, @ActorId, @Now, @ActorId)
-                ON DUPLICATE KEY UPDATE `IS_WORKING` = VALUES(`IS_WORKING`), `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId;
-                """, new { ScheduleId = NewId(), StaffId = id, IsWorkingToday = isWorkingToday.Value, BusinessDate = businessDate, Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
-
-            await connection.ExecuteAsync(new CommandDefinition("""
-                INSERT INTO `STAFF_DAILY_WORK_MODES`
-                    (`ID`, `STAFF_MEMBER_ID`, `BUSINESS_DATE`, `IS_WORKING`, `SCHEDULED_ROLES_JSON`, `ACTIVE_ROLES_JSON`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
-                SELECT @ModeId, M.`ID`, @BusinessDate, @IsWorkingToday,
-                       '[\"service\"]',
-                       CASE WHEN @IsWorkingToday = TRUE THEN '[\"service\"]' ELSE '[]' END,
-                       @Now, @ActorId, @Now, @ActorId
-                FROM `STAFF_MEMBERS` M WHERE M.`ID` = @StaffId
-                ON DUPLICATE KEY UPDATE
-                    `IS_WORKING` = VALUES(`IS_WORKING`),
-                    `ACTIVE_ROLES_JSON` = CASE WHEN VALUES(`IS_WORKING`) = FALSE THEN '[]'
-                                               WHEN JSON_LENGTH(`ACTIVE_ROLES_JSON`) = 0 THEN `SCHEDULED_ROLES_JSON`
-                                               ELSE `ACTIVE_ROLES_JSON` END,
-                    `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId;
-                """, new { ModeId = NewId(), StaffId = id, IsWorkingToday = isWorkingToday.Value, BusinessDate = businessDate, Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
-        }
-
-        await transaction.CommitAsync(cancellationToken);
-    }
-
-    public async Task UpdateStaffDailyWorkModeAsync(string id, UpdateStaffDailyWorkModeRequest request, string actorId, DateTime now, CancellationToken cancellationToken)
-    {
-        var businessDate = (await _businessDays.GetCurrentAsync(cancellationToken)).BusinessDate.ToDateTime(TimeOnly.MinValue);
+        var businessDate = dutyDate.ToDateTime(TimeOnly.MinValue);
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await connection.ExecuteAsync(new CommandDefinition("""
             INSERT INTO `STAFF_DAILY_WORK_MODES`
@@ -338,7 +303,6 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
                     CASE WHEN @IsWorking = TRUE AND JSON_LENGTH(@ActiveRolesJson) > 0 THEN @Now ELSE NULL END,
                     @Now, @ActorId, @Now, @ActorId)
             ON DUPLICATE KEY UPDATE
-                `IS_WORKING` = VALUES(`IS_WORKING`),
                 `STOP_ACCEPTING_NEW_ORDERS` = VALUES(`STOP_ACCEPTING_NEW_ORDERS`),
                 `SCHEDULED_ROLES_JSON` = VALUES(`SCHEDULED_ROLES_JSON`),
                 `ACTIVE_ROLES_JSON` = VALUES(`ACTIVE_ROLES_JSON`),

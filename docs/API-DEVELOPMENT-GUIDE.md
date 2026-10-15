@@ -340,11 +340,14 @@ Cookie 特性：
 
 公開店員狀態不是直接讀 `STAFF_MEMBERS.CURRENT_STATUS`：
 
-1. 今天 `STAFF_SCHEDULES.IS_WORKING=false` → `off` / `未上班`。
-2. 否則當下存在 `active` 預約區段 → `busy` / `指名中`。
-3. 其餘 → `available` / `待命中`。
+1. `STAFF_DUTY_PLANS` 必須為已核准（`approved`）、有上班（`IS_WORKING=true`）、起訖時間完整，且台灣時間現在位於 `[開始, 結束)`，才回傳 `isWorkingToday=true`。結束時間早於或等於開始時間時視為翌日。目前執勤優先選取涵蓋當下的核准班表，不受未關閉的其他日期營業期影響；指定日期的點餐目錄仍限制於該日。
+2. 不符合上述條件 → `off` / `未執勤`。
+3. 執勤中且當下存在 `active` 的 `STAFF_RESERVATIONS` 或 `STAFF_BUSY_BLOCKS` → `busy` / `指名中`。
+4. 執勤中且沒有占用 → `available` / `待命中`。
 
-如果今天沒有 schedule row，目前預設視為有上班。`todayShift` 現在固定回傳 `null`。
+公開列表、公開詳細資料、後台列表與後台詳細資料共用 `StaffDutySql.IsOnDuty`。判斷不依 `FlowVersion` 分流，不讀舊 `STAFF_SCHEDULES`，也不讓 `STAFF_DAILY_WORK_MODES.IS_WORKING` 覆蓋核准班表；沒有核准上班時段時不預設上班。`todayShift` 回傳核准班表的日期及起訖時間，無有效班表時為 `null`。
+
+`isNominatable` 仍由店員的開放指名設定與該日 `STOP_ACCEPTING_NEW_ORDERS` 決定，不代表目前空閒。新指名採同一套核准班表規則檢查預約開始時間（保留班前預約能力），停止接單則另行拒絕新指名。當班通知的 `working_today`／`roles` 收件人也使用相同時段判斷，跨午夜以涵蓋當下的核准班表為準。
 
 ## 8. 後台 Admin API
 
@@ -405,11 +408,13 @@ Cookie 特性：
 | GET | `/api/admin/staff-members` | 所有角色可讀完整列表 |
 | GET | `/api/admin/staff-members/{id}` | 所有角色可讀任一店員完整資料 |
 | PUT | `/api/admin/staff-members/{id}` | 管理者可編輯任一店員；clerk 只能編輯自己綁定的 id |
-| PUT | `/api/admin/staff-members/{id}/status` | 同上，可更新 `isWorkingToday` 或 `isActive` |
+| PUT | `/api/admin/staff-members/{id}/status` | 同上，只可更新 `isActive`；提供 `isWorkingToday` 回傳 `STAFF_DUTY_PLAN_REQUIRED` |
 | PUT | `/api/admin/staff-members/order` | 只有管理者可排序 |
 | DELETE | `/api/admin/staff-members/{id}` | 只有管理者；硬刪服務、gallery、schedule 與 staff row；若已綁定後台帳號則回傳 409 `STAFF_MEMBER_HAS_ADMIN_ACCOUNT` |
 
 目前沒有 `POST /api/admin/staff-members`。新店員是透過註冊流程建立，或需由資料庫 / 未來新增管理端點建立。
+
+`PUT /api/admin/staff-members/{id}/today-work-mode` 只調整職位與停止接單；舊呼叫端提供的 `isWorking` 不會改變執勤判斷。請假或提前下班請更新值班規劃並依權限核准。後台列表新增選填回應欄位 `todayShift`，即使尚未到班或已下班仍可查看當日核准時段。
 
 店員主資料新增以下排程欄位：
 

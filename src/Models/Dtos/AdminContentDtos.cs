@@ -134,7 +134,8 @@ public sealed class UpdateStaffDailyWorkModeRequest
 {
     public bool? StopAcceptingNewOrders { get; init; }
 
-    public bool IsWorking { get; init; } = true;
+    // Compatibility input only; duty status is derived from the approved plan.
+    public bool IsWorking { get; init; }
 
     public List<string> ScheduledRoles { get; init; } = [];
 
@@ -265,7 +266,8 @@ public sealed record AdminStaffMemberListItemDto(
     bool IsNominatable,
     int SortOrder,
     bool IsActive,
-    AdminStaffDailyWorkModeDto? TodayWorkMode = null);
+    AdminStaffDailyWorkModeDto? TodayWorkMode = null,
+    string? TodayShift = null);
 
 public sealed class SaveStaffMemberRequest
 {
@@ -295,6 +297,7 @@ public sealed class SaveStaffMemberRequest
 
     public string? ProfileBio { get; init; }
 
+    // Legacy profile input only; ignored. Approved duty plans determine status.
     public bool IsWorkingToday { get; init; } = true;
 
     [Range(0, 1440)]
