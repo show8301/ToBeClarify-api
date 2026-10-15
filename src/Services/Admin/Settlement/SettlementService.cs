@@ -260,6 +260,7 @@ public sealed class SettlementService : ISettlementService
         foreach (var input in source.StaffInputs) staffNames[input.StaffId] = input.DisplayName;
         var designatedBase = new Dictionary<string, decimal>(StringComparer.Ordinal);
         var designatedShare = new Dictionary<string, decimal>(StringComparer.Ordinal);
+        var designatedOrders = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         var champagneBase = new Dictionary<string, decimal>(StringComparer.Ordinal);
         var designatedTips = source.Tips.Where(x => !string.IsNullOrWhiteSpace(x.StaffId))
             .GroupBy(x => x.StaffId!, StringComparer.Ordinal).ToDictionary(x => x.Key, x => (decimal)x.Sum(t => t.StaffAmount), StringComparer.Ordinal);
@@ -287,9 +288,12 @@ public sealed class SettlementService : ISettlementService
             return revenueSubtotal <= 0 ? 0 : rawAmount * (decimal)revenueCollected / revenueSubtotal;
         }
 
-        void AddDesignated(string staffId, decimal amount, decimal percentage)
+        void AddDesignated(string staffId, decimal amount, decimal percentage, string orderId)
         {
             if (string.IsNullOrWhiteSpace(staffId)) return;
+            if (!designatedOrders.TryGetValue(staffId, out var orders))
+                designatedOrders[staffId] = orders = new HashSet<string>(StringComparer.Ordinal);
+            orders.Add(orderId);
             designatedBase[staffId] = designatedBase.GetValueOrDefault(staffId) + amount;
             designatedShare[staffId] = designatedShare.GetValueOrDefault(staffId) + amount * percentage / 100m;
         }
@@ -305,7 +309,7 @@ public sealed class SettlementService : ISettlementService
                     (item.ItemType is "menu_item" or "menu_set") && !item.IsChampagneTower);
                 if (item.ItemType == "nomination_base")
                 {
-                    AddDesignated(item.ReferenceId ?? string.Empty, amount, rule.DesignatedSharePercentage);
+                    AddDesignated(item.ReferenceId ?? string.Empty, amount, rule.DesignatedSharePercentage, item.OrderId);
                     directCompany += amount * (100m - rule.DesignatedSharePercentage) / 100m;
                 }
                 else if (item.ItemType == "staff_service")
@@ -317,7 +321,7 @@ public sealed class SettlementService : ISettlementService
                         anomalies.Add(new SettlementAnomalyDto("SERVICE_STAFF_UNRESOLVED", "服務項目找不到唯一指名人員。", item.ItemId));
                     else
                     {
-                        AddDesignated(staffId, amount, rule.DesignatedSharePercentage);
+                        AddDesignated(staffId, amount, rule.DesignatedSharePercentage, item.OrderId);
                         directCompany += amount * (100m - rule.DesignatedSharePercentage) / 100m;
                     }
                 }
@@ -339,7 +343,7 @@ public sealed class SettlementService : ISettlementService
         foreach (var addon in source.Addons)
         {
             var amount = AmountFor(addon.OrderId, addon.LineTotal);
-            AddDesignated(addon.StaffId, amount, rule.DesignatedSharePercentage);
+            AddDesignated(addon.StaffId, amount, rule.DesignatedSharePercentage, addon.OrderId);
             directCompany += amount * (100m - rule.DesignatedSharePercentage) / 100m;
             staffNames.TryAdd(addon.StaffId, addon.StaffId);
         }
@@ -365,7 +369,7 @@ public sealed class SettlementService : ISettlementService
             var nominees = room.OrderId is not null ? nomineeMap.GetValueOrDefault(room.OrderId, []) : [];
             if (nominees.Length == 1)
             {
-                AddDesignated(nominees[0], amount, rule.PublicRoomStaffPercentage);
+                AddDesignated(nominees[0], amount, rule.PublicRoomStaffPercentage, room.OrderId!);
                 directCompany += amount * (100m - rule.PublicRoomStaffPercentage) / 100m;
                 staffNames.TryAdd(nominees[0], nominees[0]);
             }
@@ -415,7 +419,7 @@ public sealed class SettlementService : ISettlementService
         var results = (run.DayType == "event"
             ? CalculateEventResults(runCopy, source, rule, grossRevenue - champagneShare, anomalies)
             : CalculateNormalResults(runCopy, source, rule, designatedBase, designatedShare, designatedTips,
-                servicePool, backstagePool, dedicatedShareByOwner, staffNames, anomalies)).ToList();
+                servicePool, backstagePool, dedicatedShareByOwner, staffNames, designatedOrders, anomalies)).ToList();
         runCopy.ActivityNetRevenue = run.DayType == "event" ? grossRevenue - champagneShare - run.ActivityExpense : 0;
         foreach (var recipient in champagneBase)
             results.Add(MakeResult(runCopy, recipient.Key, "champagne_recipient", 0, 0, recipient.Value,
@@ -542,7 +546,8 @@ public sealed class SettlementService : ISettlementService
         SettlementSourceData source, SettlementRuleRow rule, IReadOnlyDictionary<string, decimal> designatedBase,
         IReadOnlyDictionary<string, decimal> designatedShare, IReadOnlyDictionary<string, decimal> designatedTips,
         decimal servicePool, decimal backstagePool, IReadOnlyDictionary<string, decimal> dedicatedShareByOwner,
-        IReadOnlyDictionary<string, string> staffNames, List<SettlementAnomalyDto> anomalies)
+        IReadOnlyDictionary<string, string> staffNames, IReadOnlyDictionary<string, HashSet<string>> designatedOrders,
+        List<SettlementAnomalyDto> anomalies)
     {
         var inputs = source.StaffInputs;
         var results = new Dictionary<(string? StaffId, string Role), SettlementResultLineRow>();
@@ -563,7 +568,19 @@ public sealed class SettlementService : ISettlementService
         foreach (var staffId in designatedBase.Keys.Concat(designatedTips.Keys).Distinct(StringComparer.Ordinal))
         {
             var input = inputs.FirstOrDefault(x => x.StaffId == staffId && x.Role == "designated");
-            if (input is null) anomalies.Add(new SettlementAnomalyDto("DESIGNATED_INPUT_MISSING", "有指名營業額但沒有指名人員工時輸入。", staffId));
+            if (input is null)
+            {
+                var orderIds = (designatedOrders.TryGetValue(staffId, out var revenueOrders)
+                        ? revenueOrders.AsEnumerable() : Enumerable.Empty<string>())
+                    .Concat(source.Tips.Where(x => x.StaffId == staffId).Select(x => x.OrderId))
+                    .ToHashSet(StringComparer.Ordinal);
+                var orders = source.Orders.Where(x => orderIds.Contains(x.OrderId))
+                    .OrderBy(x => x.OrderNumber, StringComparer.Ordinal)
+                    .Select(x => new SettlementAnomalyOrderDto(x.OrderId, x.OrderNumber)).ToArray();
+                anomalies.Add(new SettlementAnomalyDto("DESIGNATED_INPUT_MISSING",
+                    "有指名營業額或指定小費，但尚未建立「指名人員」角色的工時輸入。", staffId,
+                    staffNames.GetValueOrDefault(staffId), orders));
+            }
             var hours = input is null ? 0 : payable.GetValueOrDefault((staffId, "designated"));
             AddResult(results, run, staffId, "designated", hours, rule.DesignatedHourlyRate,
                 designatedBase.GetValueOrDefault(staffId), rule.DesignatedSharePercentage,

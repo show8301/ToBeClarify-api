@@ -125,6 +125,7 @@ public sealed class SettlementResultLineRow
 
 public sealed class SettlementOrderRevenueRow
 {
+    public string OrderNumber { get; set; } = string.Empty;
     public int MealCreditApplied { get; set; }
     public string OrderId { get; set; } = string.Empty;
     public int TotalAmount { get; set; }

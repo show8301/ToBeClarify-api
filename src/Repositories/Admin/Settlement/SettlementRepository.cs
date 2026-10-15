@@ -113,7 +113,7 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
         CancellationToken cancellationToken)
     {
         const string sql = """
-            SELECT O.`ID` AS OrderId, O.`TOTAL_AMOUNT` AS TotalAmount, O.`SUBTOTAL` AS Subtotal,
+            SELECT O.`ID` AS OrderId, O.`ORDER_NUMBER` AS OrderNumber, O.`TOTAL_AMOUNT` AS TotalAmount, O.`SUBTOTAL` AS Subtotal,
                    COALESCE(SUM(T.`TIP_AMOUNT`), 0) AS TipAmount, A.`ADJUSTED_AMOUNT` AS AdjustedAmount,
                    O.`MEAL_CREDIT_APPLIED` AS MealCreditApplied
             FROM `ORDERS` O
@@ -123,7 +123,7 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
                 AND A.`SOURCE_TYPE` = 'order' AND A.`SOURCE_ID` = O.`ID`
             WHERE S.`BUSINESS_DATE` = @BusinessDate
               AND O.`ORDER_STATUS` NOT IN ('cancelled', 'expired', 'rejected')
-            GROUP BY O.`ID`, O.`TOTAL_AMOUNT`, O.`SUBTOTAL`, O.`MEAL_CREDIT_APPLIED`, A.`ADJUSTED_AMOUNT`;
+            GROUP BY O.`ID`, O.`ORDER_NUMBER`, O.`TOTAL_AMOUNT`, O.`SUBTOTAL`, O.`MEAL_CREDIT_APPLIED`, A.`ADJUSTED_AMOUNT`;
 
             SELECT O.`ID` AS OrderId, I.`ID` AS ItemId, I.`ITEM_TYPE` AS ItemType,
                    I.`REFERENCE_ID` AS ReferenceId, I.`PARENT_ITEM_ID` AS ParentItemId,

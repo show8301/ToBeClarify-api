@@ -143,7 +143,10 @@ public sealed record SettlementResultLineDto(
     string AnomalyStatus,
     string? AnomalyNote);
 
-public sealed record SettlementAnomalyDto(string Code, string Message, string? SourceId = null);
+public sealed record SettlementAnomalyOrderDto(string OrderId, string OrderNumber);
+
+public sealed record SettlementAnomalyDto(string Code, string Message, string? SourceId = null,
+    string? StaffName = null, IReadOnlyList<SettlementAnomalyOrderDto>? Orders = null);
 
 public sealed record SettlementOverviewDto(
     SettlementRunDto Run,
