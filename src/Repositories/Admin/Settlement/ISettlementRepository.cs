@@ -18,6 +18,7 @@ public sealed class SettlementSourceData
     public IReadOnlyList<SettlementRunRow> Runs { get; init; } = [];
     public SettlementCashSummaryRow Cash { get; init; } = new();
     public SettlementPeriodSummaryRow Period { get; init; } = new();
+    public IReadOnlyList<SettlementAnomalyDto> AttendanceAnomalies { get; init; } = [];
 }
 
 public interface ISettlementRepository
@@ -80,4 +81,5 @@ public sealed class SaveCalculationData
 {
     public SettlementRunRow Run { get; init; } = new();
     public IReadOnlyList<SettlementResultLineRow> Results { get; init; } = [];
+    public IReadOnlyList<SettlementStaffInputRow> StaffInputs { get; init; } = [];
 }

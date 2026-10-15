@@ -82,6 +82,16 @@ public sealed class SettlementStaffInputRow
     public string? Note { get; set; }
 }
 
+public sealed class SettlementAttendanceCandidateRow
+{
+    public string StaffId { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string? RoleTitle { get; set; }
+    public bool IsActive { get; set; }
+    public string ScheduledRolesJson { get; set; } = "[]";
+    public int ActualMinutes { get; set; }
+}
+
 public sealed class SettlementAttendanceBackfillRow
 {
     public string Id { get; set; } = string.Empty;

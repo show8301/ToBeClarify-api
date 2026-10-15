@@ -120,7 +120,7 @@ public sealed class SettlementService : ISettlementService
         var rule = await GetRuleForRunAsync(run, request.BusinessDate, cancellationToken);
         var source = await _repository.GetSourceDataAsync(run.Id, request.BusinessDate, cancellationToken);
         var calculation = Calculate(run, rule, source);
-        await _repository.SaveCalculationAsync(run.Id, calculation.ToSave(rule), ActorId(actor), _clock.LocalDateTime,
+        await _repository.SaveCalculationAsync(run.Id, calculation.ToSave(rule, source.StaffInputs), ActorId(actor), _clock.LocalDateTime,
             cancellationToken);
         return await GetOverviewAsync(request.BusinessDate, request.SessionNo, cancellationToken);
     }
@@ -250,7 +250,7 @@ public sealed class SettlementService : ISettlementService
 
     private CalculationResult Calculate(SettlementRunRow run, SettlementRuleRow rule, SettlementSourceData source)
     {
-        var anomalies = new List<SettlementAnomalyDto>();
+        var anomalies = new List<SettlementAnomalyDto>(source.AttendanceAnomalies);
         var orderMap = source.Orders.ToDictionary(x => x.OrderId, StringComparer.Ordinal);
         var itemMap = source.Items.GroupBy(x => x.OrderId).ToDictionary(x => x.Key, x => x.ToArray(), StringComparer.Ordinal);
         var nomineeMap = source.Nominees.GroupBy(x => x.OrderId).ToDictionary(x => x.Key,
@@ -565,7 +565,8 @@ public sealed class SettlementService : ISettlementService
         if (backstagePool > 0 && backstage.Length == 0)
             anomalies.Add(new SettlementAnomalyDto("BACKSTAGE_DENOMINATOR_ZERO", "幕後技術人員參與人數為 0，需手動處理。"));
 
-        foreach (var staffId in designatedBase.Keys.Concat(designatedTips.Keys).Distinct(StringComparer.Ordinal))
+        foreach (var staffId in designatedBase.Keys.Concat(designatedTips.Keys)
+                     .Concat(inputs.Where(x => x.Role == "designated").Select(x => x.StaffId)).Distinct(StringComparer.Ordinal))
         {
             var input = inputs.FirstOrDefault(x => x.StaffId == staffId && x.Role == "designated");
             if (input is null)
@@ -586,6 +587,11 @@ public sealed class SettlementService : ISettlementService
                 designatedBase.GetValueOrDefault(staffId), rule.DesignatedSharePercentage,
                 designatedShare.GetValueOrDefault(staffId), designatedTips.GetValueOrDefault(staffId),
                 PublicTipFor(input, hours, publicTips, tipHours), 1, staffNames.GetValueOrDefault(staffId));
+            if (input is null)
+            {
+                results[(staffId, "designated")].AnomalyStatus = "manual";
+                results[(staffId, "designated")].AnomalyNote = "缺少指名人員計薪輸入；目前按 0 工時計算底薪，分潤與指定小費僅供預覽。";
+            }
         }
         foreach (var input in inputs.Where(x => x.Role is "service" or "manager"))
         {
@@ -823,6 +829,10 @@ public sealed class SettlementService : ISettlementService
     private sealed record CalculationResult(SettlementRunRow Run, IReadOnlyList<SettlementResultLineRow> Results,
         SettlementSummaryDto Summary, IReadOnlyList<SettlementAnomalyDto> Anomalies)
     {
-        public SaveCalculationData ToSave(SettlementRuleRow rule) => new() { Run = Run, Results = Results };
+        public SaveCalculationData ToSave(SettlementRuleRow rule, IReadOnlyList<SettlementStaffInputRow> inputs) => new()
+        {
+            Run = Run, Results = Results,
+            StaffInputs = inputs
+        };
     }
 }

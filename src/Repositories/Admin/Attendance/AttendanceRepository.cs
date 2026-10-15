@@ -265,46 +265,11 @@ public sealed class AttendanceRepository(AppDbContext dbContext)
             x.BaseEventId, x.OperationId, x.Reason, Offset(x.CreatedAt));
 
     private static int CalculateWorkedMinutes(IEnumerable<EventRow> source)
-    {
-        var rows = source.ToArray();
-        var intervals = new List<(DateTime Start, DateTime End)>();
-        var manual = rows.Where(x => x.EventType == "manual_interval" && x.EventEndAt is not null)
-            .Select(x => (x.EventAt, x.EventEndAt!.Value)).ToArray();
-        if (manual.Length > 0)
-            intervals.AddRange(manual);
-        else
+        => AttendanceMinutes.Worked(source.Select(x => new AttendanceMinuteEvent
         {
-            var clockIns = rows.Where(x => x.EventType == "clock_in")
-                .ToDictionary(x => x.Id, x => x.EventAt, StringComparer.Ordinal);
-            intervals.AddRange(rows.Where(x => x.EventType == "clock_out" && x.BaseEventId is not null && clockIns.ContainsKey(x.BaseEventId))
-                .Select(x => (clockIns[x.BaseEventId!], x.EventAt)));
-            if (intervals.Count == 0)
-                intervals.AddRange(rows.Where(x => x.EventType == "scheduled_end" && x.MinutesDelta > 0)
-                    .Select(x => (x.EventAt.AddMinutes(-x.MinutesDelta), x.EventAt)));
-        }
-        var total = 0d;
-        DateTime? mergedStart = null;
-        DateTime? mergedEnd = null;
-        foreach (var interval in intervals.Where(x => x.End > x.Start).OrderBy(x => x.Start).ThenBy(x => x.End))
-        {
-            if (mergedStart is null)
-            {
-                mergedStart = interval.Start;
-                mergedEnd = interval.End;
-            }
-            else if (interval.Start <= mergedEnd)
-                mergedEnd = interval.End > mergedEnd ? interval.End : mergedEnd;
-            else
-            {
-                total += (mergedEnd!.Value - mergedStart.Value).TotalMinutes;
-                mergedStart = interval.Start;
-                mergedEnd = interval.End;
-            }
-        }
-        if (mergedStart is not null) total += (mergedEnd!.Value - mergedStart.Value).TotalMinutes;
-        return Math.Max(0, (int)Math.Floor(total));
-    }
-
+            Id = x.Id, StaffId = x.StaffId, EventType = x.EventType, EventAt = x.EventAt,
+            EventEndAt = x.EventEndAt, BaseEventId = x.BaseEventId, MinutesDelta = x.MinutesDelta, Source = x.Source
+        }));
     private static DateTimeOffset Offset(DateTime value) => new(DateTime.SpecifyKind(value, DateTimeKind.Unspecified), TimeSpan.FromHours(8));
 
     private sealed class PlanRow { public string Id {get;set;}=""; public string StaffId {get;set;}=""; public string DisplayName {get;set;}=""; public DateTime BusinessDate {get;set;} public TimeSpan? StartTime {get;set;} public TimeSpan? EndTime {get;set;} public bool IsWorking {get;set;} public string ApprovalStatus {get;set;}=""; }

@@ -190,25 +190,8 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
             SELECT I.`ID` AS Id, I.`SETTLEMENT_ID` AS SettlementId, I.`STAFF_ID` AS StaffId,
                    I.`ROLE` AS Role, M.`DISPLAY_NAME` AS DisplayName, M.`ROLE_TITLE` AS RoleTitle,
                    M.`IS_ACTIVE` AS IsActive, COALESCE(P.`IS_WORKING`, S.`IS_WORKING`, FALSE) AS IsWorking,
-                   CASE WHEN EXISTS (SELECT 1 FROM `STAFF_ATTENDANCE_EVENTS` E WHERE E.`STAFF_MEMBER_ID`=I.`STAFF_ID`
-                                     AND E.`BUSINESS_DATE`=@BusinessDate
-                                     AND E.`EVENT_TYPE` IN ('clock_out','scheduled_end','manual_interval','adjustment'))
-                        THEN COALESCE((CASE WHEN EXISTS (SELECT 1 FROM `STAFF_ATTENDANCE_EVENTS` E0
-                                                         WHERE E0.`STAFF_MEMBER_ID`=I.`STAFF_ID` AND E0.`BUSINESS_DATE`=@BusinessDate
-                                                           AND E0.`EVENT_TYPE`='manual_interval')
-                                           THEN (SELECT SUM(E1.`MINUTES_DELTA`) FROM `STAFF_ATTENDANCE_EVENTS` E1
-                                                 WHERE E1.`STAFF_MEMBER_ID`=I.`STAFF_ID` AND E1.`BUSINESS_DATE`=@BusinessDate
-                                                   AND E1.`EVENT_TYPE`='manual_interval')
-                                           ELSE (SELECT SUM(E2.`MINUTES_DELTA`) FROM `STAFF_ATTENDANCE_EVENTS` E2
-                                                 WHERE E2.`STAFF_MEMBER_ID`=I.`STAFF_ID` AND E2.`BUSINESS_DATE`=@BusinessDate
-                                                   AND E2.`EVENT_TYPE` IN ('clock_out','scheduled_end')) END), 0)
-                             + COALESCE((SELECT SUM(E3.`MINUTES_DELTA`) FROM `STAFF_ATTENDANCE_EVENTS` E3
-                                         WHERE E3.`STAFF_MEMBER_ID`=I.`STAFF_ID` AND E3.`BUSINESS_DATE`=@BusinessDate
-                                           AND E3.`EVENT_TYPE`='adjustment'), 0)
-                        ELSE I.`ACTUAL_MINUTES` END AS ActualMinutes, I.`ACTIVITY_HOURS` AS ActivityHours,
-                   CASE WHEN EXISTS (SELECT 1 FROM `STAFF_ATTENDANCE_EVENTS` E WHERE E.`STAFF_MEMBER_ID`=I.`STAFF_ID`
-                                     AND E.`BUSINESS_DATE`=@BusinessDate AND E.`SOURCE` IN ('scheduled','manual'))
-                        THEN 'clock' ELSE I.`ATTENDANCE_SOURCE` END AS AttendanceSource,
+                   I.`ACTUAL_MINUTES` AS ActualMinutes, I.`ACTIVITY_HOURS` AS ActivityHours,
+                   I.`ATTENDANCE_SOURCE` AS AttendanceSource,
                    I.`ATTENDANCE_REQUEST_ID` AS AttendanceRequestId,
                    I.`ATTENDANCE_APPROVED_BY` AS AttendanceApprovedBy,
                    I.`ATTENDANCE_APPROVED_AT` AS AttendanceApprovedAt,
@@ -220,6 +203,18 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
             LEFT JOIN `STAFF_DUTY_PLANS` P ON P.`STAFF_MEMBER_ID` = I.`STAFF_ID` AND P.`BUSINESS_DATE` = @BusinessDate
                 AND P.`APPROVAL_STATUS`='approved'
             WHERE I.`SETTLEMENT_ID` = @SettlementId;
+
+            SELECT P.`STAFF_MEMBER_ID` AS StaffId, M.`DISPLAY_NAME` AS DisplayName,
+                   M.`ROLE_TITLE` AS RoleTitle, M.`IS_ACTIVE` AS IsActive,
+                   P.`SCHEDULED_ROLES_JSON` AS ScheduledRolesJson
+            FROM `STAFF_DUTY_PLANS` P
+            INNER JOIN `STAFF_MEMBERS` M ON M.`ID` = P.`STAFF_MEMBER_ID`
+            WHERE P.`BUSINESS_DATE` = @BusinessDate AND P.`APPROVAL_STATUS` = 'approved' AND P.`IS_WORKING` = TRUE;
+
+            SELECT `ID` AS Id, `STAFF_MEMBER_ID` AS StaffId, `EVENT_TYPE` AS EventType,
+                   `EVENT_AT` AS EventAt, `EVENT_END_AT` AS EventEndAt,
+                   `BASE_EVENT_ID` AS BaseEventId, `MINUTES_DELTA` AS MinutesDelta, `SOURCE` AS Source
+            FROM `STAFF_ATTENDANCE_EVENTS` WHERE `BUSINESS_DATE` = @BusinessDate;
 
             SELECT R.`ID` AS Id, R.`SETTLEMENT_ID` AS SettlementId, R.`STAFF_ID` AS StaffId,
                    R.`ROLE` AS Role, M.`DISPLAY_NAME` AS DisplayName, R.`PAYABLE_HOURS` AS PayableHours,
@@ -290,13 +285,31 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
         var addons = (await multi.ReadAsync<SettlementAddonRevenueRow>()).AsList();
         var admissions = (await multi.ReadAsync<SettlementAdmissionRow>()).AsList();
         var staffInputs = (await multi.ReadAsync<SettlementStaffInputRow>()).AsList();
+        var attendanceCandidates = (await multi.ReadAsync<SettlementAttendanceCandidateRow>()).AsList();
+        var attendanceEvents = (await multi.ReadAsync<AttendanceMinuteEvent>()).AsList();
         var results = (await multi.ReadAsync<SettlementResultLineRow>()).AsList();
         var attendanceBackfillRequests = (await multi.ReadAsync<SettlementAttendanceBackfillRow>()).AsList();
         var cash = await multi.ReadFirstOrDefaultAsync<SettlementCashSummaryRow>() ?? new SettlementCashSummaryRow();
         var period = await multi.ReadFirstOrDefaultAsync<SettlementPeriodSummaryRow>() ?? new SettlementPeriodSummaryRow();
+        var finalized = await connection.ExecuteScalarAsync<bool>(new CommandDefinition(
+            "SELECT COUNT(*) > 0 FROM `SETTLEMENT_RUNS` WHERE `ID` = @SettlementId AND `STATUS` = 'finalized';",
+            new { SettlementId = settlementId }, cancellationToken: cancellationToken));
+        var eventsByStaff = attendanceEvents.GroupBy(x => x.StaffId)
+            .ToDictionary(x => x.Key, x => x.ToArray(), StringComparer.Ordinal);
+        foreach (var candidate in attendanceCandidates)
+            candidate.ActualMinutes = AttendanceMinutes.Effective(eventsByStaff.GetValueOrDefault(candidate.StaffId, []));
+        foreach (var input in finalized ? Enumerable.Empty<SettlementStaffInputRow>() : staffInputs)
+        {
+            var events = eventsByStaff.GetValueOrDefault(input.StaffId, []);
+            if (events.Any(x => x.EventType is "clock_out" or "scheduled_end" or "manual_interval" or "adjustment"))
+                input.ActualMinutes = AttendanceMinutes.Effective(events);
+            if (events.Any(x => x.Source is "scheduled" or "manual")) input.AttendanceSource = "clock";
+        }
+        var attendanceAnomalies = finalized ? [] : SettlementAttendanceSync.MergeMissingInputs(settlementId, staffInputs, attendanceCandidates);
         return new SettlementSourceData { Orders = orders, Items = items, Nominees = nominees, Tips = tips,
             Rooms = rooms, Addons = addons, Admissions = admissions, StaffInputs = staffInputs, Results = results,
-            AttendanceBackfillRequests = attendanceBackfillRequests, Cash = cash, Period = period };
+            AttendanceBackfillRequests = attendanceBackfillRequests, Cash = cash, Period = period,
+            AttendanceAnomalies = attendanceAnomalies };
     }
 
     public async Task SaveInputsAsync(string settlementId, SaveInputsData inputs, string actorId, DateTime now,
@@ -344,6 +357,38 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var status = await connection.QuerySingleAsync<string>(new CommandDefinition(
+            "SELECT `STATUS` FROM `SETTLEMENT_RUNS` WHERE `ID` = @SettlementId FOR UPDATE;",
+            new { SettlementId = settlementId }, transaction, cancellationToken: cancellationToken));
+        if (status == "finalized") throw new BusinessException("正式結算已鎖定。", "SETTLEMENT_LOCKED");
+        foreach (var input in calculation.StaffInputs)
+        {
+            if (!string.IsNullOrEmpty(input.Id))
+            {
+                await connection.ExecuteAsync(new CommandDefinition("""
+                    UPDATE `SETTLEMENT_STAFF_INPUTS`
+                    SET `ACTUAL_MINUTES` = @ActualMinutes, `ATTENDANCE_SOURCE` = @AttendanceSource,
+                        `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId
+                    WHERE `ID` = @Id AND `SETTLEMENT_ID` = @SettlementId;
+                    """, new { input.Id, SettlementId = settlementId, input.ActualMinutes,
+                        input.AttendanceSource, Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
+                continue;
+            }
+            var alreadyEntered = await connection.ExecuteScalarAsync<int>(new CommandDefinition(
+                "SELECT COUNT(*) FROM `SETTLEMENT_STAFF_INPUTS` WHERE `SETTLEMENT_ID` = @SettlementId AND `STAFF_ID` = @StaffId;",
+                new { SettlementId = settlementId, input.StaffId }, transaction, cancellationToken: cancellationToken));
+            if (alreadyEntered > 0)
+                throw new ConflictException("計薪輸入已由其他操作更新，請重新計算。", "SETTLEMENT_INPUTS_CHANGED");
+            await connection.ExecuteAsync(new CommandDefinition("""
+                INSERT INTO `SETTLEMENT_STAFF_INPUTS`
+                    (`ID`, `SETTLEMENT_ID`, `STAFF_ID`, `ROLE`, `ACTUAL_MINUTES`, `ATTENDANCE_SOURCE`,
+                     `PUBLIC_TIP_ELIGIBLE`, `IS_BACKSTAGE_PARTICIPANT`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
+                VALUES (@Id, @SettlementId, @StaffId, @Role, @ActualMinutes, 'clock',
+                        @PublicTipEligible, @IsBackstageParticipant, @Now, @ActorId, @Now, @ActorId);
+                """, new { Id = Guid.NewGuid().ToString("D"), SettlementId = settlementId,
+                    input.StaffId, input.Role, input.ActualMinutes, input.PublicTipEligible, input.IsBackstageParticipant,
+                    Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
+        }
         await connection.ExecuteAsync(new CommandDefinition("""
             UPDATE `SETTLEMENT_RESULT_LINES`
             SET `ANOMALY_STATUS` = 'stale', `ANOMALY_NOTE` = 'superseded by a newer calculation'
