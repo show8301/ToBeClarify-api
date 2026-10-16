@@ -53,7 +53,9 @@ public sealed partial class OrderingService : IOrderingService
     public async Task<OrderSessionIssuedDto> CreateSessionAsync(CreateOrderSessionRequest request,
         ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
-        var gameId = Required(request.GameId, "GAME_ID_REQUIRED");
+        var identity = CharacterIdentity.Parse(request.GameId, request.ServerName,
+            _configuration.GetValue<bool>("OrderingIdentity:RequireServerForNewSessions"));
+        var gameId = identity.GameId;
         if (!string.IsNullOrWhiteSpace(request.CustomerUid) && !CustomerIdentityService.IsManager(actor))
             throw new ForbiddenException("連結既有 UID 需要管理員核對顧客。", "CUSTOMER_LINK_FORBIDDEN");
         if (!string.IsNullOrWhiteSpace(request.CustomerUid))
@@ -73,7 +75,7 @@ public sealed partial class OrderingService : IOrderingService
         {
             Id = id,
             GameId = gameId,
-            CustomerName = string.IsNullOrWhiteSpace(request.CustomerName) ? gameId : request.CustomerName.Trim(),
+            CustomerName = string.IsNullOrWhiteSpace(request.CustomerName) ? identity.CharacterName : request.CustomerName.Trim(),
             BusinessDate = day.ToDateTime(TimeOnly.MinValue),
             BusinessPeriodId = context.BusinessPeriodId,
             FlowVersion = context.FlowVersion,
@@ -137,7 +139,9 @@ public sealed partial class OrderingService : IOrderingService
     public async Task<OrderSessionIssuedDto> RecoverSessionAsync(RecoverOrderSessionRequest request,
         CancellationToken cancellationToken)
     {
-        var gameId = Required(request.GameId, "GAME_ID_REQUIRED");
+        // No fallback from a qualified identity to a same-name legacy session.
+        // Bare-name recovery is retained only for explicitly selected old data.
+        var gameId = CharacterIdentity.Parse(request.GameId, request.ServerName).GameId;
         var context = await ResolveBusinessContextAsync(await _repository.GetSettingsAsync(cancellationToken),
             _clock.LocalDateTime, cancellationToken);
         var day = context.CurrentBusinessDate ?? context.ReferenceBusinessDate;

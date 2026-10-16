@@ -137,6 +137,12 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
         await connection.ExecuteScalarAsync<string>(new CommandDefinition("SELECT ID FROM ORDERING_RUNTIME_LOCKS WHERE ID='operating_period' FOR UPDATE",transaction:transaction,cancellationToken:cancellationToken));
         if(session.BusinessPeriodId is not null && await connection.ExecuteScalarAsync<int>(new CommandDefinition("SELECT COUNT(*) FROM BUSINESS_PERIODS WHERE ID=@Id AND PERIOD_STATUS='open'",new{Id=session.BusinessPeriodId},transaction,cancellationToken:cancellationToken))==0)
             throw new BusinessException("營業日已關店，請重新整理。", "BUSINESS_PERIOD_NOT_OPEN");
+        // Recheck after taking the operating-period lock so concurrent requests
+        // for the same character/server return the domain error, not a SQL 500.
+        if (await connection.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM CUSTOMER_ORDER_SESSIONS WHERE BUSINESS_DATE=@Day AND GAME_ID=@GameId;",
+            new { Day = session.BusinessDate.Date, session.GameId }, transaction, cancellationToken: cancellationToken)) > 0)
+            throw new BusinessException("此顧客今天已有點餐碼，請使用尋回功能。", "ORDER_SESSION_EXISTS");
         await connection.ExecuteAsync(new CommandDefinition(sql, new
         {
             session.Id, session.GameId, session.CustomerName, session.BusinessPeriodId,

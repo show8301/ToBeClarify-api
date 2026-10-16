@@ -20,8 +20,8 @@ public sealed class CustomerDeliveryController(CustomerIdentityService customers
         => Ok(ApiResponse<CustomerDetailDto>.Ok(await customers.Detail(uid, ct)));
 
     [HttpGet("customer-identity/candidates")]
-    public async Task<IActionResult> Candidates([FromQuery] string gameId, CancellationToken ct)
-        => Ok(ApiResponse<CustomerIdentityCandidatesDto>.Ok(await customers.Candidates(gameId, ct)));
+    public async Task<IActionResult> Candidates([FromQuery] string gameId, [FromQuery] string? serverName, CancellationToken ct)
+        => Ok(ApiResponse<CustomerIdentityCandidatesDto>.Ok(await customers.Candidates(gameId, ct, serverName)));
 
     [HttpPost("order-sessions/{sessionId}/customer-profile")]
     public async Task<IActionResult> Issue(string sessionId, LinkCustomerProfileRequest request, CancellationToken ct)

@@ -222,6 +222,11 @@ public sealed class CreateOrderSessionRequest
     [Required, StringLength(100, MinimumLength = 1)]
     public string GameId { get; init; } = string.Empty;
 
+    // Optional only during the old-Web compatibility window. The new Web
+    // always sends this; the API composes the persisted GameId.
+    [StringLength(16)]
+    public string? ServerName { get; init; }
+
     [StringLength(100)]
     public string? CustomerName { get; init; }
 
@@ -260,6 +265,9 @@ public sealed class RecoverOrderSessionRequest
 {
     [Required, StringLength(100, MinimumLength = 1)]
     public string GameId { get; init; } = string.Empty;
+
+    [StringLength(16)]
+    public string? ServerName { get; init; }
 
     [Required, RegularExpression("^[0-9]{6}$")]
     public string RecoveryCode { get; init; } = string.Empty;
