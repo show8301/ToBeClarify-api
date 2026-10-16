@@ -26,12 +26,10 @@ public sealed class CustomerIdentityService(CustomerDeliveryRepository repositor
     public static bool IsManager(ClaimsPrincipal actor)
         => actor.IsInRole(AdminRole.Manager) || actor.IsInRole(AdminRole.Developer);
 
-    public async Task<CustomerIdentityCandidatesDto> Candidates(string gameId, CancellationToken ct)
+    public async Task<CustomerIdentityCandidatesDto> Candidates(string gameId, CancellationToken ct, string? serverName = null)
     {
-        var normalized = NormalizeGameId(gameId);
-        if (normalized.Length is 0 or > 100)
-            throw new BusinessException("遊戲 ID 不正確。", "GAME_ID_REQUIRED");
-        return new(gameId.Trim(), await repository.IdentityCandidates(normalized, ct));
+        var identity = CharacterIdentity.Parse(gameId, serverName);
+        return new(identity.GameId, await repository.IdentityCandidates(NormalizeGameId(identity.GameId), ct));
     }
 
     public async Task<CustomerProfileDto> ResolveUid(string? uid, CancellationToken ct)
@@ -57,6 +55,9 @@ public sealed class CustomerIdentityService(CustomerDeliveryRepository repositor
     public async Task<CustomerProfileDto?> LinkFromOrdering(
         string sessionId, string gameId, string actorId, CancellationToken ct)
     {
+        // A bare name from an older Web cannot establish a server identity.
+        // Keep that visit unlinked for staff review, even with one candidate.
+        if (CharacterIdentity.Parse(gameId).ServerName is null) return null;
         var normalized = NormalizeGameId(gameId);
         if (normalized.Length is 0 or > 100) return null;
         var candidates = await repository.IdentityCandidates(normalized, ct);
