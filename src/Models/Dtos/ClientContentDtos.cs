@@ -60,7 +60,10 @@ public sealed record StaffListItemDto(
     string? TodayShift,
     bool IsNominatable,
     IReadOnlyList<StaffServiceDto> CommonServices,
-    IReadOnlyList<StaffServiceDto> SpecialServices);
+    IReadOnlyList<StaffServiceDto> SpecialServices)
+{
+    public string? ProfileBio { get; init; }
+}
 
 public sealed record StaffServiceDto(
     string Id,
