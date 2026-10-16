@@ -44,7 +44,10 @@ internal static class ClientContentMappings
             row.ShortBio, row.IsWorkingToday, row.CurrentStatus, row.StatusText, row.TodayShift,
             row.IsNominatable,
             serviceRows.Where(service => service.ServiceType == "common").Select(MapStaffService).ToArray(),
-            serviceRows.Where(service => service.ServiceType == "special").Select(MapStaffService).ToArray());
+            serviceRows.Where(service => service.ServiceType == "special").Select(MapStaffService).ToArray())
+        {
+            ProfileBio = row.ProfileBio
+        };
     }
 
     internal static StaffServiceDto MapStaffService(StaffServiceRow row)
