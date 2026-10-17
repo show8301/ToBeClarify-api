@@ -5,6 +5,7 @@ namespace ToBeClarify.Api.Repositories.Admin.Settlement;
 
 public sealed class SettlementSourceData
 {
+    public IReadOnlyList<SettlementAttendanceCandidateRow> PayrollAssignments { get; init; } = [];
     public IReadOnlyList<SettlementOrderRevenueRow> Orders { get; init; } = [];
     public IReadOnlyList<SettlementOrderItemRevenueRow> Items { get; init; } = [];
     public IReadOnlyList<SettlementNomineeRevenueRow> Nominees { get; init; } = [];
@@ -36,7 +37,7 @@ public interface ISettlementRepository
         CancellationToken cancellationToken);
     Task SaveCalculationAsync(string settlementId, SaveCalculationData calculation, string actorId, DateTime now,
         CancellationToken cancellationToken);
-    Task FinalizeAsync(string settlementId, string actorId, DateTime now, CancellationToken cancellationToken);
+    Task FinalizeAsync(string settlementId, int expectedInputVersion, string actorId, DateTime now, CancellationToken cancellationToken);
     Task<SettlementRunRow> ReopenAsync(DateOnly businessDate, int sessionNo, SettlementRuleRow rule,
         string reason, string actorId, DateTime now, CancellationToken cancellationToken);
     Task<SettlementAttendanceBackfillRow> SubmitAttendanceBackfillAsync(string settlementId, string staffId,
@@ -55,6 +56,7 @@ public interface ISettlementRepository
 
 public sealed class SaveInputsData
 {
+    public int? ExpectedInputVersion { get; init; }
     public string? DayType { get; init; }
     public string? RuleVersionId { get; init; }
     public int PublicTipAmount { get; init; }
@@ -67,6 +69,7 @@ public sealed class SaveInputsData
 
 public sealed class SaveStaffInputData
 {
+    public int? PayrollSnapshotVersion { get; init; }
     public string StaffId { get; init; } = string.Empty;
     public string Role { get; init; } = string.Empty;
     public int ActualMinutes { get; init; }

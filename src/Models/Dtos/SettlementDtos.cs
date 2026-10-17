@@ -64,7 +64,8 @@ public sealed record SettlementRunDto(
     decimal RetainedAmount = 0,
     int PendingFinanceCount = 0,
     string? CorrectsSettlementId = null,
-    int CorrectionVersion = 0);
+    int CorrectionVersion = 0,
+    int InputVersion = 0, int CalculationVersion = 1);
 
 public sealed record SettlementSummaryDto(
     decimal GrossRevenue,
@@ -107,7 +108,8 @@ public sealed record SettlementStaffInputDto(
     string? AttendanceBackfillStatus,
     string? AttendanceBackfillReason,
     string? AttendanceApprovedBy,
-    DateTime? AttendanceApprovedAt);
+    DateTime? AttendanceApprovedAt,
+    int? PayrollSnapshotVersion = null);
 
 public sealed record SettlementAttendanceBackfillDto(
     string Id,
@@ -156,7 +158,11 @@ public sealed record SettlementOverviewDto(
     IReadOnlyList<SettlementResultLineDto> Results,
     IReadOnlyList<SettlementAnomalyDto> Anomalies,
     IReadOnlyList<SettlementAttendanceBackfillDto> AttendanceBackfillRequests = null!,
-    SettlementWorkflowDto? Workflow = null);
+    SettlementWorkflowDto? Workflow = null,
+    IReadOnlyList<SettlementPayrollAssignmentDto>? PayrollAssignments = null);
+
+public sealed record SettlementPayrollAssignmentDto(string StaffId, string DisplayName, string? PayrollRole,
+    int? PayrollSnapshotVersion, bool CanUseBackstage, DateTime? StartedAt);
 
 public sealed record SettlementWorkflowDto(
     string? BusinessPeriodId,
@@ -176,6 +182,7 @@ public sealed record SettlementWorkflowDto(
 
 public sealed class SaveSettlementInputsRequest
 {
+    public int? ExpectedInputVersion { get; init; }
     [Required] public DateOnly BusinessDate { get; init; }
     [Range(1, int.MaxValue)] public int SessionNo { get; init; } = 1;
     [RegularExpression("^(normal|event)$")] public string? DayType { get; init; }
@@ -189,6 +196,7 @@ public sealed class SaveSettlementInputsRequest
 
 public sealed class SaveSettlementStaffInputRequest
 {
+    public int? PayrollSnapshotVersion { get; init; }
     [Required, StringLength(36)] public string StaffId { get; init; } = string.Empty;
     [Required, RegularExpression("^(designated|service|manager|backstage)$")] public string Role { get; init; } = "designated";
     [Range(0, 1000000)] public int ActualMinutes { get; init; }

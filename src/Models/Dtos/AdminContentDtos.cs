@@ -268,7 +268,8 @@ public sealed record AdminStaffMemberDto(
     IReadOnlyList<AdminStaffServiceDto> Services,
     IReadOnlyList<AdminStaffGalleryItemDto> Gallery,
     AdminStaffDailyWorkModeDto? TodayWorkMode = null,
-    bool CanUseManagerPayrollRole = false);
+    bool CanUseManagerPayrollRole = false,
+    bool CanUseBackstage = false);
 
 public sealed record AdminStaffMemberListItemDto(
     string Id,
@@ -283,7 +284,8 @@ public sealed record AdminStaffMemberListItemDto(
     bool IsActive,
     AdminStaffDailyWorkModeDto? TodayWorkMode = null,
     string? TodayShift = null,
-    bool CanUseManagerPayrollRole = false);
+    bool CanUseManagerPayrollRole = false,
+    bool CanUseBackstage = false);
 
 public sealed class SaveStaffMemberRequest
 {

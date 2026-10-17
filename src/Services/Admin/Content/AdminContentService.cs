@@ -146,7 +146,7 @@ public sealed class AdminContentService : IAdminContentService
         return rows.Select(row => new AdminStaffMemberListItemDto(
             row.Id, row.DisplayName, row.AvatarMediaId, _mediaUrls.BuildUrl(row.AvatarMediaId, "card"),
             row.RoleTitle, row.IsWorkingToday, row.BufferMinutes, row.IsNominatable,
-            row.SortOrder, row.IsActive, MapDailyWorkMode(row), row.TodayShift, row.CanUseManagerPayrollRole)).ToArray();
+            row.SortOrder, row.IsActive, MapDailyWorkMode(row), row.TodayShift, row.CanUseManagerPayrollRole, row.CanUseBackstage)).ToArray();
     }
 
     public async Task<AdminStaffMemberDto> GetStaffMemberAsync(string id, ClaimsPrincipal actor, CancellationToken cancellationToken)
@@ -252,12 +252,14 @@ public sealed class AdminContentService : IAdminContentService
         var roles = request.IsWorking ? NormalizeDailyRoles(request.ScheduledRoles, "DUTY_PLAN_ROLES_INVALID") : [];
         if (request.IsWorking && roles.Count == 0)
             throw new BusinessException("Working duty plans require at least one scheduled role.", "DUTY_PLAN_ROLES_REQUIRED");
+        if (roles.Contains("backstage") && !staff.CanUseBackstage)
+            throw new BusinessException("幕後支援僅限開發人員。", "DUTY_PLAN_BACKSTAGE_NOT_ALLOWED");
         var currentPlan = (await _repository.GetDutyPlansAsync(businessDate, businessDate, staff.Id, cancellationToken))
             .SingleOrDefault();
         var payrollRole = request.IsWorking
             ? request.PayrollRole ?? currentPlan?.PayrollRole ?? StaffWorkRoles.UnambiguousLegacyPayrollRole(roles)
             : null;
-        ValidatePayrollRole(payrollRole, request.IsWorking, staff.CanUseManagerPayrollRole);
+        ValidatePayrollRole(payrollRole, request.IsWorking, staff.CanUseManagerPayrollRole, staff.CanUseBackstage);
         var startTime = request.IsWorking ? NormalizeDutyTime(request.StartTime, "DUTY_PLAN_START_TIME_INVALID") : null;
         var endTime = request.IsWorking ? NormalizeDutyTime(request.EndTime, "DUTY_PLAN_END_TIME_INVALID") : null;
         if (request.IsWorking && (startTime is null || endTime is null))
@@ -302,7 +304,9 @@ public sealed class AdminContentService : IAdminContentService
         {
             var staff = await _repository.GetStaffMemberAsync(existing.StaffId, cancellationToken)
                 ?? throw new NotFoundException("Staff member not found.", "STAFF_NOT_FOUND");
-            ValidatePayrollRole(existing.PayrollRole, existing.IsWorking, staff.CanUseManagerPayrollRole);
+            ValidatePayrollRole(existing.PayrollRole, existing.IsWorking, staff.CanUseManagerPayrollRole, staff.CanUseBackstage);
+            if (ParseDailyRoles(existing.ScheduledRolesJson).Contains("backstage") && !staff.CanUseBackstage)
+                throw new BusinessException("幕後支援僅限開發人員。", "DUTY_PLAN_BACKSTAGE_NOT_ALLOWED");
         }
 
         await _repository.ReviewDutyPlanAsync(planId, action, request.Note,
@@ -474,24 +478,26 @@ public sealed class AdminContentService : IAdminContentService
             row.BufferMinutes, row.IsNominatable, row.SortOrder, row.IsActive,
             (await servicesTask).Select(Map).ToArray(), (await galleryTask).Select(item => new AdminStaffGalleryItemDto(
                 item.Id, item.StaffId, item.MediaId, _mediaUrls.BuildUrl(item.MediaId, "full"),
-                item.SortOrder, item.IsPublished)).ToArray(), MapDailyWorkMode(row), row.CanUseManagerPayrollRole);
+                item.SortOrder, item.IsPublished)).ToArray(), MapDailyWorkMode(row), row.CanUseManagerPayrollRole, row.CanUseBackstage);
     }
 
     private static AdminStaffDailyWorkModeDto MapDailyWorkMode(AdminStaffMemberRow row)
         => new(row.BusinessDate, row.IsWorkingToday,
             ParseDailyRoles(row.ScheduledRolesJson), ParseDailyRoles(row.ActiveRolesJson), row.StopAcceptingNewOrders,
-            row.PayrollRole, StaffWorkRoles.AllowedSupportRoles(row.IsNominatable));
+            row.PayrollRole, StaffWorkRoles.AllowedSupportRoles(row.IsNominatable, row.CanUseBackstage));
 
     private static AdminStaffDailyWorkModeDto MapDailyWorkMode(AdminStaffMemberListRow row)
         => new(row.BusinessDate, row.IsWorkingToday,
             ParseDailyRoles(row.ScheduledRolesJson), ParseDailyRoles(row.ActiveRolesJson), row.StopAcceptingNewOrders,
-            row.PayrollRole, StaffWorkRoles.AllowedSupportRoles(row.IsNominatable));
+            row.PayrollRole, StaffWorkRoles.AllowedSupportRoles(row.IsNominatable, row.CanUseBackstage));
 
-    private static void ValidatePayrollRole(string? role, bool isWorking, bool canUseManagerRole)
+    private static void ValidatePayrollRole(string? role, bool isWorking, bool canUseManagerRole, bool canUseBackstage)
     {
         if (!isWorking) return;
         if (role is not ("service" or "designated" or "manager" or "backstage"))
             throw new BusinessException("請先指定本班單一計薪職位；舊班表有多個職位時須由經理確認。", "DUTY_PLAN_PAYROLL_ROLE_REQUIRED");
+        if (role == "backstage" && !canUseBackstage)
+            throw new BusinessException("幕後計薪職位僅限開發人員。", "DUTY_PLAN_BACKSTAGE_NOT_ALLOWED");
         if (role == "manager" && !canUseManagerRole)
             throw new BusinessException("經理計薪職位僅適用於經理或開發者帳號。", "DUTY_PLAN_MANAGER_PAYROLL_NOT_ALLOWED");
     }

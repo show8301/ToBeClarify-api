@@ -21,6 +21,8 @@ public sealed class SettlementRuleRow
 
 public sealed class SettlementRunRow
 {
+    public int CalculationVersion { get; set; } = 1;
+    public int InputVersion { get; set; }
     public string Id { get; set; } = string.Empty;
     public DateTime BusinessDate { get; set; }
     public int SessionNo { get; set; }
@@ -63,6 +65,9 @@ public sealed class SettlementRunRow
 
 public sealed class SettlementStaffInputRow
 {
+    public DateTime CreatedAt { get; set; }
+    public string CreatedBy { get; set; } = "";
+    public int? PayrollSnapshotVersion { get; set; }
     public string Id { get; set; } = string.Empty;
     public string SettlementId { get; set; } = string.Empty;
     public string StaffId { get; set; } = string.Empty;
@@ -84,6 +89,11 @@ public sealed class SettlementStaffInputRow
 
 public sealed class SettlementAttendanceCandidateRow
 {
+    public string? PayrollRole { get; set; }
+    public int? PayrollSnapshotVersion { get; set; }
+    public bool CanUseBackstage { get; set; }
+    public bool BackstageParticipant { get; set; }
+    public DateTime? StartedAt { get; set; }
     public string StaffId { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
     public string? RoleTitle { get; set; }
@@ -94,6 +104,7 @@ public sealed class SettlementAttendanceCandidateRow
 
 public sealed class SettlementAttendanceBackfillRow
 {
+    public int? PayrollSnapshotVersion { get; set; }
     public string Id { get; set; } = string.Empty;
     public string SettlementId { get; set; } = string.Empty;
     public string StaffId { get; set; } = string.Empty;

@@ -26,11 +26,13 @@ public sealed class AttendanceService(AttendanceRepository repository, IAppClock
         var staffId = CanManageAll(actor) ? requestedStaff ?? OwnStaffId(actor) : OwnStaffId(actor);
         var reason = string.IsNullOrWhiteSpace(request.Reason) ? null : request.Reason.Trim();
         if (reason?.Length > 500) throw new BusinessException("原因最多 500 字。", "ATTENDANCE_REASON_TOO_LONG");
+        if (request.Action == "confirm_payroll_role" && !CanManageAll(actor))
+            throw new ForbiddenException("只有經理可確認或更正上班計薪職位。", "PAYROLL_CONFIRM_FORBIDDEN");
         var normalized = new StaffAttendanceActionRequest
         {
             OperationId = op.ToString(), BusinessDate = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
             StaffId = staffId, Action = request.Action.Trim().ToLowerInvariant(), OccurredAt = request.OccurredAt,
-            EndedAt = request.EndedAt, Minutes = request.Minutes, Reason = reason
+            PayrollRole = request.PayrollRole, EndedAt = request.EndedAt, Minutes = request.Minutes, Reason = reason
         };
         return await repository.ApplyAsync(staffId, normalized, clock.LocalDateTime, ActorId(actor), ct);
     }

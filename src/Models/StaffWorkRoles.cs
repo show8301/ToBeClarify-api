@@ -4,8 +4,9 @@ namespace ToBeClarify.Api.Models;
 
 public static class StaffWorkRoles
 {
-    public static IReadOnlyList<string> AllowedSupportRoles(bool isNominatable)
-        => isNominatable ? ["service", "designated", "backstage"] : ["service", "backstage"];
+    public static IReadOnlyList<string> AllowedSupportRoles(bool isNominatable, bool canUseBackstage = false)
+        => new[] { "service", isNominatable ? "designated" : null, canUseBackstage ? "backstage" : null }
+            .OfType<string>().ToArray();
 
     public static string[] ReadSupportRoles(string? json)
     {

@@ -76,6 +76,7 @@ public sealed class AdminStaffMemberRow
     public bool StopAcceptingNewOrders { get; set; }
     public string? PayrollRole { get; set; }
     public bool CanUseManagerPayrollRole { get; set; }
+    public bool CanUseBackstage { get; set; }
 }
 
 public sealed class AdminStaffMemberListRow
@@ -96,6 +97,7 @@ public sealed class AdminStaffMemberListRow
     public bool StopAcceptingNewOrders { get; set; }
     public string? PayrollRole { get; set; }
     public bool CanUseManagerPayrollRole { get; set; }
+    public bool CanUseBackstage { get; set; }
 }
 
 public sealed class AdminDutyPlanRow
