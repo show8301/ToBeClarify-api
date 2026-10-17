@@ -206,6 +206,9 @@ public sealed class SettlementAdmissionRow
 {
     public int SessionCount { get; set; }
     public string? AdmissionFeeText { get; set; }
+    public bool UseAdmissionLedger { get; set; }
+    public decimal LedgerReceivable { get; set; }
+    public int UnrecordedCount { get; set; }
 }
 
 public sealed class SettlementCashSummaryRow

@@ -7,6 +7,16 @@ namespace ToBeClarify.Api.Services.Ordering;
 
 public sealed partial class OrderingService
 {
+    public async Task<IReadOnlyList<OrderDto>> GetServiceOrdersAsync(DateOnly day, CancellationToken ct)
+        => await MapOrdersAsync(await _repository.GetServiceOrdersAsync(day, ct), ct, includeFulfillment: false);
+
+    public async Task<IReadOnlyList<AdminOrderSessionDto>> GetServiceSessionsAsync(DateOnly day, CancellationToken ct)
+        => (await _repository.GetServiceSessionsAsync(day, ct)).Select(row => new AdminOrderSessionDto(
+            MapSession(row), row.OrderCount, row.WaitingOrderCount, row.ConfirmedOrderCount, row.TotalAmount, ToOffset(row.LastOrderedAt))).ToArray();
+
+    public async Task<IReadOnlyList<OrderFulfillmentDto>> GetServiceFulfillmentAsync(DateOnly day, ClaimsPrincipal actor, CancellationToken ct)
+        => (await _repository.GetServiceFulfillmentAsync(day, ct)).Select(data => ScopeFulfillment(data, actor)).ToArray();
+
     public async Task<IReadOnlyList<AdminOrderSessionDto>> GetDesignatedSessionsAsync(DateOnly? businessDate,
         ClaimsPrincipal actor, CancellationToken cancellationToken)
     {

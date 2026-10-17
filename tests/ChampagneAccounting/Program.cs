@@ -23,7 +23,7 @@ SettlementStaffInputRow Staff(string id, string role) => new()
 };
 (SettlementRunRow Run, IReadOnlyList<SettlementResultLineRow> Results) Calculate(
     SettlementOrderItemRevenueRow[] items, int credit = 0, bool activity = false,
-    int? adjusted = null, int? netCash = null, int expense = 0)
+    int? adjusted = null, int? netCash = null, int expense = 0, decimal? admission = null)
 {
     var subtotal = items.Sum(item => item.LineTotal);
     var source = new SettlementSourceData
@@ -32,6 +32,7 @@ SettlementStaffInputRow Staff(string id, string role) => new()
             MealCreditApplied = credit, AdjustedAmount = adjusted }],
         PayrollAssignments = new[] { ("Alice", "designated"), ("Bob", "designated"), ("Manager", "service") }
             .Select(x => new SettlementAttendanceCandidateRow { StaffId = x.Item1, PayrollRole = x.Item2, PayrollSnapshotVersion = 1 }).ToArray(),
+        Admissions = admission.HasValue ? [new() { UseAdmissionLedger = true, LedgerReceivable = admission.Value, SessionCount = 99 }] : [],
         Items = items, StaffInputs = [Staff("Alice", "designated"), Staff("Bob", "designated"), Staff("Manager", "service")],
         Cash = new() { HasCashRecords = netCash.HasValue, NetCash = netCash ?? 0 }
     };
@@ -96,4 +97,19 @@ var legacy = Calculate([Item("legacy-food", 1000)], credit: 100);
 Equal(legacy.Run.MealRevenue, 900, "legacy unclassified orders retain meal accounting");
 var legacyActivity = Calculate([Item("legacy-food", 1000)], activity: true, netCash: 500, expense: 100);
 Equal(legacyActivity.Run.CompanyIncome, 112.5m, "legacy activity cash allocation remains unchanged");
-Console.WriteLine("Champagne accounting regressions passed.");
+var admitted = Calculate([Item("meal",150_000)], credit:100_000, admission:100_000, netCash:150_000);
+Equal(admitted.Run.GrossRevenue,150_000,"admission plus meal net credit is charged once");
+Equal(admitted.Run.AdmissionRevenue,100_000,"ledger amount replaces session count estimate");
+var entryOnly = Calculate([],admission:100_000,netCash:100_000);
+Equal(entryOnly.Run.GrossRevenue,100_000,"entry without orders remains revenue");
+var discountedEntry = Calculate([],admission:80_000,netCash:80_000);
+Equal(discountedEntry.Run.AdmissionRevenue,80_000,"admission discount survives settlement");
+var refundedEntry = Calculate([],admission:100_000,netCash:80_000);
+Equal(refundedEntry.Run.AdmissionRevenue,80_000,"refund enters cash scaling once");
+var unpaidEntry = Calculate([],admission:100_000,netCash:0);
+Equal(unpaidEntry.Run.AdmissionRevenue,0,"unpaid admission is not distributed as cash");
+var noReceipt = Calculate([],admission:100_000);
+Equal(noReceipt.Run.GrossRevenue,0,"no receipt records never fall back to estimated admission revenue");
+var noMealReceipt = Calculate([Item("unpaid-meal",150_000)],credit:100_000,admission:0);
+Equal(noMealReceipt.Run.GrossRevenue,0,"waived admission cannot imply meal cash collection");
+Console.WriteLine("Champagne and admission accounting regressions passed.");

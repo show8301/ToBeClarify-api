@@ -29,6 +29,11 @@ public sealed class CustomerVisitDto
     public bool HasRecoveryCode { get; set; }
     public int OrderCount { get; set; }
     public long OrderAmount { get; set; }
+    public long AdmissionReceivable { get; set; }
+    public long AdmissionReceived { get; set; }
+    public long AdmissionRefunded { get; set; }
+    public string AdmissionStatus { get; set; } = "unrecorded";
+    public long ConsumptionAmount { get; set; }
     public long NetReceived { get; set; }
     public bool HasCashRecords { get; set; }
     public int PendingDeliveryCount { get; set; }
@@ -37,7 +42,14 @@ public sealed class CustomerVisitDto
     public IReadOnlyList<CustomerHistoryOrderDto> Orders { get; set; } = [];
 }
 public sealed record CustomerHistoryOrderDto(string Id, string OrderNumber, string Status, long TotalAmount);
-public sealed record CustomerSummaryDto(int VisitCount, int OrderCount, long OrderAmount, long NetReceived, int PendingDeliveryCount);
+public sealed record CustomerSummaryDto(int VisitCount, int OrderCount, long OrderAmount, long NetReceived, int PendingDeliveryCount)
+{
+    public long AdmissionReceivable { get; init; }
+    public long AdmissionReceived { get; init; }
+    public long AdmissionRefunded { get; init; }
+    public long ConsumptionAmount { get; init; }
+    public int UnrecordedAdmissionCount { get; init; }
+}
 public sealed record CustomerDetailDto(CustomerProfileDto Profile, CustomerSummaryDto Summary, IReadOnlyList<CustomerVisitDto> Visits);
 public sealed class LinkCustomerProfileRequest
 {

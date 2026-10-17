@@ -118,6 +118,15 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
 
     public async Task CreateSessionAsync(OrderSessionRow session, string actorId, CancellationToken cancellationToken)
     {
+        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await CreateSessionInTransactionAsync(connection, transaction, session, actorId, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public static async Task CreateSessionInTransactionAsync(MySqlConnection connection, MySqlTransaction transaction,
+        OrderSessionRow session, string actorId, CancellationToken cancellationToken)
+    {
         const string sql = """
             INSERT INTO `CUSTOMER_ORDER_SESSIONS`
                 (`ID`, `GAME_ID`, `CUSTOMER_NAME`, `BUSINESS_DATE`, `BUSINESS_PERIOD_ID`, `ACCESS_TOKEN_HASH`, `SHORT_CODE_HASH`, `RECOVERY_CODE_HASH`,
@@ -132,8 +141,6 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
                 (`ID`, `SESSION_ID`, `ACTION_TYPE`, `AFTER_JSON`, `ACTOR_ID`, `ACTOR_ROLE`, `CREATED_AT`)
             VALUES (@AuditId, @Id, 'session.created', @AfterJson, @ActorId, 'admin', @CreatedAt);
             """;
-        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await connection.ExecuteScalarAsync<string>(new CommandDefinition("SELECT ID FROM ORDERING_RUNTIME_LOCKS WHERE ID='operating_period' FOR UPDATE",transaction:transaction,cancellationToken:cancellationToken));
         if(session.BusinessPeriodId is not null && await connection.ExecuteScalarAsync<int>(new CommandDefinition("SELECT COUNT(*) FROM BUSINESS_PERIODS WHERE ID=@Id AND PERIOD_STATUS='open'",new{Id=session.BusinessPeriodId},transaction,cancellationToken:cancellationToken))==0)
             throw new BusinessException("營業日已關店，請重新整理。", "BUSINESS_PERIOD_NOT_OPEN");
@@ -151,7 +158,6 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
             session.MaxNominatedStaff, session.PrepaidMealCredit, session.RemainingMealCredit,
             session.CreatedAt, ActorId = actorId, AuditId = NewId(), AfterJson = JsonSerializer.Serialize(session)
         }, transaction, cancellationToken: cancellationToken));
-        await transaction.CommitAsync(cancellationToken);
     }
 
     public async Task RotateSessionCredentialsAsync(string sessionId, string tokenHash, string? recoveryCodeHash,

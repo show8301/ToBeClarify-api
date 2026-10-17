@@ -102,7 +102,10 @@ public sealed record RoomServiceOrderDto(
     int TotalAmount,
     string Status,
     string? Note,
-    DateTime CreatedAt);
+    DateTime CreatedAt)
+{
+    public string? OrderId { get; init; }
+}
 
 public sealed class CreateRoomServiceOrderRequest
 {

@@ -15,6 +15,18 @@ public sealed class OrdersController : ControllerBase
 
     public OrdersController(IOrderingService service) => _service = service;
 
+    [HttpGet("service-orders")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<OrderDto>>>> ServiceOrders([FromQuery] DateOnly businessDate, CancellationToken ct)
+        => Ok(ApiResponse<IReadOnlyList<OrderDto>>.Ok(await _service.GetServiceOrdersAsync(businessDate, ct)));
+
+    [HttpGet("service-order-sessions")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<AdminOrderSessionDto>>>> ServiceSessions([FromQuery] DateOnly businessDate, CancellationToken ct)
+        => Ok(ApiResponse<IReadOnlyList<AdminOrderSessionDto>>.Ok(await _service.GetServiceSessionsAsync(businessDate, ct)));
+
+    [HttpGet("service-fulfillment")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<OrderFulfillmentDto>>>> ServiceFulfillment([FromQuery] DateOnly businessDate, CancellationToken ct)
+        => Ok(ApiResponse<IReadOnlyList<OrderFulfillmentDto>>.Ok(await _service.GetServiceFulfillmentAsync(businessDate, User, ct)));
+
     [HttpGet("order-sessions")]
     public async Task<ActionResult<ApiResponse<IReadOnlyList<AdminOrderSessionDto>>>> Sessions(
         [FromQuery] DateOnly? businessDate, [FromQuery] string? search, CancellationToken cancellationToken)

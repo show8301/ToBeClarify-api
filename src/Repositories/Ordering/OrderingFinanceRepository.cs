@@ -155,6 +155,14 @@ public sealed class OrderingFinanceRepository(AppDbContext dbContext)
     {
         await using var connection = await dbContext.CreateOpenConnectionAsync(ct);
         await using var transaction = await connection.BeginTransactionAsync(ct);
+        var result = await SaveAdmissionInTransactionAsync(connection, transaction, sessionId, request, payloadHash, actorId, ct);
+        await transaction.CommitAsync(ct);
+        return result;
+    }
+
+    public async Task<OrderingAdmissionOperationDto> SaveAdmissionInTransactionAsync(MySqlConnection connection, MySqlTransaction transaction,
+        string sessionId, SaveOrderingAdmissionRequest request, string payloadHash, string actorId, CancellationToken ct)
+    {
         var session = await GetSessionAsync(connection, transaction, sessionId, true, ct);
         var prior = await connection.QuerySingleOrDefaultAsync<OperationRow>(new CommandDefinition("""
             SELECT SESSION_ID AS SessionId, PAYLOAD_HASH AS PayloadHash, RESULT_JSON AS ResultJson
@@ -221,9 +229,9 @@ public sealed class OrderingFinanceRepository(AppDbContext dbContext)
                 now, actorId, accountVersion + (chargeId is null ? 1 : 2), ct);
             if (receiptId is not null) await InsertAdmissionRecordAsync(connection, transaction, sessionId, receiptId,
                 "cash_receipt", net, "none", "入場實收", request.CashPeriodId, now, actorId,
-                accountVersion + 1 + (request.DiscountAmount > 0 ? 1 : 0), ct);
-            if (request.Mode == "unpaid" && chargeId is not null)
-                await CreateCaseAsync(connection, transaction, sessionId, chargeId, request.Amount,
+                accountVersion + (chargeId is not null ? 1 : 0) + (request.DiscountAmount > 0 ? 1 : 0) + 1, ct);
+            if (request.Mode == "unpaid" && chargeId is not null && net > 0)
+                await CreateCaseAsync(connection, transaction, sessionId, chargeId, net,
                     "unpaid", request.Reason, session.SourcePeriodId, now, actorId, ct);
             else if (receiptId is not null && request.CashPeriodId is null)
                 await CreateCaseAsync(connection, transaction, sessionId, receiptId, net,
@@ -239,7 +247,6 @@ public sealed class OrderingFinanceRepository(AppDbContext dbContext)
             VALUES (@OperationId,@SessionId,@PayloadHash,@ResultJson,@Now,@ActorId);
             """, new { request.OperationId, SessionId=sessionId, PayloadHash=payloadHash,
                 ResultJson=JsonSerializer.Serialize(result), Now=now, ActorId=actorId }, transaction, cancellationToken:ct));
-        await transaction.CommitAsync(ct);
         return result;
     }
 

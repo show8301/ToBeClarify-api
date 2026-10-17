@@ -53,6 +53,10 @@ public sealed partial class OrderingService : IOrderingService
     public async Task<OrderSessionIssuedDto> CreateSessionAsync(CreateOrderSessionRequest request,
         ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
+        // Off during the compatibility window. Enable only after phase 2 and
+        // the confirmed Web client are deployed; an old request is not a receipt.
+        if (_configuration.GetValue<bool>("OrderingAdmission:RequireConfirmedCreation"))
+            throw new ConflictException("請更新工作台，確認入場收款後再開立點餐碼。", "ADMISSION_CLIENT_UPGRADE_REQUIRED");
         var identity = CharacterIdentity.Parse(request.GameId, request.ServerName,
             _configuration.GetValue<bool>("OrderingIdentity:RequireServerForNewSessions"));
         var gameId = identity.GameId;
@@ -855,12 +859,12 @@ public sealed partial class OrderingService : IOrderingService
             throw new BusinessException("此點餐碼已停用。", "ORDER_SESSION_INACTIVE");
     }
 
-    private async Task<IReadOnlyList<OrderDto>> MapOrdersAsync(OrderBundle bundle, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<OrderDto>> MapOrdersAsync(OrderBundle bundle, CancellationToken cancellationToken, bool includeFulfillment = true)
     {
         var settings = await _repository.GetSettingsAsync(cancellationToken);
         var now = _clock.LocalDateTime;
         var fulfillment = new Dictionary<string, IReadOnlyList<FulfillmentUnitDto>>();
-        foreach (var row in bundle.Orders.Where(o => o.FlowVersion >= 2))
+        foreach (var row in bundle.Orders.Where(o => includeFulfillment && o.FlowVersion >= 2))
             fulfillment[row.Id] = (await _repository.GetFulfillmentAsync(row.Id, cancellationToken)).Units;
         return bundle.Orders.Select(order =>
         {
@@ -898,7 +902,7 @@ public sealed partial class OrderingService : IOrderingService
                     new OrderRoomBookingDto(item.Id, item.RoomId, item.RoomNameSnapshot,
                         item.SegmentCount, item.SegmentMinutesSnapshot, item.UnitPrice, item.TotalAmount,
                         ToOffset(item.StartsAt)!.Value, ToOffset(item.EndsAt)!.Value, item.OrderStatus)).ToArray()) {
-                            CustomerLocation = order.CustomerLocation,
+                            SessionId = order.SessionId, CustomerLocation = order.CustomerLocation,
                             BusinessPeriodId = order.BusinessPeriodId, FlowVersion = order.FlowVersion,
                             Fulfillment = fulfillment.GetValueOrDefault(order.Id) ?? [],
                             MenuSnapshot = order.MenuSnapshotJson is null ? null : JsonSerializer.Deserialize<JsonElement>(order.MenuSnapshotJson)
