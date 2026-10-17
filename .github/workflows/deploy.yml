@@ -12,6 +12,12 @@ on:
       - main
       - dev
   workflow_dispatch:
+    inputs:
+      enable_notifications:
+        description: Enable the notification worker and SSE on the production API
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -27,6 +33,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+
+      - name: Validate deployment script
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PWD 'scripts/deploy-iis.ps1'), [ref]$tokens, [ref]$parseErrors) | Out-Null
+          if ($parseErrors.Count -gt 0) {
+            $parseErrors | ForEach-Object { Write-Error $_.Message }
+            throw 'API deployment script contains syntax errors.'
+          }
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
@@ -76,6 +94,7 @@ jobs:
           BRANCH_REF: ${{ github.ref }}
           PROD_DEPLOY_PATH: ${{ vars.API_DEPLOY_PATH }}
           PROD_HEALTH_CHECK_URL: ${{ vars.API_HEALTHCHECK_URL }}
+          ENABLE_NOTIFICATIONS: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_notifications == true }}
         run: |
           if ($env:BRANCH_REF -ne 'refs/heads/main') {
             throw "Production deployment is only allowed from refs/heads/main, not $($env:BRANCH_REF)."
@@ -89,4 +108,4 @@ jobs:
             throw "Missing API deployment variables for ${targetName}."
           }
 
-          .\scripts\deploy-iis.ps1 -ArtifactPath $env:ARTIFACT_PATH -DeployPath $deployPath -HealthCheckUrl $healthCheckUrl
+          .\scripts\deploy-iis.ps1 -ArtifactPath $env:ARTIFACT_PATH -DeployPath $deployPath -HealthCheckUrl $healthCheckUrl -EnableNotifications:($env:ENABLE_NOTIFICATIONS -eq 'true')
