@@ -251,6 +251,7 @@ public sealed class SettlementService : ISettlementService
             x => x.Select(n => n.StaffId).Distinct(StringComparer.Ordinal).ToArray(), StringComparer.Ordinal);
         var staffNames = source.Nominees.GroupBy(x => x.StaffId).ToDictionary(x => x.Key, x => x.First().StaffName,
             StringComparer.Ordinal);
+        foreach (var assignment in source.PayrollAssignments) staffNames[assignment.StaffId] = assignment.DisplayName;
         foreach (var input in source.StaffInputs) staffNames[input.StaffId] = input.DisplayName;
         var designatedBase = new Dictionary<string, decimal>(StringComparer.Ordinal);
         var designatedShare = new Dictionary<string, decimal>(StringComparer.Ordinal);
@@ -459,7 +460,23 @@ public sealed class SettlementService : ISettlementService
             0, 0,
             runCopy.CashReceived, runCopy.CashRefunded, runCopy.NetCash, runCopy.RetainedAmount,
             runCopy.PendingFinanceCount);
-        return new CalculationResult(runCopy, results, summary, anomalies);
+        // Keep diagnostic context independent of the payroll formula and anomaly creation path.
+        var detailedAnomalies = anomalies.DistinctBy(x => (x.Code, x.SourceId)).Select(anomaly =>
+        {
+            if (anomaly.SourceId is not { } staffId || anomaly.Code is not
+                ("PAYROLL_INPUT_MISSING" or "DESIGNATED_INPUT_MISSING" or "PAYROLL_ROLE_UNRESOLVED"
+                or "PAYROLL_INPUT_CONFLICT" or "BACKSTAGE_NOT_ALLOWED" or "PAYROLL_SNAPSHOT_CHANGED"
+                or "DESIGNATED_TIP_DUPLICATED" or "EVENT_ATTENDANCE_NOT_VERIFIED")) return anomaly;
+            var orderIds = (designatedOrders.TryGetValue(staffId, out var revenueOrders)
+                    ? revenueOrders.AsEnumerable() : Enumerable.Empty<string>())
+                .Concat(source.Tips.Where(x => x.StaffId == staffId).Select(x => x.OrderId))
+                .ToHashSet(StringComparer.Ordinal);
+            var orders = source.Orders.Where(x => orderIds.Contains(x.OrderId))
+                .DistinctBy(x => x.OrderId).OrderBy(x => x.OrderNumber, StringComparer.Ordinal)
+                .Select(x => new SettlementAnomalyOrderDto(x.OrderId, x.OrderNumber)).ToArray();
+            return anomaly with { StaffName = anomaly.StaffName ?? staffNames.GetValueOrDefault(staffId), Orders = orders };
+        }).ToArray();
+        return new CalculationResult(runCopy, results, summary, detailedAnomalies);
     }
 
     public async Task<SettlementOverviewDto> CloseAsync(SettlementCloseRequest request, ClaimsPrincipal actor,

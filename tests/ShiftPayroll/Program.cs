@@ -1,5 +1,6 @@
 using System.Reflection;
 using ToBeClarify.Api.Models;
+using ToBeClarify.Api.Models.Dtos;
 using ToBeClarify.Api.Models.Entities;
 using ToBeClarify.Api.Repositories.Admin.Settlement;
 using ToBeClarify.Api.Repositories.Shared;
@@ -55,6 +56,26 @@ eventSource.StaffInputs[0].ActivityHours = 0;
 eventSource.StaffInputs[1].ActivityHours = 0;
 Equal(Calculate(eventSource, new() { DayType = "event", ActivityHoursConfirmed = true, CompanyShareHours = 1 })
     .Sum(x => x.DesignatedTip), 13, "event: zero activity allocation must not discard a person's tip");
+
+var missingInputSource = new SettlementSourceData
+{
+    PayrollAssignments = [new() { StaffId = "staff", DisplayName = "測試店員", PayrollRole = "service", PayrollSnapshotVersion = 1 }],
+    Orders = [new() { OrderId = "service-order", OrderNumber = "S001", Subtotal = 1000, TotalAmount = 1000 },
+        new() { OrderId = "tip-order", OrderNumber = "T002", Subtotal = 10, TotalAmount = 10 }],
+    Items = [new() { ItemId = "service", OrderId = "service-order", ItemType = "nomination_base", ReferenceId = "staff", LineTotal = 1000 }],
+    Tips = [new() { OrderId = "service-order", StaffId = "staff", StaffAmount = 3 },
+        new() { OrderId = "tip-order", StaffId = "staff", StaffAmount = 7 }],
+    AttendanceAnomalies = [new("PAYROLL_ROLE_UNRESOLVED", "待確認職位", "staff", "測試店員")]
+};
+var missingCalculation = method.Invoke(service, [new SettlementRunRow(), rule, missingInputSource])!;
+var missingAnomalies = (IReadOnlyList<SettlementAnomalyDto>)missingCalculation.GetType().GetProperty("Anomalies")!.GetValue(missingCalculation)!;
+var missing = missingAnomalies.Single(x => x.Code == "PAYROLL_INPUT_MISSING");
+Check(missing.StaffName == "測試店員", "Missing payroll input retains the payroll assignment name without an input or nominee.");
+Check(missing.Orders is { Count: 2 } && missing.Orders.Select(x => x.OrderNumber).SequenceEqual(["S001", "T002"]),
+    "Revenue and tip source orders are combined, deduplicated and sorted.");
+Check(missingAnomalies.Single(x => x.Code == "PAYROLL_ROLE_UNRESOLVED").Orders is { Count: 2 },
+    "Attendance anomalies also retain related orders.");
+Equal(Calculate(missingInputSource, new()).Sum(x => x.DesignatedTip), 10, "Diagnostic enrichment preserves designated tips.");
 
 var rows = new List<SettlementStaffInputRow>();
 var fixedRole = Assignment("service");
