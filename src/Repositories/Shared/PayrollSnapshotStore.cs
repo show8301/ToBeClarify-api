@@ -20,7 +20,8 @@ public static class PayrollSnapshotStore
     public static async Task<PayrollSnapshotRow?> ReadAsync(MySqlConnection connection, MySqlTransaction? tx,
         string staffId, DateTime date, CancellationToken ct)
         => await connection.QuerySingleOrDefaultAsync<PayrollSnapshotRow>(new CommandDefinition("""
-            SELECT STAFF_MEMBER_ID AS StaffId, DUTY_PLAN_ID AS DutyPlanId, PAYROLL_ROLE AS PayrollRole,
+            SELECT CAST(STAFF_MEMBER_ID AS CHAR(36)) AS StaffId,
+                   CAST(DUTY_PLAN_ID AS CHAR(36)) AS DutyPlanId, PAYROLL_ROLE AS PayrollRole,
                    CAN_USE_BACKSTAGE AS CanUseBackstage, BACKSTAGE_PARTICIPANT AS BackstageParticipant,
                    STARTED_AT AS StartedAt, VERSION AS Version
             FROM STAFF_PAYROLL_SNAPSHOTS WHERE STAFF_MEMBER_ID=@StaffId AND BUSINESS_DATE=@Date
