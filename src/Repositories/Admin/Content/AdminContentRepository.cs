@@ -5,6 +5,7 @@ using ToBeClarify.Api.Infrastructure;
 using ToBeClarify.Api.Services.Ordering;
 using ToBeClarify.Api.Models.Dtos;
 using ToBeClarify.Api.Models.Entities;
+using ToBeClarify.Api.Models;
 using ToBeClarify.Api.Repositories.Shared;
 
 namespace ToBeClarify.Api.Repositories.Admin.Content;
@@ -169,7 +170,10 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
                    M.`BUFFER_MINUTES` AS BufferMinutes, M.`IS_NOMINATABLE` AS IsNominatable,
                    M.`SORT_ORDER` AS SortOrder, M.`IS_ACTIVE` AS IsActive,
                    DATE_FORMAT(COALESCE(P.`BUSINESS_DATE`, @BusinessDate), '%Y-%m-%d') AS BusinessDate,
-                   COALESCE(D.`SCHEDULED_ROLES_JSON`, P.`SCHEDULED_ROLES_JSON`, '[\"service\"]') AS ScheduledRolesJson,
+                   P.`PAYROLL_ROLE` AS PayrollRole,
+                   EXISTS (SELECT 1 FROM `ADMIN_USERS` U WHERE U.`STAFF_MEMBER_ID` = M.`ID`
+                       AND U.`IS_ACTIVE` = TRUE AND U.`ROLE_LEVEL` IN ('manager', 'developer')) AS CanUseManagerPayrollRole,
+                   COALESCE(P.`SCHEDULED_ROLES_JSON`, D.`SCHEDULED_ROLES_JSON`, '[]') AS ScheduledRolesJson,
                    COALESCE(D.`ACTIVE_ROLES_JSON`,
                        CASE WHEN {StaffDutySql.IsOnDuty} = TRUE
                             THEN COALESCE(P.`SCHEDULED_ROLES_JSON`, '[]')
@@ -207,7 +211,10 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
                    M.`IS_NOMINATABLE` AS IsNominatable,
                    M.`SORT_ORDER` AS SortOrder, M.`IS_ACTIVE` AS IsActive,
                    DATE_FORMAT(COALESCE(P.`BUSINESS_DATE`, @BusinessDate), '%Y-%m-%d') AS BusinessDate,
-                   COALESCE(D.`SCHEDULED_ROLES_JSON`, P.`SCHEDULED_ROLES_JSON`, '[\"service\"]') AS ScheduledRolesJson,
+                   P.`PAYROLL_ROLE` AS PayrollRole,
+                   EXISTS (SELECT 1 FROM `ADMIN_USERS` U WHERE U.`STAFF_MEMBER_ID` = M.`ID`
+                       AND U.`IS_ACTIVE` = TRUE AND U.`ROLE_LEVEL` IN ('manager', 'developer')) AS CanUseManagerPayrollRole,
+                   COALESCE(P.`SCHEDULED_ROLES_JSON`, D.`SCHEDULED_ROLES_JSON`, '[]') AS ScheduledRolesJson,
                    COALESCE(D.`ACTIVE_ROLES_JSON`,
                        CASE WHEN {StaffDutySql.IsOnDuty} = TRUE
                             THEN COALESCE(P.`SCHEDULED_ROLES_JSON`, '[]')
@@ -296,6 +303,41 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
     {
         var businessDate = dutyDate.ToDateTime(TimeOnly.MinValue);
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var staff = await connection.QuerySingleOrDefaultAsync<AdminStaffMemberRow>(new CommandDefinition("""
+            SELECT `ID` AS Id, `IS_NOMINATABLE` AS IsNominatable
+            FROM `STAFF_MEMBERS` WHERE `ID` = @Id FOR UPDATE;
+            """, new { Id = id }, transaction, cancellationToken: cancellationToken))
+            ?? throw new NotFoundException("Staff member not found.", "STAFF_NOT_FOUND");
+        var plan = await connection.QuerySingleOrDefaultAsync<AdminDutyPlanRow>(new CommandDefinition($"""
+            SELECT P.`ID` AS Id, {StaffDutySql.IsOnDuty} AS IsWorking,
+                   P.`SCHEDULED_ROLES_JSON` AS ScheduledRolesJson
+            FROM `STAFF_DUTY_PLANS` P
+            WHERE P.`STAFF_MEMBER_ID` = @Id AND P.`BUSINESS_DATE` = @BusinessDate FOR UPDATE;
+            """, new { Id = id, BusinessDate = businessDate, DutyAt = now }, transaction, cancellationToken: cancellationToken));
+        var mode = await connection.QuerySingleOrDefaultAsync<AdminStaffMemberRow>(new CommandDefinition("""
+            SELECT `ACTIVE_ROLES_JSON` AS ActiveRolesJson, `STOP_ACCEPTING_NEW_ORDERS` AS StopAcceptingNewOrders
+            FROM `STAFF_DAILY_WORK_MODES`
+            WHERE `STAFF_MEMBER_ID` = @Id AND `BUSINESS_DATE` = @BusinessDate FOR UPDATE;
+            """, new { Id = id, BusinessDate = businessDate }, transaction, cancellationToken: cancellationToken));
+        var isWorking = plan?.IsWorking == true;
+        var scheduled = StaffWorkRoles.ReadSupportRoles(plan?.ScheduledRolesJson);
+        var currentRoles = StaffWorkRoles.ReadSupportRoles(mode?.ActiveRolesJson
+            ?? (isWorking ? plan?.ScheduledRolesJson : "[]")).ToHashSet(StringComparer.Ordinal);
+        var activeRoles = request.ActiveRoles?.ToHashSet(StringComparer.Ordinal)
+            ?? new HashSet<string>(currentRoles, StringComparer.Ordinal);
+        if (request.SupportRole is { } supportRole)
+        {
+            if (request.SupportEnabled == true) activeRoles.Add(supportRole);
+            else activeRoles.Remove(supportRole);
+        }
+        if (!activeRoles.SetEquals(currentRoles) && !isWorking)
+            throw new ConflictException("目前不在核准班次時段內，無法調整支援工作。", "STAFF_SUPPORT_REQUIRES_DUTY");
+        var allowed = StaffWorkRoles.AllowedSupportRoles(staff.IsNominatable);
+        if ((request.SupportEnabled == true && !allowed.Contains(request.SupportRole!, StringComparer.Ordinal))
+            || activeRoles.Except(currentRoles).Any(role => !allowed.Contains(role, StringComparer.Ordinal)))
+            throw new BusinessException("尚未具備此支援工作的資格，請先確認店員設定。", "STAFF_SUPPORT_NOT_ALLOWED");
+
         await connection.ExecuteAsync(new CommandDefinition("""
             INSERT INTO `STAFF_DAILY_WORK_MODES`
                 (`ID`, `STAFF_MEMBER_ID`, `BUSINESS_DATE`, `IS_WORKING`, `SCHEDULED_ROLES_JSON`, `ACTIVE_ROLES_JSON`, `STOP_ACCEPTING_NEW_ORDERS`, `STARTED_AT`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
@@ -304,19 +346,19 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
                     @Now, @ActorId, @Now, @ActorId)
             ON DUPLICATE KEY UPDATE
                 `STOP_ACCEPTING_NEW_ORDERS` = VALUES(`STOP_ACCEPTING_NEW_ORDERS`),
-                `SCHEDULED_ROLES_JSON` = VALUES(`SCHEDULED_ROLES_JSON`),
                 `ACTIVE_ROLES_JSON` = VALUES(`ACTIVE_ROLES_JSON`),
                 `STARTED_AT` = CASE WHEN VALUES(`IS_WORKING`) = TRUE AND JSON_LENGTH(VALUES(`ACTIVE_ROLES_JSON`)) > 0
                                     THEN COALESCE(`STARTED_AT`, @Now) ELSE NULL END,
                 `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId;
             """, new
         {
-            Id = NewId(), StaffMemberId = id, request.IsWorking,
-            StopAcceptingNewOrders = request.StopAcceptingNewOrders ?? false,
-            ScheduledRolesJson = JsonSerializer.Serialize(request.ScheduledRoles),
-            ActiveRolesJson = JsonSerializer.Serialize(request.ActiveRoles),
+            Id = NewId(), StaffMemberId = id, IsWorking = isWorking,
+            StopAcceptingNewOrders = request.StopAcceptingNewOrders ?? mode?.StopAcceptingNewOrders ?? false,
+            ScheduledRolesJson = JsonSerializer.Serialize(scheduled),
+            ActiveRolesJson = JsonSerializer.Serialize(activeRoles.Order(StringComparer.Ordinal)),
             BusinessDate = businessDate, Now = now, ActorId = actorId
-        }, cancellationToken: cancellationToken));
+        }, transaction, cancellationToken: cancellationToken));
+        await transaction.CommitAsync(cancellationToken);
     }
 
     public Task<IReadOnlyList<AdminDutyPlanRow>> GetDutyPlansAsync(DateOnly from, DateOnly to, string? staffId, CancellationToken cancellationToken)
@@ -326,7 +368,7 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
                    P.`IS_WORKING` AS IsWorking,
                    CASE WHEN P.`START_TIME` IS NULL THEN NULL ELSE DATE_FORMAT(P.`START_TIME`, '%H:%i') END AS StartTime,
                    CASE WHEN P.`END_TIME` IS NULL THEN NULL ELSE DATE_FORMAT(P.`END_TIME`, '%H:%i') END AS EndTime,
-                   P.`SCHEDULED_ROLES_JSON` AS ScheduledRolesJson, P.`APPROVAL_STATUS` AS ApprovalStatus,
+                   P.`SCHEDULED_ROLES_JSON` AS ScheduledRolesJson, P.`PAYROLL_ROLE` AS PayrollRole, P.`APPROVAL_STATUS` AS ApprovalStatus,
                    P.`SUBMITTED_AT` AS SubmittedAt, P.`SUBMITTED_BY` AS SubmittedBy,
                    P.`APPROVED_AT` AS ApprovedAt, P.`APPROVED_BY` AS ApprovedBy,
                    P.`APPROVAL_NOTE` AS ApprovalNote
@@ -349,7 +391,7 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
                    P.`IS_WORKING` AS IsWorking,
                    CASE WHEN P.`START_TIME` IS NULL THEN NULL ELSE DATE_FORMAT(P.`START_TIME`, '%H:%i') END AS StartTime,
                    CASE WHEN P.`END_TIME` IS NULL THEN NULL ELSE DATE_FORMAT(P.`END_TIME`, '%H:%i') END AS EndTime,
-                   P.`SCHEDULED_ROLES_JSON` AS ScheduledRolesJson, P.`APPROVAL_STATUS` AS ApprovalStatus,
+                   P.`SCHEDULED_ROLES_JSON` AS ScheduledRolesJson, P.`PAYROLL_ROLE` AS PayrollRole, P.`APPROVAL_STATUS` AS ApprovalStatus,
                    P.`SUBMITTED_AT` AS SubmittedAt, P.`SUBMITTED_BY` AS SubmittedBy,
                    P.`APPROVED_AT` AS ApprovedAt, P.`APPROVED_BY` AS ApprovedBy,
                    P.`APPROVAL_NOTE` AS ApprovalNote
@@ -371,6 +413,8 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
             request.IsWorking,
             request.StartTime,
             request.EndTime,
+            request.PayrollRole,
+            InitialPayrollRole = request.PayrollRole ?? StaffWorkRoles.UnambiguousLegacyPayrollRole(request.ScheduledRoles),
             ScheduledRolesJson = JsonSerializer.Serialize(request.ScheduledRoles),
             ApprovalStatus = approvalStatus,
             Now = now,
@@ -380,16 +424,18 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
         await connection.ExecuteAsync(new CommandDefinition("""
             INSERT INTO `STAFF_DUTY_PLANS`
                 (`ID`, `STAFF_MEMBER_ID`, `BUSINESS_DATE`, `IS_WORKING`, `START_TIME`, `END_TIME`,
-                 `SCHEDULED_ROLES_JSON`, `APPROVAL_STATUS`, `SUBMITTED_AT`, `SUBMITTED_BY`,
+                 `SCHEDULED_ROLES_JSON`, `PAYROLL_ROLE`, `APPROVAL_STATUS`, `SUBMITTED_AT`, `SUBMITTED_BY`,
                  `APPROVED_AT`, `APPROVED_BY`, `APPROVAL_NOTE`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
             VALUES (@Id, @StaffId, @BusinessDate, @IsWorking, @StartTime, @EndTime,
-                    @ScheduledRolesJson, @ApprovalStatus, @Now, @ActorId,
+                    @ScheduledRolesJson, @InitialPayrollRole, @ApprovalStatus, @Now, @ActorId,
                     CASE WHEN @ApprovalStatus = 'approved' THEN @Now ELSE NULL END,
                     CASE WHEN @ApprovalStatus = 'approved' THEN @ActorId ELSE NULL END,
                     NULL, @Now, @ActorId, @Now, @ActorId)
             ON DUPLICATE KEY UPDATE
                 `IS_WORKING` = VALUES(`IS_WORKING`), `START_TIME` = VALUES(`START_TIME`),
                 `END_TIME` = VALUES(`END_TIME`), `SCHEDULED_ROLES_JSON` = VALUES(`SCHEDULED_ROLES_JSON`),
+                `PAYROLL_ROLE` = CASE WHEN VALUES(`IS_WORKING`) = FALSE THEN NULL
+                    ELSE COALESCE(@PayrollRole, `PAYROLL_ROLE`, VALUES(`PAYROLL_ROLE`)) END,
                 `APPROVAL_STATUS` = VALUES(`APPROVAL_STATUS`), `SUBMITTED_AT` = VALUES(`SUBMITTED_AT`),
                 `SUBMITTED_BY` = VALUES(`SUBMITTED_BY`),
                 `APPROVED_AT` = CASE WHEN VALUES(`APPROVAL_STATUS`) = 'approved' THEN VALUES(`SUBMITTED_AT`) ELSE NULL END,
@@ -411,7 +457,7 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
                     `IS_WORKING` = VALUES(`IS_WORKING`),
                     `SCHEDULED_ROLES_JSON` = VALUES(`SCHEDULED_ROLES_JSON`),
                     `ACTIVE_ROLES_JSON` = CASE WHEN VALUES(`IS_WORKING`) = FALSE THEN '[]'
-                                               ELSE VALUES(`SCHEDULED_ROLES_JSON`) END,
+                                               ELSE `ACTIVE_ROLES_JSON` END,
                     `STARTED_AT` = CASE WHEN VALUES(`IS_WORKING`) = TRUE THEN COALESCE(`STARTED_AT`, @Now) ELSE NULL END,
                     `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId;
                 """, new
@@ -461,7 +507,7 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
                     `IS_WORKING` = VALUES(`IS_WORKING`),
                     `SCHEDULED_ROLES_JSON` = VALUES(`SCHEDULED_ROLES_JSON`),
                     `ACTIVE_ROLES_JSON` = CASE WHEN VALUES(`IS_WORKING`) = FALSE THEN '[]'
-                                               ELSE VALUES(`SCHEDULED_ROLES_JSON`) END,
+                                               ELSE `ACTIVE_ROLES_JSON` END,
                     `STARTED_AT` = CASE WHEN VALUES(`IS_WORKING`) = TRUE THEN COALESCE(`STARTED_AT`, @Now) ELSE NULL END,
                     `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId;
                 """, new { Id = id, ModeId = NewId(), ActorId = actorId, BusinessDate = businessDate, Now = now }, transaction, cancellationToken: cancellationToken));

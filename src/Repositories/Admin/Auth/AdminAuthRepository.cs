@@ -17,7 +17,7 @@ public sealed class AdminAuthRepository : DapperRepositoryBase, IAdminAuthReposi
             SELECT U.`ID` AS Id, U.`LOGIN_NAME` AS LoginName, S.`DISPLAY_NAME` AS DisplayName,
                    U.`PASSWORD_HASH` AS PasswordHash, U.`ROLE_LEVEL` AS RoleLevel,
                    U.`STAFF_MEMBER_ID` AS StaffMemberId, U.`IS_ACTIVE` AS IsActive,
-                   U.`TOKEN_VERSION` AS TokenVersion
+                   U.`TOKEN_VERSION` AS TokenVersion, U.`PREFERRED_WORKBENCH` AS PreferredWorkbench
             FROM `ADMIN_USERS` U
             INNER JOIN `STAFF_MEMBERS` S ON S.`ID` = U.`STAFF_MEMBER_ID`
             WHERE U.`LOGIN_NAME` = @LoginName
@@ -32,7 +32,7 @@ public sealed class AdminAuthRepository : DapperRepositoryBase, IAdminAuthReposi
             SELECT U.`ID` AS Id, U.`LOGIN_NAME` AS LoginName, S.`DISPLAY_NAME` AS DisplayName,
                    U.`PASSWORD_HASH` AS PasswordHash, U.`ROLE_LEVEL` AS RoleLevel,
                    U.`STAFF_MEMBER_ID` AS StaffMemberId, U.`IS_ACTIVE` AS IsActive,
-                   U.`TOKEN_VERSION` AS TokenVersion
+                   U.`TOKEN_VERSION` AS TokenVersion, U.`PREFERRED_WORKBENCH` AS PreferredWorkbench
             FROM `ADMIN_USERS` U
             INNER JOIN `STAFF_MEMBERS` S ON S.`ID` = U.`STAFF_MEMBER_ID`
             WHERE U.`ID` = @Id AND U.`IS_ACTIVE` = TRUE
@@ -121,6 +121,20 @@ public sealed class AdminAuthRepository : DapperRepositoryBase, IAdminAuthReposi
             UpdatedBy = updatedBy
         }, cancellationToken: cancellationToken));
         return affectedRows == 1;
+    }
+
+    public async Task<bool> UpdateWorkbenchPreferenceAsync(string id, string preferredWorkbench, CancellationToken cancellationToken)
+    {
+        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        var updated = await connection.ExecuteAsync(new CommandDefinition("""
+            UPDATE `ADMIN_USERS`
+            SET `PREFERRED_WORKBENCH` = @PreferredWorkbench,
+                `UPDATED_AT` = CURRENT_TIMESTAMP, `UPDATED_BY` = @Id
+            WHERE `ID` = @Id AND `IS_ACTIVE` = TRUE
+              AND (`ROLE_LEVEL` IN ('developer', 'manager')
+                   OR (`ROLE_LEVEL` = 'clerk' AND @PreferredWorkbench IN ('service', 'designated')));
+            """, new { Id = id, PreferredWorkbench = preferredWorkbench }, cancellationToken: cancellationToken));
+        return updated == 1;
     }
 
     public async Task UpdateLastLoginAsync(string id, CancellationToken cancellationToken)

@@ -323,6 +323,8 @@ public sealed class MenuNotifications(AppDbContext db, IAppClock clock, Notifica
            roles.Any(role=>!BroadcastRoles.Contains(role,StringComparer.Ordinal)))
             throw new BusinessException("廣播受眾設定無效。","BROADCAST_AUDIENCE_INVALID");
     }
+    // ActiveRoles describes current operational support. Payroll assignment and
+    // the account's preferred workbench must never influence broadcast delivery.
     private static bool MatchesBroadcastAudience(string mode,string[] staffIds,string[] roles,UserRow user)
         => mode switch
         {

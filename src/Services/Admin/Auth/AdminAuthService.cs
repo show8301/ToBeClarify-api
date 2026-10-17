@@ -182,9 +182,26 @@ public sealed class AdminAuthService : IAdminAuthService
         return ToIdentity(user);
     }
 
+    public async Task<AdminIdentityDto> UpdatePreferencesAsync(UpdateAdminPreferencesRequest request,
+        ClaimsPrincipal principal, CancellationToken cancellationToken)
+    {
+        var identity = await GetCurrentIdentityAsync(principal, cancellationToken);
+        var preference = AdminWorkbench.ValidPreference(identity.Role, request.PreferredWorkbench)
+            ?? throw new ForbiddenException("此帳號不能使用指定的工作台。", "WORKBENCH_NOT_ALLOWED");
+        var updated = await _repository.UpdateWorkbenchPreferenceAsync(identity.Id, preference, cancellationToken);
+        var current = await GetCurrentIdentityAsync(principal, cancellationToken);
+        // Connections configured to report changed rows may return zero for an
+        // identical preference. Confirm the current authorized value in that case.
+        if (!updated && current.PreferredWorkbench != preference)
+            throw new ForbiddenException("帳號權限已變更，請重新登入後再選擇工作台。", "WORKBENCH_NOT_ALLOWED");
+        return current;
+    }
+
     private static AdminIdentityDto ToIdentity(AdminUserRow user) =>
         new(user.Id, user.LoginName, user.DisplayName, user.RoleLevel,
-            AdminRole.GetLabel(user.RoleLevel), user.StaffMemberId);
+            AdminRole.GetLabel(user.RoleLevel), user.StaffMemberId,
+            AdminWorkbench.ValidPreference(user.RoleLevel, user.PreferredWorkbench),
+            AdminWorkbench.AvailableFor(user.RoleLevel));
 
     private static void EnsureManager(ClaimsPrincipal actor)
     {

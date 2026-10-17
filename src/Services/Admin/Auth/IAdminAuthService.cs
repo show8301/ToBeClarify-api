@@ -33,4 +33,6 @@ public interface IAdminAuthService
     Task<AdminIdentityDto> GetCurrentIdentityAsync(
         ClaimsPrincipal principal,
         CancellationToken cancellationToken);
+    Task<AdminIdentityDto> UpdatePreferencesAsync(UpdateAdminPreferencesRequest request,
+        ClaimsPrincipal principal, CancellationToken cancellationToken);
 }

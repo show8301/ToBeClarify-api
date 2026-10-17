@@ -74,6 +74,8 @@ public sealed class AdminStaffMemberRow
     public string? ScheduledRolesJson { get; set; }
     public string? ActiveRolesJson { get; set; }
     public bool StopAcceptingNewOrders { get; set; }
+    public string? PayrollRole { get; set; }
+    public bool CanUseManagerPayrollRole { get; set; }
 }
 
 public sealed class AdminStaffMemberListRow
@@ -92,6 +94,8 @@ public sealed class AdminStaffMemberListRow
     public string? ScheduledRolesJson { get; set; }
     public string? ActiveRolesJson { get; set; }
     public bool StopAcceptingNewOrders { get; set; }
+    public string? PayrollRole { get; set; }
+    public bool CanUseManagerPayrollRole { get; set; }
 }
 
 public sealed class AdminDutyPlanRow
@@ -104,6 +108,7 @@ public sealed class AdminDutyPlanRow
     public string? StartTime { get; set; }
     public string? EndTime { get; set; }
     public string ScheduledRolesJson { get; set; } = "[]";
+    public string? PayrollRole { get; set; }
     public string ApprovalStatus { get; set; } = "pending";
     public DateTime SubmittedAt { get; set; }
     public string? SubmittedBy { get; set; }

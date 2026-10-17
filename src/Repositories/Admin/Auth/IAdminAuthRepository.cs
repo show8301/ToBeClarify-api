@@ -12,4 +12,5 @@ public interface IAdminAuthRepository
         string passwordHash, CancellationToken cancellationToken);
     Task<bool> ResetPasswordAsync(string id, string passwordHash, string updatedBy, CancellationToken cancellationToken);
     Task UpdateLastLoginAsync(string id, CancellationToken cancellationToken);
+    Task<bool> UpdateWorkbenchPreferenceAsync(string id, string preferredWorkbench, CancellationToken cancellationToken);
 }

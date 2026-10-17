@@ -56,4 +56,12 @@ public sealed record AdminIdentityDto(
     string DisplayName,
     string Role,
     string RoleLabel,
-    string? StaffMemberId);
+    string? StaffMemberId,
+    string? PreferredWorkbench = null,
+    IReadOnlyList<string>? AvailableWorkbenchRoles = null);
+
+public sealed class UpdateAdminPreferencesRequest
+{
+    [Required, RegularExpression("^(service|designated|manager)$")]
+    public string PreferredWorkbench { get; init; } = string.Empty;
+}

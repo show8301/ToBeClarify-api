@@ -8,6 +8,7 @@ public sealed class AdminUserRow
     public string PasswordHash { get; set; } = string.Empty;
     public string RoleLevel { get; set; } = string.Empty;
     public string? StaffMemberId { get; set; }
+    public string? PreferredWorkbench { get; set; }
     public bool IsActive { get; set; }
     public int TokenVersion { get; set; }
 }
