@@ -95,7 +95,7 @@ public sealed class MenuNotificationsController(MenuNotifications notifications,
         =>ApiResponse<BroadcastReceiptSummary>.Ok(await notifications.BroadcastReceiptsAsync(User,id,ct));
     [HttpGet("sounds")]
     public async Task<object> Sounds(CancellationToken ct)=>ApiResponse<IReadOnlyList<NotificationSoundDto>>.Ok(await sounds.ListAsync(User,ct));
-    [HttpPost("sounds"),RequestSizeLimit(1100000),EnableRateLimiting("ordering-write")]
+    [HttpPost("sounds"),RequestSizeLimit(11 * 1024 * 1024),EnableRateLimiting("ordering-write")]
     public async Task<object> Upload([FromForm]IFormFile file,[FromForm]string name,[FromForm]string? systemCode,CancellationToken ct)=>ApiResponse<NotificationSoundDto>.Ok(await sounds.UploadAsync(User,file,name,systemCode,ct));
     [HttpDelete("sounds/{id}"),EnableRateLimiting("ordering-write")]
     public async Task<object> DeleteSound(string id,CancellationToken ct)=>ApiResponse<NotificationSoundDto>.Ok(await sounds.DeleteAsync(User,id,ct));
