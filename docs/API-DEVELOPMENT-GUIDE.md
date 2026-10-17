@@ -595,7 +595,7 @@ API 目前沒有獨立測試主機，因此不使用 `DEV_API_DEPLOY_PATH` 或 `
 2. 驗證 artifact 包含 `ToBeClarify.Api.dll`。
 3. 要求伺服器既有 `web.config` 與 `appsettings*.json`。
 4. 保留設定、媒體、Logs、一次性驗證碼與 IIS 設定，不以 artifact 覆蓋。
-5. 用 `app_offline.htm` 暫停 API，備份舊程式後再替換。
+5. 用 `app_offline.htm` 暫停 API，備份舊程式後再替換。SSE／背景工作可能延後 IIS 釋放組件；每個檔案最多重試 75 次、間隔 2 秒，讓停機釋放時間涵蓋約 150 秒，回復也採相同等待。
 6. 最多嘗試 10 次 health check。
 7. 部署失敗時還原舊程式檔案。
 

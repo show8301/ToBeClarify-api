@@ -44,7 +44,9 @@ function Remove-ItemWithRetry {
         [Parameter(Mandatory = $true)]
         [string]$Path,
 
-        [int]$MaxAttempts = 15,
+        # SSE connections and hosted workers can outlive the initial offline delay.
+        # Allow IIS its shutdown window before treating a loaded assembly as stuck.
+        [int]$MaxAttempts = 75,
 
         [int]$DelaySeconds = 2
     )
