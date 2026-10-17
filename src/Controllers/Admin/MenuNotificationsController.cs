@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using System.ComponentModel.DataAnnotations;
 using ToBeClarify.Api.Models.Common;
 using ToBeClarify.Api.Services.Menu;
 
@@ -90,9 +91,15 @@ public sealed class MenuNotificationsController(MenuNotifications notifications,
     [HttpPost("broadcasts/{id}/withdraw"),EnableRateLimiting("ordering-write")]
     public async Task<object> WithdrawBroadcast(string id,CancellationToken ct)
         =>ApiResponse<BroadcastWithdrawResult>.Ok(await notifications.WithdrawBroadcastAsync(User,id,ct));
+    [HttpPost("broadcasts/withdraw"),EnableRateLimiting("ordering-write")]
+    public async Task<object> WithdrawBroadcastByBody(BroadcastReferenceRequest request,CancellationToken ct)
+        =>ApiResponse<BroadcastWithdrawResult>.Ok(await notifications.WithdrawBroadcastAsync(User,request.BroadcastId,ct));
     [HttpGet("broadcasts/{id}/receipts")]
     public async Task<object> BroadcastReceipts(string id,CancellationToken ct)
         =>ApiResponse<BroadcastReceiptSummary>.Ok(await notifications.BroadcastReceiptsAsync(User,id,ct));
+    [HttpGet("broadcasts/receipts")]
+    public async Task<object> BroadcastReceiptsByQuery([FromQuery]string broadcastId,CancellationToken ct)
+        =>ApiResponse<BroadcastReceiptSummary>.Ok(await notifications.BroadcastReceiptsAsync(User,broadcastId,ct));
     [HttpGet("sounds")]
     public async Task<object> Sounds(CancellationToken ct)=>ApiResponse<IReadOnlyList<NotificationSoundDto>>.Ok(await sounds.ListAsync(User,ct));
     [HttpPost("sounds"),RequestSizeLimit(11 * 1024 * 1024),EnableRateLimiting("ordering-write")]
@@ -103,4 +110,9 @@ public sealed class MenuNotificationsController(MenuNotifications notifications,
     public async Task<IActionResult> Content(string id,CancellationToken ct)
     {var result=await sounds.ContentAsync(User,id,ct);Response.Headers.CacheControl="private, no-store";return PhysicalFile(result.Path,result.Mime,enableRangeProcessing:true);}
     public sealed class ReadNotificationRequest{public string[] Ids{get;init;}=[];}
+    public sealed class BroadcastReferenceRequest
+    {
+        [Required, StringLength(100)]
+        public string BroadcastId { get; init; } = "";
+    }
 }
