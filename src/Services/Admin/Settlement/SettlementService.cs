@@ -376,8 +376,15 @@ public sealed class SettlementService : ISettlementService
         }
 
         var admission = source.Admissions.FirstOrDefault();
-        var admissionFee = run.AdmissionFeeOverride ?? ParseMoney(admission?.AdmissionFeeText);
-        var admissionRevenue = (admission?.SessionCount ?? 0) * admissionFee;
+        var admissionFee = admission?.UseAdmissionLedger == true ? 0 : run.AdmissionFeeOverride ?? ParseMoney(admission?.AdmissionFeeText);
+        var admissionRevenue = admission?.UseAdmissionLedger == true
+            ? admission.LedgerReceivable : (admission?.SessionCount ?? 0) * admissionFee;
+        if (admission?.UseAdmissionLedger == true && admission.UnrecordedCount > 0)
+            anomalies.Add(new SettlementAnomalyDto("ADMISSION_LEDGER_INCOMPLETE", $"有 {admission.UnrecordedCount} 筆入場帳未登錄，未推定已收款。", null));
+        if (admission?.UseAdmissionLedger == true && run.AdmissionFeeOverride is not null)
+            anomalies.Add(new SettlementAnomalyDto("ADMISSION_OVERRIDE_IGNORED", "新版入場收入依逐筆入場帳，未套用人數乘單價覆寫。", null));
+        if (admission?.UseAdmissionLedger == true && admission.LedgerReceivable < 0)
+            anomalies.Add(new SettlementAnomalyDto("ADMISSION_LEDGER_NEGATIVE", "入場折讓超過應收，請先核對入場帳。", null));
         var designatedRevenueBase = designatedBase.Values.Sum() + champagneBase.Values.Sum();
         var companyRevenue = directCompany + dedicatedCompanyRemainder + publicRoomUnassigned + admissionRevenue + mealRevenue + unknownRevenue;
         var servicePool = companyRevenue * rule.ServiceManagerPoolPercentage / 100m;
@@ -442,7 +449,7 @@ public sealed class SettlementService : ISettlementService
             else if (assigned > tip.Value)
                 anomalies.Add(new SettlementAnomalyDto("DESIGNATED_TIP_DUPLICATED", "指定小費分配超過來源金額，請核對收入列。", tip.Key));
         }
-        if (source.Cash.HasCashRecords)
+        if (source.Cash.HasCashRecords || admission?.UseAdmissionLedger == true)
             ApplyCashSnapshot(runCopy, results, source.Items.Any(x => x.IsChampagneTower));
         var summary = new SettlementSummaryDto(runCopy.GrossRevenue, runCopy.DesignatedRevenueBase,
             runCopy.DedicatedRoomGross, runCopy.DedicatedRoomOwnerShare, runCopy.DedicatedRoomCompanyRemainder,

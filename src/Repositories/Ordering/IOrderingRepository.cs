@@ -4,6 +4,9 @@ namespace ToBeClarify.Api.Repositories.Ordering;
 
 public interface IOrderingRepository
 {
+    Task<IReadOnlyList<AdminOrderSessionRow>> GetServiceSessionsAsync(DateOnly day, CancellationToken ct);
+    Task<OrderBundle> GetServiceOrdersAsync(DateOnly day, CancellationToken ct);
+    Task<IReadOnlyList<ToBeClarify.Api.Models.Dtos.OrderFulfillmentDto>> GetServiceFulfillmentAsync(DateOnly day, CancellationToken ct);
     Task<IReadOnlyList<AdminOrderSessionRow>> GetDesignatedSessionsAsync(DateOnly businessDate, string staffId, CancellationToken cancellationToken);
     Task DeclineLegacyNomineeAsync(string orderId, string nomineeId, string staffId, string actorId, string actorRole, string reason, DateTime now, CancellationToken cancellationToken);
     Task<ToBeClarify.Api.Models.Dtos.OrderFulfillmentDto> GetFulfillmentAsync(string orderId, CancellationToken cancellationToken);

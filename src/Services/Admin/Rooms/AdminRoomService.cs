@@ -181,7 +181,7 @@ public sealed class AdminRoomService : IAdminRoomService
     private static RoomServiceOrderDto MapOrder(RoomServiceOrderRow row)
         => new(row.Id, row.RoomId, row.RoomNameSnapshot, row.BusinessDate, row.StartsAt, row.EndsAt,
             row.SegmentCount, row.SegmentMinutesSnapshot, row.UnitPrice, row.TotalAmount,
-            row.OrderStatus, row.Note, row.CreatedAt);
+            row.OrderStatus, row.Note, row.CreatedAt) { OrderId = row.OrderId };
 
     private static void ValidateRoomRequest(SaveRoomRequest request)
     {

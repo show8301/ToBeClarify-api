@@ -191,6 +191,7 @@ public sealed record OrderDto(
     IReadOnlyList<OrderStatusHistoryDto> History,
     IReadOnlyList<OrderRoomBookingDto> RoomBookings)
 {
+    public string SessionId { get; init; } = "";
     public string? CustomerLocation { get; init; }
     public string? BusinessPeriodId { get; init; }
     public int FlowVersion { get; init; } = 1;

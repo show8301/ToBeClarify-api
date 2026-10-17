@@ -188,11 +188,19 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
             GROUP BY A.`ORDER_ID`, A.`STAFF_ID`;
 
             SELECT COUNT(*) AS SessionCount,
+                   COALESCE(MAX(BP.FLOW_VERSION),1)>=2 AS UseAdmissionLedger,
+                   COALESCE(SUM(AF.Receivable),0) AS LedgerReceivable,
+                   SUM(CASE WHEN SA.ID IS NULL AND COALESCE(AF.RecordCount,0)=0 THEN 1 ELSE 0 END) AS UnrecordedCount,
                    (SELECT `PRICE_TEXT` FROM `PRICING_RULES`
                     WHERE `IS_ENABLED` = TRUE AND (`TITLE` LIKE '%入場%' OR `DESCRIPTION` LIKE '%入場%')
                     ORDER BY `SORT_ORDER`, `CREATED_AT` LIMIT 1) AS AdmissionFeeText
-            FROM `CUSTOMER_ORDER_SESSIONS`
-            WHERE `BUSINESS_DATE` = @BusinessDate;
+            FROM `CUSTOMER_ORDER_SESSIONS` S
+            LEFT JOIN BUSINESS_PERIODS BP ON BP.ID=S.BUSINESS_PERIOD_ID
+            LEFT JOIN ORDERING_SESSION_ADMISSIONS SA ON SA.SESSION_ID=S.ID
+            LEFT JOIN (SELECT SESSION_ID,COUNT(*) AS RecordCount,
+                SUM(CASE WHEN KIND='charge_add' THEN AMOUNT WHEN KIND='charge_reduce' THEN -AMOUNT ELSE 0 END) AS Receivable
+                FROM ORDERING_FINANCE_RECORDS WHERE SOURCE_KIND='admission' GROUP BY SESSION_ID) AF ON AF.SESSION_ID=S.ID
+            WHERE S.`BUSINESS_DATE` = @BusinessDate;
 
             SELECT I.`ID` AS Id, I.`SETTLEMENT_ID` AS SettlementId, I.`STAFF_ID` AS StaffId,
                    I.`PAYROLL_SNAPSHOT_VERSION` AS PayrollSnapshotVersion, I.`ROLE` AS Role, M.`DISPLAY_NAME` AS DisplayName, M.`ROLE_TITLE` AS RoleTitle,
