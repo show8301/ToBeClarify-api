@@ -234,7 +234,9 @@ public sealed class MenuNotifications(AppDbContext db, IAppClock clock, Notifica
         {
             var previous=JsonSerializer.Deserialize<PlannedDelivery[]>(existing.PayloadJson,MenuPolicies.Json)??[];
             await tx.CommitAsync(ct);
-            return new("manual:"+idempotencyKey,sourceKey,true,previous.Length);
+            var previousBroadcastId=previous.FirstOrDefault()?.Content.SourceId
+                ?? (request.Emergency?"emergency:":"manual:")+idempotencyKey;
+            return new(previousBroadcastId,sourceKey,true,previous.Length);
         }
         var title=NormalizePlainText(request.Title,120,"廣播標題");
         var message=NormalizePlainText(request.Message,2000,"廣播內容");
@@ -249,8 +251,8 @@ public sealed class MenuNotifications(AppDbContext db, IAppClock clock, Notifica
         if(request.ExpiresAfterMinutes is <1 or >1440) throw new BusinessException("廣播有效期必須是 1–1,440 分鐘。","BROADCAST_EXPIRY_INVALID");
         var emergency=request.Emergency;
         var requiresAck=request.RequiresAck||emergency;
-        if(emergency && (audienceMode!="all"||priority!="high"))
-            throw new BusinessException("緊急廣播必須發送給所有有效後台帳號並使用高優先級。","BROADCAST_EMERGENCY_SCOPE_INVALID");
+        if(emergency && (audienceMode is not "all" and not "working_today"||priority!="high"))
+            throw new BusinessException("緊急廣播須選擇全店人員或上班人員，並使用高優先級。","BROADCAST_EMERGENCY_SCOPE_INVALID");
         var reason=emergency?NormalizePlainText(request.Reason,500,"緊急廣播原因"):null;
         var soundId=(request.SoundId??"").Trim();
         if(soundId.Length==0) throw new BusinessException("店內廣播必須選擇系統音效。","BROADCAST_SOUND_REQUIRED");
@@ -1596,7 +1598,7 @@ public sealed class MenuNotifications(AppDbContext db, IAppClock clock, Notifica
         return new(normalizedId,rows.Length,
             rows.Count(x=>!x.ReadAt.HasValue&&x.ExpiresAt>now&&!x.IsWithdrawn),
             rows.Count(x=>x.ReadAt.HasValue),
-            rows.Count(x=>x.HasAck&&!x.HasPendingAck),pending,expired,
+            rows.Count(x=>x.HasAck&&x.HasAcknowledged&&!x.HasPendingAck),pending,expired,
             rows.Count(x=>x.IsWithdrawn));
     }
     private static MenuNotificationRuleMatch ToRuleMatch(DeliveryMatchRow row)
