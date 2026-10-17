@@ -17,6 +17,8 @@ public sealed record NotificationSoundDto(string Id,string Name,string? SystemCo
 }
 public sealed class NotificationSounds(AppDbContext db,IConfiguration config,IAppClock clock)
 {
+    private const long MaxUploadBytes=10L*1024*1024;
+    private const double MaxDurationSeconds=15;
     private static readonly HashSet<string> BaseSystemCodes=["order_chime","time_reminder","store_broadcast"];
     private string Root => Path.Combine(Path.GetFullPath(config["Media:RootPath"]??"App_Data/media"),"notification-sounds");
     private static string? Staff(ClaimsPrincipal user)=>user.FindFirst(AdminAuthConstants.StaffMemberIdClaimType)?.Value;
@@ -60,18 +62,18 @@ public sealed class NotificationSounds(AppDbContext db,IConfiguration config,IAp
         if(!system&&string.IsNullOrWhiteSpace(staff)) throw new BusinessException("需要關聯店員身分。","NOTIFICATION_STAFF_REQUIRED");
         if(string.IsNullOrWhiteSpace(name)||name.Trim().Length>80 || (system&&!System.Text.RegularExpressions.Regex.IsMatch(systemCode!,"^[a-z][a-z0-9_]{0,59}$"))) throw new BusinessException("音效名稱或系統代碼無效。","NOTIFICATION_SOUND_INVALID");
         var extension=Path.GetExtension(file.FileName).ToLowerInvariant();
-        if(file.Length is <=0 or >1048576 || extension!=".mp3") throw new BusinessException("請上傳最多 1 MiB 的 MP3 音效。","NOTIFICATION_SOUND_INVALID");
+        if(file.Length is <=0 or >MaxUploadBytes || extension!=".mp3") throw new BusinessException("請上傳最多 10 MiB 的 MP3 音效。","NOTIFICATION_SOUND_INVALID");
         Directory.CreateDirectory(Root);
         var id=Guid.NewGuid().ToString();var temporary=Path.Combine(Root,id+".upload");var final=Path.Combine(Root,id+extension);
         try
         {
             await using(var output=new FileStream(temporary,FileMode.CreateNew,FileAccess.Write,FileShare.None))
-            {await file.CopyToAsync(output,ct);if(output.Length>1048576)throw new BusinessException("音效超過大小限制。","NOTIFICATION_SOUND_INVALID");}
+            {await file.CopyToAsync(output,ct);if(output.Length>MaxUploadBytes)throw new BusinessException("音效超過 10 MiB 大小限制。","NOTIFICATION_SOUND_INVALID");}
             Mp3AudioInfo info;
             try { info=Mp3AudioParser.Parse(await File.ReadAllBytesAsync(temporary,ct)); }
-            catch(InvalidDataException) { throw new BusinessException("音效必須是可辨識且不超過 5 秒的 MP3。","NOTIFICATION_SOUND_INVALID"); }
-            if(info.DurationSeconds>5)
-                throw new BusinessException("音效必須是可辨識且不超過 5 秒的 MP3。","NOTIFICATION_SOUND_INVALID");
+            catch(InvalidDataException) { throw new BusinessException("音效必須是可辨識的 MP3。","NOTIFICATION_SOUND_INVALID"); }
+            if(info.DurationSeconds>MaxDurationSeconds)
+                throw new BusinessException("音效長度不得超過 15 秒。","NOTIFICATION_SOUND_INVALID");
             File.Move(temporary,final);
             await using var hashStream=File.OpenRead(final);
             var hash=Convert.ToHexString(await SHA256.HashDataAsync(hashStream,ct));
