@@ -363,6 +363,7 @@ Cookie 特性：
 | POST | `/api/admin/auth/password-reset-key` | developer / manager | developer 可指定所有帳號；manager 只能替 clerk 簽發密碼重設碼 |
 | POST | `/api/admin/auth/forgot-password/reset` | Anonymous + 一次性驗證碼 | 更新指定帳號密碼、遞增 token version 並使舊 JWT 失效 |
 | GET | `/api/admin/auth/me` | 所有後台角色 | 重新由 DB 取得目前登入身分 |
+| PUT | `/api/admin/auth/me/preferences` | 所有後台角色，僅本人 | 保存合法的 `preferredWorkbench`，回傳完整登入身分 |
 | POST | `/api/admin/auth/logout` | Anonymous | 刪除瀏覽器 Cookie |
 
 ### 8.2 Developer 使用者列表
@@ -414,7 +415,7 @@ Cookie 特性：
 
 目前沒有 `POST /api/admin/staff-members`。新店員是透過註冊流程建立，或需由資料庫 / 未來新增管理端點建立。
 
-`PUT /api/admin/staff-members/{id}/today-work-mode` 只調整職位與停止接單；舊呼叫端提供的 `isWorking` 不會改變執勤判斷。請假或提前下班請更新值班規劃並依權限核准。後台列表新增選填回應欄位 `todayShift`，即使尚未到班或已下班仍可查看當日核准時段。
+`PUT /api/admin/staff-members/{id}/today-work-mode` 只調整目前支援工作與停止接單；可送出營業日與單項 `supportRole`／`supportEnabled`，未調整欄位由 API 交易保留。舊 `isWorking`／`scheduledRoles` 輸入不改變核准班表。班表新增單一 `payrollRole`，不限制支援清單或工作台；本階段尚未切換結算計算來源。詳細契約與 migration 見[工作台偏好與支援工作](WORKBENCH-PREFERENCES-SUPPORT.md)。請假或提前下班仍需調整班表並依權限核准。`todayShift` 讓尚未到班或已下班者仍可查看核准時段。
 
 店員主資料新增以下排程欄位：
 

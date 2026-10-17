@@ -8,6 +8,7 @@ using ToBeClarify.Api.Auth;
 using ToBeClarify.Api.Exceptions;
 using ToBeClarify.Api.Infrastructure;
 using ToBeClarify.Api.Models.Dtos;
+using ToBeClarify.Api.Models;
 using ToBeClarify.Api.Models.Entities;
 using ToBeClarify.Api.Repositories.Admin.Content;
 using ToBeClarify.Api.Services.Media;
@@ -145,7 +146,7 @@ public sealed class AdminContentService : IAdminContentService
         return rows.Select(row => new AdminStaffMemberListItemDto(
             row.Id, row.DisplayName, row.AvatarMediaId, _mediaUrls.BuildUrl(row.AvatarMediaId, "card"),
             row.RoleTitle, row.IsWorkingToday, row.BufferMinutes, row.IsNominatable,
-            row.SortOrder, row.IsActive, MapDailyWorkMode(row), row.TodayShift)).ToArray();
+            row.SortOrder, row.IsActive, MapDailyWorkMode(row), row.TodayShift, row.CanUseManagerPayrollRole)).ToArray();
     }
 
     public async Task<AdminStaffMemberDto> GetStaffMemberAsync(string id, ClaimsPrincipal actor, CancellationToken cancellationToken)
@@ -187,18 +188,25 @@ public sealed class AdminContentService : IAdminContentService
         var staffId = ResolveStaffId(id, actor);
         var existing = await _repository.GetStaffMemberAsync(staffId, cancellationToken)
             ?? throw new NotFoundException("Staff member not found.", "STAFF_NOT_FOUND");
-        var scheduledRoles = NormalizeDailyRoles(request.ScheduledRoles, "STAFF_SCHEDULED_ROLES_INVALID");
-        var activeRoles = NormalizeDailyRoles(request.ActiveRoles, "STAFF_ACTIVE_ROLES_INVALID");
-        if (activeRoles.Any(role => !scheduledRoles.Contains(role, StringComparer.Ordinal)))
-            throw new BusinessException("Active work roles must be included in scheduled work roles.", "STAFF_ACTIVE_ROLES_NOT_SCHEDULED");
+        if (request.BusinessDate is not null && request.BusinessDate != existing.BusinessDate)
+            throw new ConflictException("營業日已變更，請重新讀取工作狀態。", "STAFF_WORK_MODE_DATE_CHANGED");
+        if ((request.SupportRole is null) != (request.SupportEnabled is null)
+            || (request.SupportRole is not null && request.ActiveRoles is not null))
+            throw new BusinessException("請指定單一支援工作調整，或完整的支援清單。", "STAFF_SUPPORT_CHANGE_INVALID");
+        if (request.SupportRole is null && request.ActiveRoles is null && request.StopAcceptingNewOrders is null)
+            throw new BusinessException("請指定要更新的工作狀態。", "STAFF_WORK_MODE_CHANGE_REQUIRED");
 
         var normalizedRequest = new UpdateStaffDailyWorkModeRequest
         {
             // Legacy callers may send IsWorking; it cannot override the duty plan.
             IsWorking = existing.IsWorkingToday,
-            StopAcceptingNewOrders = request.StopAcceptingNewOrders ?? existing.StopAcceptingNewOrders,
-            ScheduledRoles = scheduledRoles.ToList(),
-            ActiveRoles = activeRoles.ToList(),
+            StopAcceptingNewOrders = request.StopAcceptingNewOrders,
+            // Legacy ScheduledRoles is ignored: duty plans alone own planned work.
+            ActiveRoles = request.ActiveRoles is null ? null
+                : NormalizeDailyRoles(request.ActiveRoles, "STAFF_ACTIVE_ROLES_INVALID").ToList(),
+            BusinessDate = existing.BusinessDate,
+            SupportRole = request.SupportRole,
+            SupportEnabled = request.SupportEnabled,
         };
         await _repository.UpdateStaffDailyWorkModeAsync(staffId, DateOnly.ParseExact(existing.BusinessDate, "yyyy-MM-dd"), normalizedRequest,
             ActorId(actor), _clock.LocalDateTime, cancellationToken);
@@ -223,6 +231,14 @@ public sealed class AdminContentService : IAdminContentService
     {
         var requestedStaffId = Required(request.StaffId, "DUTY_PLAN_STAFF_REQUIRED");
         var staffId = CanManageAll(actor) ? requestedStaffId : ResolveStaffId(requestedStaffId, actor);
+        if (id is not null)
+        {
+            var identifiedPlan = await _repository.GetDutyPlanAsync(Required(id, "DUTY_PLAN_ID_REQUIRED"), cancellationToken)
+                ?? throw new NotFoundException("Duty plan not found.", "DUTY_PLAN_NOT_FOUND");
+            _ = ResolveStaffId(identifiedPlan.StaffId, actor);
+            if (identifiedPlan.StaffId != staffId || identifiedPlan.BusinessDate != request.BusinessDate)
+                throw new BusinessException("既有班表的店員與營業日不可更換，請新增另一筆規劃。", "DUTY_PLAN_ID_MISMATCH");
+        }
         var businessDate = ParseDutyDate(request.BusinessDate, "DUTY_PLAN_DATE_INVALID")
             ?? throw new BusinessException("Duty plan date is required.", "DUTY_PLAN_DATE_REQUIRED");
         var today = (await _businessDays.GetCurrentAsync(cancellationToken)).BusinessDate;
@@ -236,6 +252,12 @@ public sealed class AdminContentService : IAdminContentService
         var roles = request.IsWorking ? NormalizeDailyRoles(request.ScheduledRoles, "DUTY_PLAN_ROLES_INVALID") : [];
         if (request.IsWorking && roles.Count == 0)
             throw new BusinessException("Working duty plans require at least one scheduled role.", "DUTY_PLAN_ROLES_REQUIRED");
+        var currentPlan = (await _repository.GetDutyPlansAsync(businessDate, businessDate, staff.Id, cancellationToken))
+            .SingleOrDefault();
+        var payrollRole = request.IsWorking
+            ? request.PayrollRole ?? currentPlan?.PayrollRole ?? StaffWorkRoles.UnambiguousLegacyPayrollRole(roles)
+            : null;
+        ValidatePayrollRole(payrollRole, request.IsWorking, staff.CanUseManagerPayrollRole);
         var startTime = request.IsWorking ? NormalizeDutyTime(request.StartTime, "DUTY_PLAN_START_TIME_INVALID") : null;
         var endTime = request.IsWorking ? NormalizeDutyTime(request.EndTime, "DUTY_PLAN_END_TIME_INVALID") : null;
         if (request.IsWorking && (startTime is null || endTime is null))
@@ -251,6 +273,9 @@ public sealed class AdminContentService : IAdminContentService
             StartTime = startTime,
             EndTime = endTime,
             ScheduledRoles = roles.ToList(),
+            // An omitted field must preserve the latest value in the repository,
+            // rather than writing back the value from this earlier read.
+            PayrollRole = request.IsWorking ? request.PayrollRole : null,
         };
         var approvalStatus = CanManageAll(actor) ? "approved" : "pending";
         await _repository.UpsertDutyPlanAsync(id ?? NewId(), normalized, approvalStatus,
@@ -273,6 +298,12 @@ public sealed class AdminContentService : IAdminContentService
             throw new BusinessException("Duty plan review action must be approve or reject.", "DUTY_PLAN_REVIEW_ACTION_INVALID");
         if (action == "reject" && string.IsNullOrWhiteSpace(request.Note))
             throw new BusinessException("A rejection note is required.", "DUTY_PLAN_REJECTION_NOTE_REQUIRED");
+        if (action == "approve")
+        {
+            var staff = await _repository.GetStaffMemberAsync(existing.StaffId, cancellationToken)
+                ?? throw new NotFoundException("Staff member not found.", "STAFF_NOT_FOUND");
+            ValidatePayrollRole(existing.PayrollRole, existing.IsWorking, staff.CanUseManagerPayrollRole);
+        }
 
         await _repository.ReviewDutyPlanAsync(planId, action, request.Note,
             ActorId(actor), _clock.LocalDateTime, cancellationToken);
@@ -443,16 +474,27 @@ public sealed class AdminContentService : IAdminContentService
             row.BufferMinutes, row.IsNominatable, row.SortOrder, row.IsActive,
             (await servicesTask).Select(Map).ToArray(), (await galleryTask).Select(item => new AdminStaffGalleryItemDto(
                 item.Id, item.StaffId, item.MediaId, _mediaUrls.BuildUrl(item.MediaId, "full"),
-                item.SortOrder, item.IsPublished)).ToArray(), MapDailyWorkMode(row));
+                item.SortOrder, item.IsPublished)).ToArray(), MapDailyWorkMode(row), row.CanUseManagerPayrollRole);
     }
 
     private static AdminStaffDailyWorkModeDto MapDailyWorkMode(AdminStaffMemberRow row)
         => new(row.BusinessDate, row.IsWorkingToday,
-            ParseDailyRoles(row.ScheduledRolesJson), ParseDailyRoles(row.ActiveRolesJson), row.StopAcceptingNewOrders);
+            ParseDailyRoles(row.ScheduledRolesJson), ParseDailyRoles(row.ActiveRolesJson), row.StopAcceptingNewOrders,
+            row.PayrollRole, StaffWorkRoles.AllowedSupportRoles(row.IsNominatable));
 
     private static AdminStaffDailyWorkModeDto MapDailyWorkMode(AdminStaffMemberListRow row)
         => new(row.BusinessDate, row.IsWorkingToday,
-            ParseDailyRoles(row.ScheduledRolesJson), ParseDailyRoles(row.ActiveRolesJson), row.StopAcceptingNewOrders);
+            ParseDailyRoles(row.ScheduledRolesJson), ParseDailyRoles(row.ActiveRolesJson), row.StopAcceptingNewOrders,
+            row.PayrollRole, StaffWorkRoles.AllowedSupportRoles(row.IsNominatable));
+
+    private static void ValidatePayrollRole(string? role, bool isWorking, bool canUseManagerRole)
+    {
+        if (!isWorking) return;
+        if (role is not ("service" or "designated" or "manager" or "backstage"))
+            throw new BusinessException("請先指定本班單一計薪職位；舊班表有多個職位時須由經理確認。", "DUTY_PLAN_PAYROLL_ROLE_REQUIRED");
+        if (role == "manager" && !canUseManagerRole)
+            throw new BusinessException("經理計薪職位僅適用於經理或開發者帳號。", "DUTY_PLAN_MANAGER_PAYROLL_NOT_ALLOWED");
+    }
 
     private static IReadOnlyList<string> ParseDailyRoles(string? value)
     {
@@ -499,7 +541,7 @@ public sealed class AdminContentService : IAdminContentService
         }
         return new(row.Id, row.StaffId, row.StaffName, row.BusinessDate, row.IsWorking,
             row.StartTime, row.EndTime, ParseDailyRoles(row.ScheduledRolesJson), row.ApprovalStatus,
-            row.SubmittedAt, row.SubmittedBy, row.ApprovedAt, row.ApprovedBy, row.ApprovalNote, startsAt, endsAt);
+            row.SubmittedAt, row.SubmittedBy, row.ApprovedAt, row.ApprovedBy, row.ApprovalNote, startsAt, endsAt, row.PayrollRole);
     }
 
     private static DateOnly? ParseDutyDate(string? value, string errorCode)

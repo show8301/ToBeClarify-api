@@ -128,7 +128,9 @@ public sealed record AdminStaffDailyWorkModeDto(
     bool IsWorking,
     IReadOnlyList<string> ScheduledRoles,
     IReadOnlyList<string> ActiveRoles,
-    bool StopAcceptingNewOrders = false);
+    bool StopAcceptingNewOrders = false,
+    string? PayrollRole = null,
+    IReadOnlyList<string>? AllowedSupportRoles = null);
 
 public sealed class UpdateStaffDailyWorkModeRequest
 {
@@ -139,7 +141,15 @@ public sealed class UpdateStaffDailyWorkModeRequest
 
     public List<string> ScheduledRoles { get; init; } = [];
 
-    public List<string> ActiveRoles { get; init; } = [];
+    public List<string>? ActiveRoles { get; init; }
+
+    [RegularExpression("^\\d{4}-\\d{2}-\\d{2}$")]
+    public string? BusinessDate { get; init; }
+
+    [RegularExpression("^(service|designated|backstage)$")]
+    public string? SupportRole { get; init; }
+
+    public bool? SupportEnabled { get; init; }
 }
 
 public sealed record AdminDutyPlanDto(
@@ -158,7 +168,8 @@ public sealed record AdminDutyPlanDto(
     string? ApprovedBy,
     string? ApprovalNote,
     DateTimeOffset? StartsAt = null,
-    DateTimeOffset? EndsAt = null);
+    DateTimeOffset? EndsAt = null,
+    string? PayrollRole = null);
 
 public sealed class SaveDutyPlanRequest
 {
@@ -178,6 +189,9 @@ public sealed class SaveDutyPlanRequest
 
     [Required]
     public List<string> ScheduledRoles { get; init; } = [];
+
+    [RegularExpression("^(service|designated|manager|backstage)$")]
+    public string? PayrollRole { get; init; }
 }
 
 public sealed class ReviewDutyPlanRequest
@@ -253,7 +267,8 @@ public sealed record AdminStaffMemberDto(
     bool IsActive,
     IReadOnlyList<AdminStaffServiceDto> Services,
     IReadOnlyList<AdminStaffGalleryItemDto> Gallery,
-    AdminStaffDailyWorkModeDto? TodayWorkMode = null);
+    AdminStaffDailyWorkModeDto? TodayWorkMode = null,
+    bool CanUseManagerPayrollRole = false);
 
 public sealed record AdminStaffMemberListItemDto(
     string Id,
@@ -267,7 +282,8 @@ public sealed record AdminStaffMemberListItemDto(
     int SortOrder,
     bool IsActive,
     AdminStaffDailyWorkModeDto? TodayWorkMode = null,
-    string? TodayShift = null);
+    string? TodayShift = null,
+    bool CanUseManagerPayrollRole = false);
 
 public sealed class SaveStaffMemberRequest
 {

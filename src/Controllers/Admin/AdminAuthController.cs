@@ -93,6 +93,14 @@ public sealed class AdminAuthController : ControllerBase
         return Ok(ApiResponse<AdminIdentityDto>.Ok(identity));
     }
 
+    [Authorize(Policy = AdminAuthConstants.AdminPolicy)]
+    [HttpPut("me/preferences")]
+    [ProducesResponseType(typeof(ApiResponse<AdminIdentityDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ApiResponse<AdminIdentityDto>>> Preferences(
+        [FromBody] UpdateAdminPreferencesRequest request, CancellationToken cancellationToken)
+        => Ok(ApiResponse<AdminIdentityDto>.Ok(
+            await _authService.UpdatePreferencesAsync(request, User, cancellationToken)));
+
     [AllowAnonymous]
     [HttpPost("logout")]
     [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
