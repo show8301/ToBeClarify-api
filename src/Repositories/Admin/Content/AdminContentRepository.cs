@@ -170,9 +170,13 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
                    M.`BUFFER_MINUTES` AS BufferMinutes, M.`IS_NOMINATABLE` AS IsNominatable,
                    M.`SORT_ORDER` AS SortOrder, M.`IS_ACTIVE` AS IsActive,
                    DATE_FORMAT(COALESCE(P.`BUSINESS_DATE`, @BusinessDate), '%Y-%m-%d') AS BusinessDate,
-                   P.`PAYROLL_ROLE` AS PayrollRole,
+                   CASE WHEN EXISTS(SELECT 1 FROM STAFF_PAYROLL_SNAPSHOTS X WHERE X.STAFF_MEMBER_ID=M.ID AND X.BUSINESS_DATE=@BusinessDate)
+                        THEN (SELECT X.PAYROLL_ROLE FROM STAFF_PAYROLL_SNAPSHOTS X WHERE X.STAFF_MEMBER_ID=M.ID AND X.BUSINESS_DATE=@BusinessDate)
+                        ELSE P.PAYROLL_ROLE END AS PayrollRole,
                    EXISTS (SELECT 1 FROM `ADMIN_USERS` U WHERE U.`STAFF_MEMBER_ID` = M.`ID`
                        AND U.`IS_ACTIVE` = TRUE AND U.`ROLE_LEVEL` IN ('manager', 'developer')) AS CanUseManagerPayrollRole,
+                   EXISTS(SELECT 1 FROM `ADMIN_USERS` U WHERE U.`STAFF_MEMBER_ID` = M.`ID`
+                       AND U.`IS_ACTIVE` = TRUE AND U.`ROLE_LEVEL` = 'developer') AS CanUseBackstage,
                    COALESCE(P.`SCHEDULED_ROLES_JSON`, D.`SCHEDULED_ROLES_JSON`, '[]') AS ScheduledRolesJson,
                    COALESCE(D.`ACTIVE_ROLES_JSON`,
                        CASE WHEN {StaffDutySql.IsOnDuty} = TRUE
@@ -211,9 +215,13 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
                    M.`IS_NOMINATABLE` AS IsNominatable,
                    M.`SORT_ORDER` AS SortOrder, M.`IS_ACTIVE` AS IsActive,
                    DATE_FORMAT(COALESCE(P.`BUSINESS_DATE`, @BusinessDate), '%Y-%m-%d') AS BusinessDate,
-                   P.`PAYROLL_ROLE` AS PayrollRole,
+                   CASE WHEN EXISTS(SELECT 1 FROM STAFF_PAYROLL_SNAPSHOTS X WHERE X.STAFF_MEMBER_ID=M.ID AND X.BUSINESS_DATE=@BusinessDate)
+                        THEN (SELECT X.PAYROLL_ROLE FROM STAFF_PAYROLL_SNAPSHOTS X WHERE X.STAFF_MEMBER_ID=M.ID AND X.BUSINESS_DATE=@BusinessDate)
+                        ELSE P.PAYROLL_ROLE END AS PayrollRole,
                    EXISTS (SELECT 1 FROM `ADMIN_USERS` U WHERE U.`STAFF_MEMBER_ID` = M.`ID`
                        AND U.`IS_ACTIVE` = TRUE AND U.`ROLE_LEVEL` IN ('manager', 'developer')) AS CanUseManagerPayrollRole,
+                   EXISTS(SELECT 1 FROM `ADMIN_USERS` U WHERE U.`STAFF_MEMBER_ID` = M.`ID`
+                       AND U.`IS_ACTIVE` = TRUE AND U.`ROLE_LEVEL` = 'developer') AS CanUseBackstage,
                    COALESCE(P.`SCHEDULED_ROLES_JSON`, D.`SCHEDULED_ROLES_JSON`, '[]') AS ScheduledRolesJson,
                    COALESCE(D.`ACTIVE_ROLES_JSON`,
                        CASE WHEN {StaffDutySql.IsOnDuty} = TRUE
@@ -305,7 +313,8 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         var staff = await connection.QuerySingleOrDefaultAsync<AdminStaffMemberRow>(new CommandDefinition("""
-            SELECT `ID` AS Id, `IS_NOMINATABLE` AS IsNominatable
+            SELECT `ID` AS Id, `IS_NOMINATABLE` AS IsNominatable,
+                   EXISTS(SELECT 1 FROM ADMIN_USERS U WHERE U.STAFF_MEMBER_ID=STAFF_MEMBERS.ID AND U.IS_ACTIVE=TRUE AND U.ROLE_LEVEL='developer') AS CanUseBackstage
             FROM `STAFF_MEMBERS` WHERE `ID` = @Id FOR UPDATE;
             """, new { Id = id }, transaction, cancellationToken: cancellationToken))
             ?? throw new NotFoundException("Staff member not found.", "STAFF_NOT_FOUND");
@@ -333,7 +342,13 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
         }
         if (!activeRoles.SetEquals(currentRoles) && !isWorking)
             throw new ConflictException("目前不在核准班次時段內，無法調整支援工作。", "STAFF_SUPPORT_REQUIRES_DUTY");
-        var allowed = StaffWorkRoles.AllowedSupportRoles(staff.IsNominatable);
+        if (!staff.CanUseBackstage && activeRoles.Contains("backstage"))
+        {
+            if (request.SupportEnabled == true && request.SupportRole == "backstage" || request.ActiveRoles?.Contains("backstage") == true)
+                throw new BusinessException("幕後工作僅限開發人員。", "STAFF_BACKSTAGE_NOT_ALLOWED");
+            activeRoles.Remove("backstage");
+        }
+        var allowed = StaffWorkRoles.AllowedSupportRoles(staff.IsNominatable, staff.CanUseBackstage);
         if ((request.SupportEnabled == true && !allowed.Contains(request.SupportRole!, StringComparer.Ordinal))
             || activeRoles.Except(currentRoles).Any(role => !allowed.Contains(role, StringComparer.Ordinal)))
             throw new BusinessException("尚未具備此支援工作的資格，請先確認店員設定。", "STAFF_SUPPORT_NOT_ALLOWED");
@@ -405,6 +420,12 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
         var businessDate = (await _businessDays.GetCurrentAsync(cancellationToken)).BusinessDate.ToDateTime(TimeOnly.MinValue);
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await connection.ExecuteScalarAsync<string>(new CommandDefinition("SELECT ID FROM STAFF_MEMBERS WHERE ID=@StaffId FOR UPDATE;", new { request.StaffId }, transaction, cancellationToken: cancellationToken));
+        var date = DateOnly.ParseExact(request.BusinessDate, "yyyy-MM-dd").ToDateTime(TimeOnly.MinValue);
+        await PayrollSnapshotStore.CaptureStartedPlanAsync(connection, transaction, request.StaffId, date, now, actorId, cancellationToken);
+        var canBackstage = await connection.ExecuteScalarAsync<bool>(new CommandDefinition("SELECT EXISTS(SELECT 1 FROM ADMIN_USERS WHERE STAFF_MEMBER_ID=@StaffId AND IS_ACTIVE=TRUE AND ROLE_LEVEL='developer');", new { request.StaffId }, transaction, cancellationToken: cancellationToken));
+        if (request.IsWorking && !canBackstage && (request.PayrollRole == "backstage" || request.ScheduledRoles.Contains("backstage")))
+            throw new BusinessException("幕後工作僅限開發人員。", "DUTY_PLAN_BACKSTAGE_NOT_ALLOWED");
         var values = new
         {
             Id = id,
@@ -467,6 +488,7 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
             }, transaction, cancellationToken: cancellationToken));
         }
 
+        await PayrollSnapshotStore.CaptureStartedPlanAsync(connection, transaction, request.StaffId, date, now, actorId, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
     }
 
@@ -475,6 +497,18 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
         var businessDate = (await _businessDays.GetCurrentAsync(cancellationToken)).BusinessDate.ToDateTime(TimeOnly.MinValue);
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var staffId = await connection.QuerySingleAsync<string>(new CommandDefinition("SELECT STAFF_MEMBER_ID FROM STAFF_DUTY_PLANS WHERE ID=@Id;", new { Id = id }, transaction, cancellationToken: cancellationToken));
+        await connection.ExecuteScalarAsync<string>(new CommandDefinition("SELECT ID FROM STAFF_MEMBERS WHERE ID=@StaffId FOR UPDATE;", new { StaffId = staffId }, transaction, cancellationToken: cancellationToken));
+        var currentStatus = await connection.QuerySingleAsync<string>(new CommandDefinition("SELECT APPROVAL_STATUS FROM STAFF_DUTY_PLANS WHERE ID=@Id FOR UPDATE;", new { Id = id }, transaction, cancellationToken: cancellationToken));
+        if (currentStatus is not ("pending" or "rejected")) throw new ConflictException("班表已由其他操作核准或更新，請重新載入。", "DUTY_PLAN_CHANGED");
+        var planDate = await connection.QuerySingleAsync<DateTime>(new CommandDefinition("SELECT BUSINESS_DATE FROM STAFF_DUTY_PLANS WHERE ID=@Id FOR UPDATE;", new { Id = id }, transaction, cancellationToken: cancellationToken));
+        await PayrollSnapshotStore.CaptureStartedPlanAsync(connection, transaction, staffId, planDate, now, actorId, cancellationToken);
+        var invalidBackstage = await connection.ExecuteScalarAsync<bool>(new CommandDefinition("""
+            SELECT (COALESCE(PAYROLL_ROLE='backstage',FALSE) OR JSON_CONTAINS(SCHEDULED_ROLES_JSON,'"backstage"'))
+              AND NOT EXISTS(SELECT 1 FROM ADMIN_USERS WHERE STAFF_MEMBER_ID=@StaffId AND IS_ACTIVE=TRUE AND ROLE_LEVEL='developer')
+            FROM STAFF_DUTY_PLANS WHERE ID=@Id;
+            """, new { StaffId = staffId, Id = id }, transaction, cancellationToken: cancellationToken));
+        if (action == "approve" && invalidBackstage) throw new BusinessException("幕後工作僅限開發人員。", "DUTY_PLAN_BACKSTAGE_NOT_ALLOWED");
         await connection.ExecuteAsync(new CommandDefinition("""
             UPDATE `STAFF_DUTY_PLANS`
             SET `APPROVAL_STATUS` = @ApprovalStatus,
@@ -513,6 +547,7 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
                 """, new { Id = id, ModeId = NewId(), ActorId = actorId, BusinessDate = businessDate, Now = now }, transaction, cancellationToken: cancellationToken));
         }
 
+        await PayrollSnapshotStore.CaptureStartedPlanAsync(connection, transaction, staffId, planDate, now, actorId, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
     }
 

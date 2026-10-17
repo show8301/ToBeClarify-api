@@ -14,7 +14,9 @@ public sealed record StaffAttendanceSummaryDto(
     int WorkedMinutes, int AdjustmentMinutes, int EffectiveMinutes, bool HasOpenShift,
     bool StopAcceptingNewOrders, int ActiveServiceCount,
     IReadOnlyList<StaffAttendanceAffectedOrderDto> AffectedOrders,
-    IReadOnlyList<StaffAttendanceEventDto> Events);
+    IReadOnlyList<StaffAttendanceEventDto> Events,
+    string? PayrollRole = null, int? PayrollSnapshotVersion = null,
+    bool CanUseBackstage = false, bool CanUseManagerPayrollRole = false);
 
 public sealed record StaffAttendanceAffectedOrderDto(
     string OrderId, string OrderNumber, string OrderStatus, string? CustomerName,
@@ -28,8 +30,9 @@ public sealed class StaffAttendanceActionRequest
     [Required, StringLength(36)] public string OperationId { get; init; } = "";
     [Required, StringLength(10)] public string BusinessDate { get; init; } = "";
     [StringLength(36)] public string? StaffId { get; init; }
-    [Required, RegularExpression("^(clock_in|clock_out|add_minutes|subtract_minutes|set_times|stop_orders|resume_orders)$")]
+    [Required, RegularExpression("^(clock_in|clock_out|add_minutes|subtract_minutes|set_times|confirm_payroll_role|stop_orders|resume_orders)$")]
     public string Action { get; init; } = "clock_in";
+    [RegularExpression("^(service|designated|manager|backstage)$")] public string? PayrollRole { get; init; }
     public DateTimeOffset? OccurredAt { get; init; }
     public DateTimeOffset? EndedAt { get; init; }
     [Range(1, 1000000)] public int? Minutes { get; init; }

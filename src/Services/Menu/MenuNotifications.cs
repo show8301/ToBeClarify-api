@@ -331,12 +331,13 @@ public sealed class MenuNotifications(AppDbContext db, IAppClock clock, Notifica
             "all" => true,
             "working_today" => user.StaffId is not null&&user.IsWorkingToday,
             "staff" => user.StaffId is not null&&staffIds.Contains(user.StaffId,StringComparer.Ordinal),
-            "roles" => user.StaffId is not null&&user.IsWorkingToday&&roles.Any(role=>user.ActiveRoles.Contains(role,StringComparer.Ordinal)),
+            "roles" => user.StaffId is not null&&user.IsWorkingToday&&roles.Any(role=>(role != "backstage" || user.CanUseBackstage) && user.ActiveRoles.Contains(role,StringComparer.Ordinal)),
             _ => false,
         };
     private static async Task<IReadOnlyList<UserRow>> LoadActiveUsersAsync(MySqlConnection connection,MySqlTransaction? tx,DateTime now,CancellationToken ct)
         => (await connection.QueryAsync<UserRow>(new CommandDefinition($"""
             SELECT U.`ID` AS Id,U.`STAFF_MEMBER_ID` AS StaffId,
+                   EXISTS(SELECT 1 FROM ADMIN_USERS A WHERE A.STAFF_MEMBER_ID=U.STAFF_MEMBER_ID AND A.IS_ACTIVE=TRUE AND A.ROLE_LEVEL='developer') AS CanUseBackstage,
                    {StaffDutySql.IsOnDuty} AS IsWorkingToday,
                    COALESCE(D.`ACTIVE_ROLES_JSON`, P.`SCHEDULED_ROLES_JSON`, '[]') AS ActiveRolesJson
             FROM `ADMIN_USERS` U
@@ -1806,6 +1807,7 @@ public sealed class MenuNotifications(AppDbContext db, IAppClock clock, Notifica
     private sealed record NotificationSettingsDocument(int SchemaVersion,MenuNotificationRule[] Rules);
     private sealed class UserRow
     {
+        public bool CanUseBackstage { get; set; }
         public string Id{get;set;}=""; public string? StaffId{get;set;} public bool IsWorkingToday{get;set;} public string ActiveRolesJson{get;set;}="[]";
         public string[] ActiveRoles
         {

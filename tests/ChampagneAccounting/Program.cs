@@ -19,7 +19,7 @@ SettlementOrderItemRevenueRow Item(string id, int amount, bool champagne = false
 SettlementStaffInputRow Staff(string id, string role) => new()
 {
     StaffId = id, DisplayName = id, Role = role, ActualMinutes = 60,
-    ActivityHours = 1, AttendanceSource = "clock"
+    ActivityHours = 1, AttendanceSource = "clock", PayrollSnapshotVersion = 1
 };
 (SettlementRunRow Run, IReadOnlyList<SettlementResultLineRow> Results) Calculate(
     SettlementOrderItemRevenueRow[] items, int credit = 0, bool activity = false,
@@ -30,6 +30,8 @@ SettlementStaffInputRow Staff(string id, string role) => new()
     {
         Orders = [new() { OrderId = "order", Subtotal = subtotal, TotalAmount = subtotal - credit,
             MealCreditApplied = credit, AdjustedAmount = adjusted }],
+        PayrollAssignments = new[] { ("Alice", "designated"), ("Bob", "designated"), ("Manager", "service") }
+            .Select(x => new SettlementAttendanceCandidateRow { StaffId = x.Item1, PayrollRole = x.Item2, PayrollSnapshotVersion = 1 }).ToArray(),
         Items = items, StaffInputs = [Staff("Alice", "designated"), Staff("Bob", "designated"), Staff("Manager", "service")],
         Cash = new() { HasCashRecords = netCash.HasValue, NetCash = netCash ?? 0 }
     };

@@ -4,6 +4,7 @@ using MySqlConnector;
 using ToBeClarify.Api.Exceptions;
 using ToBeClarify.Api.Infrastructure;
 using ToBeClarify.Api.Models.Dtos;
+using ToBeClarify.Api.Repositories.Shared;
 
 namespace ToBeClarify.Api.Repositories.Admin.Attendance;
 
@@ -16,12 +17,16 @@ public sealed class AttendanceRepository(AppDbContext dbContext)
         await SyncScheduledAsync(businessDate, now, ct);
         await using var connection = await dbContext.CreateOpenConnectionAsync(ct);
         var plans = (await connection.QueryAsync<PlanRow>(new CommandDefinition("""
-            SELECT P.ID AS Id, P.STAFF_MEMBER_ID AS StaffId, M.DISPLAY_NAME AS DisplayName,
-                   P.BUSINESS_DATE AS BusinessDate, P.START_TIME AS StartTime, P.END_TIME AS EndTime,
-                   P.IS_WORKING AS IsWorking, P.APPROVAL_STATUS AS ApprovalStatus
-            FROM STAFF_DUTY_PLANS P JOIN STAFF_MEMBERS M ON M.ID=P.STAFF_MEMBER_ID
-            WHERE P.BUSINESS_DATE=@BusinessDate AND P.APPROVAL_STATUS='approved'
-              AND P.IS_WORKING=TRUE AND (@StaffId IS NULL OR P.STAFF_MEMBER_ID=@StaffId)
+            SELECT COALESCE(P.ID,'') AS Id, M.ID AS StaffId, M.DISPLAY_NAME AS DisplayName,
+                   COALESCE(P.BUSINESS_DATE,X.BUSINESS_DATE) AS BusinessDate, P.START_TIME AS StartTime, P.END_TIME AS EndTime,
+                   P.IS_WORKING AS IsWorking, P.APPROVAL_STATUS AS ApprovalStatus,
+                   EXISTS(SELECT 1 FROM ADMIN_USERS U WHERE U.STAFF_MEMBER_ID=M.ID AND U.IS_ACTIVE=TRUE AND U.ROLE_LEVEL='developer') AS CanUseBackstage,
+                   EXISTS(SELECT 1 FROM ADMIN_USERS U WHERE U.STAFF_MEMBER_ID=M.ID AND U.IS_ACTIVE=TRUE AND U.ROLE_LEVEL IN ('developer','manager')) AS CanUseManagerPayrollRole
+            FROM STAFF_MEMBERS M
+            LEFT JOIN STAFF_DUTY_PLANS P ON P.STAFF_MEMBER_ID=M.ID AND P.BUSINESS_DATE=@BusinessDate
+            LEFT JOIN STAFF_PAYROLL_SNAPSHOTS X ON X.STAFF_MEMBER_ID=M.ID AND X.BUSINESS_DATE=@BusinessDate
+            WHERE (X.STAFF_MEMBER_ID IS NOT NULL OR (P.APPROVAL_STATUS='approved' AND P.IS_WORKING=TRUE))
+              AND (@StaffId IS NULL OR M.ID=@StaffId)
             ORDER BY M.SORT_ORDER, M.DISPLAY_NAME;
             """, new { BusinessDate=businessDate.ToDateTime(TimeOnly.MinValue), StaffId=staffId }, cancellationToken:ct))).ToArray();
         var events = (await connection.QueryAsync<EventRow>(new CommandDefinition("""
@@ -59,7 +64,19 @@ public sealed class AttendanceRepository(AppDbContext dbContext)
             stops.TryGetValue(plan.StaffId,out var stop) && stop.Stop, active.TryGetValue(plan.StaffId,out var busy) ? busy : 0,
             affected.Where(x=>x.StaffId==plan.StaffId))).ToArray();
         return new StaffAttendanceOverviewDto(businessDate.ToString("yyyy-MM-dd"), nowOffset,
-            summaries.Select(MapSummary).ToArray());
+            await MapWithPayrollAsync());
+
+        async Task<StaffAttendanceSummaryDto[]> MapWithPayrollAsync()
+        {
+            var mapped = new List<StaffAttendanceSummaryDto>();
+            for (var index = 0; index < summaries.Length; index++)
+            {
+                var snapshot = await PayrollSnapshotStore.ReadAsync(connection, null, plans[index].StaffId, businessDate.ToDateTime(TimeOnly.MinValue), ct);
+                mapped.Add(MapSummary(summaries[index]) with { PayrollRole = snapshot?.PayrollRole, PayrollSnapshotVersion = snapshot?.Version,
+                    CanUseBackstage = plans[index].CanUseBackstage, CanUseManagerPayrollRole = plans[index].CanUseManagerPayrollRole });
+            }
+            return mapped.ToArray();
+        }
     }
 
     public async Task<StaffAttendanceEventDto> ApplyAsync(string staffId, StaffAttendanceActionRequest request,
@@ -97,6 +114,13 @@ public sealed class AttendanceRepository(AppDbContext dbContext)
         var eventAt = (request.OccurredAt ?? nowOffset).ToOffset(TimeSpan.FromHours(8)).DateTime;
         var eventType = action; var source = "manual"; var delta = 0; DateTime? endAt = null; string? baseId = null;
         if (eventAt > now.AddMinutes(5)) throw new BusinessException("不能預先登記尚未發生的出勤。", "ATTENDANCE_TIME_FUTURE");
+        if (action == "confirm_payroll_role")
+        {
+            await PayrollSnapshotStore.ConfirmAsync(connection, tx, staffId, businessDate.ToDateTime(TimeOnly.MinValue),
+                request.PayrollRole ?? "", request.Reason ?? "", actorId, now, ct);
+        }
+        if (action is "clock_in" or "set_times")
+            await PayrollSnapshotStore.CaptureAsync(connection, tx, staffId, businessDate.ToDateTime(TimeOnly.MinValue), eventAt, actorId, now, true, ct);
         if (action == "clock_in")
         {
             var open = await connection.QuerySingleOrDefaultAsync<EventRow>(new CommandDefinition("""
@@ -218,14 +242,25 @@ public sealed class AttendanceRepository(AppDbContext dbContext)
 
     private static async Task InsertScheduledAsync(MySqlConnection connection, PlanRow plan, DateTime start, DateTime? end,
         int minutes, string operationId, DateTime now, CancellationToken ct)
-        => await connection.ExecuteAsync(new CommandDefinition("""
+    {
+        await using var tx = await connection.BeginTransactionAsync(ct);
+        _ = await connection.ExecuteScalarAsync<string>(new CommandDefinition("SELECT ID FROM STAFF_MEMBERS WHERE ID=@StaffId FOR UPDATE;", new { plan.StaffId }, tx, cancellationToken: ct));
+        var snapshot = await PayrollSnapshotStore.CaptureAsync(connection, tx, plan.StaffId, plan.BusinessDate, start, "system:attendance", now, false, ct);
+        if (snapshot is null || snapshot.PayrollRole is null)
+        {
+            await tx.CommitAsync(ct);
+            return;
+        }
+        await connection.ExecuteAsync(new CommandDefinition("""
             INSERT INTO STAFF_ATTENDANCE_EVENTS
                 (ID,STAFF_MEMBER_ID,BUSINESS_DATE,DUTY_PLAN_ID,EVENT_TYPE,EVENT_AT,EVENT_END_AT,SOURCE,MINUTES_DELTA,OPERATION_ID,REASON,CREATED_AT,CREATED_BY)
             VALUES (@Id,@StaffId,@BusinessDate,@PlanId,@Type,@EventAt,@EndAt,'scheduled',@Minutes,@OperationId,'核准班表自動出勤',@Now,'system:attendance')
             ON DUPLICATE KEY UPDATE ID=ID;
             """, new {Id=Guid.NewGuid().ToString("D"), StaffId=plan.StaffId, BusinessDate=plan.BusinessDate.Date,
                 PlanId=plan.Id, Type=end is null ? "scheduled_start" : "scheduled_end", EventAt=end ?? start, EndAt=end,
-                Minutes=minutes, OperationId=operationId, Now=now}, cancellationToken:ct));
+                Minutes=minutes, OperationId=operationId, Now=now}, tx, cancellationToken:ct));
+        await tx.CommitAsync(ct);
+    }
 
     private static DateTime? PlanTime(DateTime date, TimeSpan? value)
         => value.HasValue ? date.Date.Add(value.Value) : null;
@@ -272,7 +307,7 @@ public sealed class AttendanceRepository(AppDbContext dbContext)
         }));
     private static DateTimeOffset Offset(DateTime value) => new(DateTime.SpecifyKind(value, DateTimeKind.Unspecified), TimeSpan.FromHours(8));
 
-    private sealed class PlanRow { public string Id {get;set;}=""; public string StaffId {get;set;}=""; public string DisplayName {get;set;}=""; public DateTime BusinessDate {get;set;} public TimeSpan? StartTime {get;set;} public TimeSpan? EndTime {get;set;} public bool IsWorking {get;set;} public string ApprovalStatus {get;set;}=""; }
+    private sealed class PlanRow { public bool CanUseBackstage {get;set;} public bool CanUseManagerPayrollRole {get;set;} public string Id {get;set;}=""; public string StaffId {get;set;}=""; public string DisplayName {get;set;}=""; public DateTime BusinessDate {get;set;} public TimeSpan? StartTime {get;set;} public TimeSpan? EndTime {get;set;} public bool IsWorking {get;set;} public string ApprovalStatus {get;set;}=""; }
     private sealed class EventRow { public string Id {get;set;}=""; public string StaffId {get;set;}=""; public DateTime BusinessDate {get;set;} public string? DutyPlanId {get;set;} public string EventType {get;set;}=""; public DateTime EventAt {get;set;} public DateTime? EventEndAt {get;set;} public string Source {get;set;}=""; public int MinutesDelta {get;set;} public string? BaseEventId {get;set;} public string OperationId {get;set;}=""; public string? Reason {get;set;} public DateTime CreatedAt {get;set;} }
     private sealed class StopRow { public string StaffId {get;set;}=""; public bool Stop {get;set;} }
     private sealed class AffectedRow { public string StaffId {get;set;}=""; public string OrderId {get;set;}=""; public string OrderNumber {get;set;}=""; public string OrderStatus {get;set;}=""; public string? CustomerName {get;set;} public DateTime RequestedStart {get;set;} public DateTime RequestedEnd {get;set;} public string ConfirmationStatus {get;set;}=""; }

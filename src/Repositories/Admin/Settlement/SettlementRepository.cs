@@ -3,9 +3,9 @@ using Dapper;
 using ToBeClarify.Api.Infrastructure;
 using ToBeClarify.Api.Models.Dtos;
 using ToBeClarify.Api.Models.Entities;
+using ToBeClarify.Api.Repositories.Shared;
 using ToBeClarify.Api.Exceptions;
 using System.Text.Json;
-using ToBeClarify.Api.Repositories.Shared;
 
 namespace ToBeClarify.Api.Repositories.Admin.Settlement;
 
@@ -95,6 +95,12 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
     {
         var id = Guid.NewGuid().ToString("D");
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        await using var tx = await connection.BeginTransactionAsync(cancellationToken);
+        await connection.ExecuteScalarAsync<string>(new CommandDefinition("SELECT ID FROM ORDERING_RUNTIME_LOCKS WHERE ID='operating_period' FOR UPDATE;", transaction: tx, cancellationToken: cancellationToken));
+        var finalized = await connection.QueryAsync<string>(new CommandDefinition(
+            "SELECT ID FROM SETTLEMENT_RUNS WHERE BUSINESS_DATE=@Date AND STATUS='finalized' FOR UPDATE;",
+            new { Date = businessDate.ToDateTime(TimeOnly.MinValue) }, tx, cancellationToken: cancellationToken));
+        if (finalized.Any()) throw new ConflictException("本營業日已正式結算，請使用結算後更正差額，不可再次全日計薪。", "SETTLEMENT_DAY_FINALIZED");
         await connection.ExecuteAsync(new CommandDefinition("""
             INSERT INTO `SETTLEMENT_RUNS`
                 (`ID`, `BUSINESS_DATE`, `SESSION_NO`, `DAY_TYPE`, `STATUS`, `RULE_VERSION_ID`,
@@ -104,7 +110,8 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
             ON DUPLICATE KEY UPDATE `ID` = `ID`;
             """, new { Id = id, BusinessDate = businessDate.ToDateTime(TimeOnly.MinValue), SessionNo = sessionNo,
                 DayType = dayType, RuleVersionId = ruleVersionId, Now = now, ActorId = actorId },
-            cancellationToken: cancellationToken));
+            tx, cancellationToken: cancellationToken));
+        await tx.CommitAsync(cancellationToken);
         return await GetRunAsync(businessDate, sessionNo, cancellationToken)
             ?? throw new InvalidOperationException("Settlement run could not be created.");
     }
@@ -188,7 +195,7 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
             WHERE `BUSINESS_DATE` = @BusinessDate;
 
             SELECT I.`ID` AS Id, I.`SETTLEMENT_ID` AS SettlementId, I.`STAFF_ID` AS StaffId,
-                   I.`ROLE` AS Role, M.`DISPLAY_NAME` AS DisplayName, M.`ROLE_TITLE` AS RoleTitle,
+                   I.`PAYROLL_SNAPSHOT_VERSION` AS PayrollSnapshotVersion, I.`ROLE` AS Role, M.`DISPLAY_NAME` AS DisplayName, M.`ROLE_TITLE` AS RoleTitle,
                    M.`IS_ACTIVE` AS IsActive, COALESCE(P.`IS_WORKING`, S.`IS_WORKING`, FALSE) AS IsWorking,
                    I.`ACTUAL_MINUTES` AS ActualMinutes, I.`ACTIVITY_HOURS` AS ActivityHours,
                    I.`ATTENDANCE_SOURCE` AS AttendanceSource,
@@ -204,12 +211,15 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
                 AND P.`APPROVAL_STATUS`='approved'
             WHERE I.`SETTLEMENT_ID` = @SettlementId;
 
-            SELECT P.`STAFF_MEMBER_ID` AS StaffId, M.`DISPLAY_NAME` AS DisplayName,
-                   M.`ROLE_TITLE` AS RoleTitle, M.`IS_ACTIVE` AS IsActive,
-                   P.`SCHEDULED_ROLES_JSON` AS ScheduledRolesJson
-            FROM `STAFF_DUTY_PLANS` P
-            INNER JOIN `STAFF_MEMBERS` M ON M.`ID` = P.`STAFF_MEMBER_ID`
-            WHERE P.`BUSINESS_DATE` = @BusinessDate AND P.`APPROVAL_STATUS` = 'approved' AND P.`IS_WORKING` = TRUE;
+            SELECT M.ID AS StaffId, M.DISPLAY_NAME AS DisplayName, M.ROLE_TITLE AS RoleTitle,
+                   M.IS_ACTIVE AS IsActive, P.SCHEDULED_ROLES_JSON AS ScheduledRolesJson,
+                   S.PAYROLL_ROLE AS PayrollRole, S.VERSION AS PayrollSnapshotVersion,
+                   S.CAN_USE_BACKSTAGE AS CanUseBackstage, S.BACKSTAGE_PARTICIPANT AS BackstageParticipant,
+                   S.STARTED_AT AS StartedAt
+            FROM STAFF_MEMBERS M
+            LEFT JOIN STAFF_DUTY_PLANS P ON P.STAFF_MEMBER_ID=M.ID AND P.BUSINESS_DATE=@BusinessDate
+            LEFT JOIN STAFF_PAYROLL_SNAPSHOTS S ON S.STAFF_MEMBER_ID=M.ID AND S.BUSINESS_DATE=@BusinessDate
+            WHERE S.STAFF_MEMBER_ID IS NOT NULL OR (P.IS_WORKING=TRUE AND P.APPROVAL_STATUS='approved');
 
             SELECT `ID` AS Id, `STAFF_MEMBER_ID` AS StaffId, `EVENT_TYPE` AS EventType,
                    `EVENT_AT` AS EventAt, `EVENT_END_AT` AS EventEndAt,
@@ -227,11 +237,11 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
                    R.`ANOMALY_NOTE` AS AnomalyNote
             FROM `SETTLEMENT_RESULT_LINES` R
             LEFT JOIN `STAFF_MEMBERS` M ON M.`ID` = R.`STAFF_ID`
-            WHERE R.`SETTLEMENT_ID` = @SettlementId
+            WHERE R.`SETTLEMENT_ID` = @SettlementId AND R.ANOMALY_STATUS<>'stale'
             ORDER BY R.`ROLE`, M.`DISPLAY_NAME`;
 
             SELECT B.`ID` AS Id, B.`SETTLEMENT_ID` AS SettlementId, B.`STAFF_ID` AS StaffId,
-                   M.`DISPLAY_NAME` AS StaffName, B.`ROLE` AS Role,
+                   M.`DISPLAY_NAME` AS StaffName, B.PAYROLL_SNAPSHOT_VERSION AS PayrollSnapshotVersion, B.`ROLE` AS Role,
                    B.`REQUESTED_MINUTES` AS RequestedMinutes, B.`REASON` AS Reason,
                    B.`STATUS` AS Status, B.`REQUESTED_BY` AS RequestedBy,
                    B.`REQUESTED_AT` AS RequestedAt, B.`REVIEWED_BY` AS ReviewedBy,
@@ -305,11 +315,15 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
                 input.ActualMinutes = AttendanceMinutes.Effective(events);
             if (events.Any(x => x.Source is "scheduled" or "manual")) input.AttendanceSource = "clock";
         }
-        var attendanceAnomalies = finalized ? [] : SettlementAttendanceSync.MergeMissingInputs(settlementId, staffInputs, attendanceCandidates);
+        var attendanceAnomalies = (finalized ? [] : SettlementAttendanceSync.MergeMissingInputs(settlementId, staffInputs, attendanceCandidates)).ToList();
+        if (!finalized && await connection.ExecuteScalarAsync<bool>(new CommandDefinition(
+            "SELECT COUNT(*)>0 FROM SETTLEMENT_RUNS WHERE BUSINESS_DATE=@Date AND ID<>@SettlementId AND STATUS='finalized';",
+            new { Date = businessDate.ToDateTime(TimeOnly.MinValue), SettlementId = settlementId }, cancellationToken: cancellationToken)))
+            attendanceAnomalies.Add(new SettlementAnomalyDto("SETTLEMENT_DAY_FINALIZED", "本營業日已有正式結算，請回到已結算時段建立更正差額，不可再次全日計薪。"));
         return new SettlementSourceData { Orders = orders, Items = items, Nominees = nominees, Tips = tips,
             Rooms = rooms, Addons = addons, Admissions = admissions, StaffInputs = staffInputs, Results = results,
             AttendanceBackfillRequests = attendanceBackfillRequests, Cash = cash, Period = period,
-            AttendanceAnomalies = attendanceAnomalies };
+            PayrollAssignments = attendanceCandidates, AttendanceAnomalies = attendanceAnomalies };
     }
 
     public async Task SaveInputsAsync(string settlementId, SaveInputsData inputs, string actorId, DateTime now,
@@ -317,38 +331,52 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var run = await connection.QuerySingleAsync<SettlementRunRow>(new CommandDefinition(
+            RunSelectSql + " WHERE ID=@SettlementId FOR UPDATE;", new { SettlementId = settlementId }, transaction, cancellationToken: cancellationToken));
+        if (run.Status == "finalized") throw new ConflictException("正式結算已鎖定。", "SETTLEMENT_LOCKED");
+        if (inputs.ExpectedInputVersion != run.InputVersion)
+            throw new ConflictException("結算輸入已更新，請重新載入後核對。", "SETTLEMENT_INPUTS_CHANGED");
+        await SettlementPayrollValidation.ValidateAsync(connection, transaction, run.BusinessDate,
+            inputs.StaffInputs.Select(x => (x.StaffId, x.Role, x.PayrollSnapshotVersion)), cancellationToken);
+        var before = await connection.QueryAsync<SettlementStaffInputRow>(new CommandDefinition(
+            "SELECT ID AS Id, CREATED_AT AS CreatedAt, CREATED_BY AS CreatedBy, STAFF_ID AS StaffId, ROLE, ACTUAL_MINUTES AS ActualMinutes, ACTIVITY_HOURS AS ActivityHours, NOTE, ATTENDANCE_SOURCE AS AttendanceSource, ATTENDANCE_REQUEST_ID AS AttendanceRequestId, ATTENDANCE_APPROVED_BY AS AttendanceApprovedBy, ATTENDANCE_APPROVED_AT AS AttendanceApprovedAt, PAYROLL_SNAPSHOT_VERSION AS PayrollSnapshotVersion FROM SETTLEMENT_STAFF_INPUTS WHERE SETTLEMENT_ID=@SettlementId;",
+            new { SettlementId = settlementId }, transaction, cancellationToken: cancellationToken));
         await connection.ExecuteAsync(new CommandDefinition("""
-            UPDATE `SETTLEMENT_RUNS`
-            SET `DAY_TYPE` = COALESCE(@DayType, `DAY_TYPE`), `RULE_VERSION_ID` = COALESCE(@RuleVersionId, `RULE_VERSION_ID`),
-                `PUBLIC_TIP_AMOUNT` = @PublicTipAmount, `ADMISSION_FEE_OVERRIDE` = @AdmissionFeeOverride,
-                `ACTIVITY_EXPENSE` = @ActivityExpense, `COMPANY_SHARE_HOURS` = @CompanyShareHours,
-                `ACTIVITY_HOURS_CONFIRMED` = @ActivityHoursConfirmed, `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId
-            WHERE `ID` = @SettlementId;
-            """, new { SettlementId = settlementId, inputs.DayType, inputs.RuleVersionId, inputs.PublicTipAmount, inputs.AdmissionFeeOverride,
-                inputs.ActivityExpense, inputs.CompanyShareHours, inputs.ActivityHoursConfirmed,
-                Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
-
+            DELETE FROM SETTLEMENT_STAFF_INPUTS WHERE SETTLEMENT_ID=@SettlementId;
+            UPDATE SETTLEMENT_RUNS SET DAY_TYPE=COALESCE(@DayType,DAY_TYPE), PUBLIC_TIP_AMOUNT=@PublicTipAmount,
+              ADMISSION_FEE_OVERRIDE=@AdmissionFeeOverride, ACTIVITY_EXPENSE=@ActivityExpense, COMPANY_SHARE_HOURS=@CompanyShareHours,
+              ACTIVITY_HOURS_CONFIRMED=@ActivityHoursConfirmed, INPUT_VERSION=INPUT_VERSION+1, STATUS='draft',
+              UPDATED_AT=@Now,UPDATED_BY=@ActorId WHERE ID=@SettlementId;
+            UPDATE SETTLEMENT_RESULT_LINES SET ANOMALY_STATUS='stale',ANOMALY_NOTE='結算輸入已更新，請重新計算。' WHERE SETTLEMENT_ID=@SettlementId;
+            """, new { SettlementId = settlementId, inputs.DayType, inputs.PublicTipAmount, inputs.AdmissionFeeOverride,
+                inputs.ActivityExpense, inputs.CompanyShareHours, inputs.ActivityHoursConfirmed, Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
+        var events = (await connection.QueryAsync<AttendanceMinuteEvent>(new CommandDefinition(
+            "SELECT STAFF_MEMBER_ID AS StaffId,EVENT_TYPE AS EventType,EVENT_AT AS EventAt,EVENT_END_AT AS EventEndAt,BASE_EVENT_ID AS BaseEventId,ID AS Id,MINUTES_DELTA AS MinutesDelta FROM STAFF_ATTENDANCE_EVENTS WHERE BUSINESS_DATE=@Date;",
+            new { Date = run.BusinessDate }, transaction, cancellationToken: cancellationToken))).GroupBy(x => x.StaffId).ToDictionary(x => x.Key, x => x.ToArray());
         foreach (var input in inputs.StaffInputs)
         {
+            var previous = before.FirstOrDefault(x => x.StaffId == input.StaffId && x.Role == input.Role);
+            var approved = previous?.AttendanceSource == "backfill_approved" && previous.ActualMinutes == input.ActualMinutes
+                && previous.PayrollSnapshotVersion == input.PayrollSnapshotVersion;
+            var staffEvents = events.GetValueOrDefault(input.StaffId, []);
+            var source = approved ? "backfill_approved" : staffEvents.Length > 0 && AttendanceMinutes.Effective(staffEvents) == input.ActualMinutes ? "clock" : "manual";
             await connection.ExecuteAsync(new CommandDefinition("""
-                INSERT INTO `SETTLEMENT_STAFF_INPUTS`
-                    (`ID`, `SETTLEMENT_ID`, `STAFF_ID`, `ROLE`, `ACTUAL_MINUTES`, `ACTIVITY_HOURS`,
-                     `ATTENDANCE_SOURCE`, `PUBLIC_TIP_ELIGIBLE`, `IS_BACKSTAGE_PARTICIPANT`, `NOTE`, `CREATED_AT`, `CREATED_BY`,
-                     `UPDATED_AT`, `UPDATED_BY`)
-                VALUES (@Id, @SettlementId, @StaffId, @Role, @ActualMinutes, @ActivityHours,
-                        @AttendanceSource, @PublicTipEligible, @IsBackstageParticipant, @Note, @Now, @ActorId, @Now, @ActorId)
-                ON DUPLICATE KEY UPDATE `ACTUAL_MINUTES` = VALUES(`ACTUAL_MINUTES`),
-                    `ACTIVITY_HOURS` = VALUES(`ACTIVITY_HOURS`),
-                    `ATTENDANCE_SOURCE` = VALUES(`ATTENDANCE_SOURCE`),
-                    `PUBLIC_TIP_ELIGIBLE` = VALUES(`PUBLIC_TIP_ELIGIBLE`),
-                    `IS_BACKSTAGE_PARTICIPANT` = VALUES(`IS_BACKSTAGE_PARTICIPANT`),
-                    `NOTE` = VALUES(`NOTE`), `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId;
-                """, new { Id = Guid.NewGuid().ToString("D"), SettlementId = settlementId, input.StaffId,
-                    input.Role, input.ActualMinutes, input.ActivityHours, input.PublicTipEligible,
-                    input.IsBackstageParticipant, input.AttendanceSource, input.Note, Now = now, ActorId = actorId },
-                transaction, cancellationToken: cancellationToken));
+                INSERT INTO SETTLEMENT_STAFF_INPUTS
+                  (ID,SETTLEMENT_ID,STAFF_ID,ROLE,ACTUAL_MINUTES,ACTIVITY_HOURS,ATTENDANCE_SOURCE,
+                   PAYROLL_SNAPSHOT_VERSION,ATTENDANCE_REQUEST_ID,ATTENDANCE_APPROVED_BY,ATTENDANCE_APPROVED_AT,PUBLIC_TIP_ELIGIBLE,IS_BACKSTAGE_PARTICIPANT,NOTE,CREATED_AT,CREATED_BY,UPDATED_AT,UPDATED_BY)
+                VALUES (@Id,@SettlementId,@StaffId,@Role,@ActualMinutes,@ActivityHours,@AttendanceSource,
+                        @PayrollSnapshotVersion,@AttendanceRequestId,@AttendanceApprovedBy,@AttendanceApprovedAt,@PublicTipEligible,@IsBackstageParticipant,@Note,@CreatedAt,@CreatedBy,@Now,@ActorId);
+                """, new { Id = previous?.Id ?? Guid.NewGuid().ToString("D"), CreatedAt = previous?.CreatedAt ?? now, CreatedBy = previous?.CreatedBy ?? actorId, SettlementId = settlementId, input.StaffId, input.Role,
+                    input.ActualMinutes, input.ActivityHours, AttendanceSource = source, input.PayrollSnapshotVersion,
+                    AttendanceRequestId = approved ? previous?.AttendanceRequestId : null, AttendanceApprovedBy = approved ? previous?.AttendanceApprovedBy : null,
+                    AttendanceApprovedAt = approved ? previous?.AttendanceApprovedAt : null,
+                    input.PublicTipEligible, input.IsBackstageParticipant, input.Note, Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
         }
-
+        await connection.ExecuteAsync(new CommandDefinition("""
+            INSERT INTO SETTLEMENT_AUDIT_LOG (ID,SETTLEMENT_ID,ACTION_TYPE,BEFORE_JSON,AFTER_JSON,REASON,ACTOR_ID,CREATED_AT)
+            VALUES (@Id,@SettlementId,'payroll_inputs_saved',@BeforeJson,@AfterJson,'核對上班職位與結算輸入',@ActorId,@Now);
+            """, new { Id = Guid.NewGuid().ToString("D"), SettlementId = settlementId, BeforeJson = JsonSerializer.Serialize(before),
+                AfterJson = JsonSerializer.Serialize(inputs.StaffInputs), ActorId = actorId, Now = now }, transaction, cancellationToken: cancellationToken));
         await transaction.CommitAsync(cancellationToken);
     }
 
@@ -361,6 +389,12 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
             "SELECT `STATUS` FROM `SETTLEMENT_RUNS` WHERE `ID` = @SettlementId FOR UPDATE;",
             new { SettlementId = settlementId }, transaction, cancellationToken: cancellationToken));
         if (status == "finalized") throw new BusinessException("正式結算已鎖定。", "SETTLEMENT_LOCKED");
+        var currentVersion = await connection.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT INPUT_VERSION FROM SETTLEMENT_RUNS WHERE ID=@SettlementId;", new { SettlementId = settlementId }, transaction, cancellationToken: cancellationToken));
+        if (currentVersion != calculation.Run.InputVersion)
+            throw new ConflictException("結算輸入已更新，請重新計算。", "SETTLEMENT_INPUTS_CHANGED");
+        await SettlementPayrollValidation.ValidateAsync(connection, transaction, calculation.Run.BusinessDate,
+            calculation.StaffInputs.Select(x => (x.StaffId, x.Role, x.PayrollSnapshotVersion)), cancellationToken);
         foreach (var input in calculation.StaffInputs)
         {
             if (!string.IsNullOrEmpty(input.Id))
@@ -384,12 +418,12 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
                 throw new ConflictException("計薪輸入已由其他操作更新，請重新計算。", "SETTLEMENT_INPUTS_CHANGED");
             await connection.ExecuteAsync(new CommandDefinition("""
                 INSERT INTO `SETTLEMENT_STAFF_INPUTS`
-                    (`ID`, `SETTLEMENT_ID`, `STAFF_ID`, `ROLE`, `ACTUAL_MINUTES`, `ATTENDANCE_SOURCE`,
+                    (`ID`, `SETTLEMENT_ID`, `STAFF_ID`, `ROLE`, `ACTUAL_MINUTES`, `ATTENDANCE_SOURCE`, `PAYROLL_SNAPSHOT_VERSION`,
                      `PUBLIC_TIP_ELIGIBLE`, `IS_BACKSTAGE_PARTICIPANT`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
-                VALUES (@Id, @SettlementId, @StaffId, @Role, @ActualMinutes, 'clock',
+                VALUES (@Id, @SettlementId, @StaffId, @Role, @ActualMinutes, 'clock', @PayrollSnapshotVersion,
                         @PublicTipEligible, @IsBackstageParticipant, @Now, @ActorId, @Now, @ActorId);
                 """, new { Id = Guid.NewGuid().ToString("D"), SettlementId = settlementId,
-                    input.StaffId, input.Role, input.ActualMinutes, input.PublicTipEligible, input.IsBackstageParticipant,
+                    input.StaffId, input.Role, input.ActualMinutes, input.PayrollSnapshotVersion, input.PublicTipEligible, input.IsBackstageParticipant,
                     Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
         }
         await connection.ExecuteAsync(new CommandDefinition("""
@@ -399,7 +433,7 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
             """, new { SettlementId = settlementId }, transaction, cancellationToken: cancellationToken));
         await connection.ExecuteAsync(new CommandDefinition("""
             UPDATE `SETTLEMENT_RUNS`
-            SET `RULE_VERSION_ID` = @RuleVersionId, `RULE_SNAPSHOT_JSON` = @RuleSnapshotJson,
+            SET INPUT_VERSION=INPUT_VERSION+1, CALCULATION_VERSION=2, `RULE_VERSION_ID` = @RuleVersionId, `RULE_SNAPSHOT_JSON` = @RuleSnapshotJson,
                 `ADMISSION_FEE_SNAPSHOT` = @AdmissionFeeSnapshot, `GROSS_REVENUE` = @GrossRevenue,
                 `DESIGNATED_REVENUE_BASE` = @DesignatedRevenueBase, `DEDICATED_ROOM_GROSS` = @DedicatedRoomGross,
                 `DEDICATED_ROOM_OWNER_SHARE` = @DedicatedRoomOwnerShare,
@@ -459,73 +493,77 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
         await transaction.CommitAsync(cancellationToken);
     }
 
-    public async Task FinalizeAsync(string settlementId, string actorId, DateTime now,
+    public async Task FinalizeAsync(string settlementId, int expectedInputVersion, string actorId, DateTime now,
         CancellationToken cancellationToken)
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        await using var tx = await connection.BeginTransactionAsync(cancellationToken);
+        await connection.ExecuteScalarAsync<string>(new CommandDefinition("SELECT ID FROM ORDERING_RUNTIME_LOCKS WHERE ID='operating_period' FOR UPDATE;", transaction: tx, cancellationToken: cancellationToken));
+        var run = await connection.QuerySingleAsync<SettlementRunRow>(new CommandDefinition(
+            RunSelectSql + " WHERE ID=@SettlementId FOR UPDATE;", new { SettlementId = settlementId }, tx, cancellationToken: cancellationToken));
+        var otherFinalized = await connection.QueryAsync<string>(new CommandDefinition(
+            "SELECT ID FROM SETTLEMENT_RUNS WHERE BUSINESS_DATE=@Date AND ID<>@SettlementId AND STATUS='finalized' FOR UPDATE;",
+            new { Date = run.BusinessDate, SettlementId = settlementId }, tx, cancellationToken: cancellationToken));
+        if (otherFinalized.Any()) throw new ConflictException("本營業日已正式結算，請使用結算後更正差額，不可再次全日計薪。", "SETTLEMENT_DAY_FINALIZED");
+        if (run.Status != "calculated" || run.InputVersion != expectedInputVersion)
+            throw new ConflictException("結算資料已更新，請重新核對與計算。", "SETTLEMENT_INPUTS_CHANGED");
+        await SettlementPayrollValidation.ValidateStoredAsync(connection, tx, settlementId, run.BusinessDate, cancellationToken);
+        var invalid = await connection.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM SETTLEMENT_RESULT_LINES WHERE SETTLEMENT_ID=@SettlementId AND ANOMALY_STATUS NOT IN ('normal','stale');",
+            new { SettlementId = settlementId }, tx, cancellationToken: cancellationToken));
+        if (invalid > 0) throw new ConflictException("薪資結果仍待核對，請重新計算。", "SETTLEMENT_REQUIRES_MANUAL_HANDLING");
+        var periods = await connection.QueryAsync<string>(new CommandDefinition(
+            "SELECT PERIOD_STATUS FROM BUSINESS_PERIODS WHERE BUSINESS_DATE=@Date FOR UPDATE;", new { Date = run.BusinessDate }, tx, cancellationToken: cancellationToken));
+        var unfinished = await connection.ExecuteScalarAsync<int>(new CommandDefinition("""
+            SELECT COUNT(*) FROM ORDERS O JOIN CUSTOMER_ORDER_SESSIONS S ON S.ID=O.SESSION_ID
+            WHERE S.BUSINESS_DATE=@Date AND O.ORDER_STATUS IN ('submitted','partially_confirmed','needs_reschedule','confirmed','in_service')
+              AND (O.FLOW_VERSION<2 OR EXISTS(SELECT 1 FROM ORDER_FULFILLMENT_UNITS U WHERE U.ORDER_ID=O.ID
+                AND U.UNIT_STATUS NOT IN ('completed','cancelled','carried_forward')
+                AND COALESCE(U.FULFILLMENT_PERIOD_ID,U.BUSINESS_PERIOD_ID)=S.BUSINESS_PERIOD_ID));
+            """, new { Date = run.BusinessDate }, tx, cancellationToken: cancellationToken));
+        if (unfinished > 0) throw new BusinessException("仍有未完成訂單，請先處理。", "BUSINESS_PERIOD_HAS_UNFINISHED_ORDERS");
+        if (periods.Any(x => x == "open")) throw new BusinessException("請先關店。", "BUSINESS_PERIOD_NOT_CLOSED");
         await connection.ExecuteAsync(new CommandDefinition("""
-            UPDATE `SETTLEMENT_RUNS`
-            SET `STATUS` = 'finalized', `FINALIZED_AT` = @Now, `FINALIZED_BY` = @ActorId,
-                `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId
-            WHERE `ID` = @SettlementId AND `STATUS` = 'calculated';
-            """, new { SettlementId = settlementId, Now = now, ActorId = actorId },
-            cancellationToken: cancellationToken));
+            UPDATE SETTLEMENT_RUNS SET STATUS='finalized',FINALIZED_AT=@Now,FINALIZED_BY=@ActorId,UPDATED_AT=@Now,UPDATED_BY=@ActorId WHERE ID=@SettlementId;
+            UPDATE BUSINESS_PERIODS SET PERIOD_STATUS='settled',INTAKE_MODE='staff_only',SETTLED_AT=@Now,
+              VERSION=VERSION+1,UPDATED_AT=@Now,UPDATED_BY=@ActorId WHERE BUSINESS_DATE=@Date AND PERIOD_STATUS='closed';
+            INSERT INTO SETTLEMENT_AUDIT_LOG (ID,SETTLEMENT_ID,ACTION_TYPE,AFTER_JSON,REASON,ACTOR_ID,CREATED_AT)
+            VALUES (@AuditId,@SettlementId,'finalized','{}','正式結算與營業期鎖定',@ActorId,@Now);
+            """, new { SettlementId = settlementId, Date = run.BusinessDate, ActorId = actorId, Now = now, AuditId = Guid.NewGuid().ToString("D") }, tx, cancellationToken: cancellationToken));
+        await tx.CommitAsync(cancellationToken);
     }
 
-    public async Task<SettlementRunRow> ReopenAsync(DateOnly businessDate, int sessionNo, SettlementRuleRow rule,
+    public Task<SettlementRunRow> ReopenAsync(DateOnly businessDate, int sessionNo, SettlementRuleRow rule,
         string reason, string actorId, DateTime now, CancellationToken cancellationToken)
-    {
-        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        var previous = await connection.QuerySingleOrDefaultAsync<SettlementRunRow>(new CommandDefinition(
-            RunSelectSql + " WHERE `BUSINESS_DATE` = @BusinessDate AND `SESSION_NO` = @SessionNo LIMIT 1;",
-            new { BusinessDate = businessDate.ToDateTime(TimeOnly.MinValue), SessionNo = sessionNo }, transaction,
-            cancellationToken: cancellationToken));
-        if (previous is null || previous.Status != "finalized")
-            throw new InvalidOperationException("Only a finalized settlement can be reopened.");
-        var nextNo = await connection.QuerySingleAsync<int>(new CommandDefinition(
-            "SELECT COALESCE(MAX(`SESSION_NO`), 0) + 1 FROM `SETTLEMENT_RUNS` WHERE `BUSINESS_DATE` = @BusinessDate;",
-            new { BusinessDate = businessDate.ToDateTime(TimeOnly.MinValue) }, transaction, cancellationToken: cancellationToken));
-        var nextId = Guid.NewGuid().ToString("D");
-        await connection.ExecuteAsync(new CommandDefinition("""
-            INSERT INTO `SETTLEMENT_RUNS`
-                (`ID`, `BUSINESS_DATE`, `SESSION_NO`, `DAY_TYPE`, `STATUS`, `RULE_VERSION_ID`, `RULE_SNAPSHOT_JSON`, `CREATED_AT`,
-                 `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
-            VALUES (@Id, @BusinessDate, @SessionNo, @DayType, 'draft', @RuleVersionId, @RuleSnapshotJson,
-                    @Now, @ActorId, @Now, @ActorId);
-            INSERT INTO `SETTLEMENT_AUDIT_LOG`
-                (`ID`, `SETTLEMENT_ID`, `ACTION_TYPE`, `BEFORE_JSON`, `AFTER_JSON`, `REASON`, `ACTOR_ID`, `CREATED_AT`)
-            VALUES (@AuditId, @PreviousId, 'reopen', @BeforeJson, @AfterJson, @Reason, @ActorId, @Now);
-            """, new { Id = nextId, BusinessDate = businessDate.ToDateTime(TimeOnly.MinValue), SessionNo = nextNo,
-                previous.DayType, RuleVersionId = rule.Id, RuleSnapshotJson = System.Text.Json.JsonSerializer.Serialize(rule),
-                Now = now, ActorId = actorId, AuditId = Guid.NewGuid().ToString("D"),
-                PreviousId = previous.Id, BeforeJson = $"{{\"status\":\"{previous.Status}\",\"sessionNo\":{previous.SessionNo}}}",
-                AfterJson = $"{{\"status\":\"draft\",\"sessionNo\":{nextNo}}}", Reason = reason }, transaction,
-            cancellationToken: cancellationToken));
-        await transaction.CommitAsync(cancellationToken);
-        return await GetRunAsync(businessDate, nextNo, cancellationToken)
-            ?? throw new InvalidOperationException("Reopened settlement could not be read.");
-    }
+        => throw new ConflictException("已正式結算同班請使用結算後更正差額，不可再次全日計薪。", "SETTLEMENT_DAY_FINALIZED");
 
     public async Task<SettlementAttendanceBackfillRow> SubmitAttendanceBackfillAsync(string settlementId,
         string staffId, string role, int requestedMinutes, string reason, string actorId, DateTime now,
         CancellationToken cancellationToken)
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var run = await connection.QuerySingleAsync<SettlementRunRow>(new CommandDefinition(
+            RunSelectSql + " WHERE ID=@SettlementId FOR UPDATE;", new { SettlementId = settlementId }, transaction, cancellationToken: cancellationToken));
+        if (run.Status == "finalized") throw new ConflictException("正式結算已鎖定。", "SETTLEMENT_LOCKED");
+        var snapshot = await PayrollSnapshotStore.ReadAsync(connection, transaction, staffId, run.BusinessDate, cancellationToken);
+        if (snapshot?.PayrollRole != role)
+            throw new BusinessException("補打卡須使用上班時鎖定的計薪職位，請先核對出勤。", "PAYROLL_INPUT_CONFLICT");
         var id = Guid.NewGuid().ToString("D");
         await connection.ExecuteAsync(new CommandDefinition("""
             INSERT INTO `SETTLEMENT_ATTENDANCE_BACKFILL_REQUESTS`
-                (`ID`, `SETTLEMENT_ID`, `STAFF_ID`, `ROLE`, `REQUESTED_MINUTES`, `REASON`, `STATUS`,
+                (`ID`, `SETTLEMENT_ID`, `STAFF_ID`, `ROLE`, `PAYROLL_SNAPSHOT_VERSION`, `REQUESTED_MINUTES`, `REASON`, `STATUS`,
                  `REQUESTED_BY`, `REQUESTED_AT`)
-            VALUES (@Id, @SettlementId, @StaffId, @Role, @RequestedMinutes, @Reason, 'pending',
+            VALUES (@Id, @SettlementId, @StaffId, @Role, @SnapshotVersion, @RequestedMinutes, @Reason, 'pending',
                     @ActorId, @Now);
             INSERT INTO `SETTLEMENT_AUDIT_LOG`
                 (`ID`, `SETTLEMENT_ID`, `ACTION_TYPE`, `AFTER_JSON`, `REASON`, `ACTOR_ID`, `CREATED_AT`)
             VALUES (@AuditId, @SettlementId, 'attendance_backfill_requested', @AfterJson, @Reason, @ActorId, @Now);
-            """, new { Id = id, SettlementId = settlementId, StaffId = staffId, Role = role,
+            """, new { Id = id, SettlementId = settlementId, StaffId = staffId, Role = role, SnapshotVersion = snapshot!.Version,
                 RequestedMinutes = requestedMinutes, Reason = reason, ActorId = actorId, Now = now,
                 AuditId = Guid.NewGuid().ToString("D"), AfterJson = $"{{\"staffId\":\"{staffId}\",\"role\":\"{role}\",\"minutes\":{requestedMinutes}}}" },
-            cancellationToken: cancellationToken));
+            transaction, cancellationToken: cancellationToken));
+        await transaction.CommitAsync(cancellationToken);
         return await GetAttendanceBackfillAsync(id, cancellationToken)
             ?? throw new InvalidOperationException("Attendance backfill request could not be read.");
     }
@@ -537,7 +575,7 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         var request = await connection.QuerySingleOrDefaultAsync<SettlementAttendanceBackfillRow>(new CommandDefinition("""
             SELECT B.`ID` AS Id, B.`SETTLEMENT_ID` AS SettlementId, B.`STAFF_ID` AS StaffId,
-                   M.`DISPLAY_NAME` AS StaffName, B.`ROLE` AS Role, B.`REQUESTED_MINUTES` AS RequestedMinutes,
+                   M.`DISPLAY_NAME` AS StaffName, B.PAYROLL_SNAPSHOT_VERSION AS PayrollSnapshotVersion, B.`ROLE` AS Role, B.`REQUESTED_MINUTES` AS RequestedMinutes,
                    B.`REASON` AS Reason, B.`STATUS` AS Status, B.`REQUESTED_BY` AS RequestedBy,
                    B.`REQUESTED_AT` AS RequestedAt, B.`REVIEWED_BY` AS ReviewedBy,
                    B.`REVIEWED_AT` AS ReviewedAt, B.`REVIEW_NOTE` AS ReviewNote
@@ -547,6 +585,25 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
             """, new { RequestId = requestId }, transaction, cancellationToken: cancellationToken));
         if (request is null) throw new InvalidOperationException("Attendance backfill request not found.");
         if (request.Status != "pending") throw new InvalidOperationException("Attendance backfill request is already reviewed.");
+        var run = await connection.QuerySingleAsync<SettlementRunRow>(new CommandDefinition(RunSelectSql + " WHERE ID=@SettlementId FOR UPDATE;",
+            new { request.SettlementId }, transaction, cancellationToken: cancellationToken));
+        if (run.Status == "finalized") throw new ConflictException("正式結算已鎖定。", "SETTLEMENT_LOCKED");
+        request = await connection.QuerySingleAsync<SettlementAttendanceBackfillRow>(new CommandDefinition(
+            "SELECT ID AS Id,SETTLEMENT_ID AS SettlementId,STAFF_ID AS StaffId,ROLE,REQUESTED_MINUTES AS RequestedMinutes,PAYROLL_SNAPSHOT_VERSION AS PayrollSnapshotVersion,STATUS FROM SETTLEMENT_ATTENDANCE_BACKFILL_REQUESTS WHERE ID=@Id FOR UPDATE;",
+            new { request.Id }, transaction, cancellationToken: cancellationToken));
+        if (request.Status != "pending") throw new ConflictException("補打卡申請已處理。", "ATTENDANCE_REQUEST_CHANGED");
+        if (approved)
+        {
+            var snapshot = await PayrollSnapshotStore.ReadAsync(connection, transaction, request.StaffId, run.BusinessDate, cancellationToken);
+            if (snapshot?.PayrollRole != request.Role || snapshot.Version != request.PayrollSnapshotVersion)
+                throw new ConflictException("上班計薪職位已變更，請重新提交補打卡申請。", "PAYROLL_SNAPSHOT_CHANGED");
+            var existingInputs = await connection.QueryAsync<SettlementStaffInputRow>(new CommandDefinition(
+                "SELECT STAFF_ID AS StaffId,ROLE,PAYROLL_SNAPSHOT_VERSION AS PayrollSnapshotVersion FROM SETTLEMENT_STAFF_INPUTS WHERE SETTLEMENT_ID=@SettlementId;",
+                new { request.SettlementId }, transaction, cancellationToken: cancellationToken));
+            await SettlementPayrollValidation.ValidateAsync(connection, transaction, run.BusinessDate,
+                existingInputs.Where(x => !(x.StaffId == request.StaffId && x.Role == request.Role)).Select(x => (x.StaffId,x.Role,x.PayrollSnapshotVersion))
+                    .Append((request.StaffId,request.Role,request.PayrollSnapshotVersion)), cancellationToken);
+        }
         var status = approved ? "approved" : "rejected";
         await connection.ExecuteAsync(new CommandDefinition("""
             UPDATE `SETTLEMENT_ATTENDANCE_BACKFILL_REQUESTS`
@@ -559,16 +616,16 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
             await connection.ExecuteAsync(new CommandDefinition("""
                 INSERT INTO `SETTLEMENT_STAFF_INPUTS`
                     (`ID`, `SETTLEMENT_ID`, `STAFF_ID`, `ROLE`, `ACTUAL_MINUTES`, `ATTENDANCE_SOURCE`,
-                     `ATTENDANCE_REQUEST_ID`, `ATTENDANCE_APPROVED_BY`, `ATTENDANCE_APPROVED_AT`,
+                     `ATTENDANCE_REQUEST_ID`, `ATTENDANCE_APPROVED_BY`, `ATTENDANCE_APPROVED_AT`, `PAYROLL_SNAPSHOT_VERSION`,
                      `PUBLIC_TIP_ELIGIBLE`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
                 VALUES (@InputId, @SettlementId, @StaffId, @Role, @RequestedMinutes, 'backfill_approved',
-                        @RequestId, @ActorId, @Now, TRUE, @Now, @ActorId, @Now, @ActorId)
+                        @RequestId, @ActorId, @Now, @PayrollSnapshotVersion, TRUE, @Now, @ActorId, @Now, @ActorId)
                 ON DUPLICATE KEY UPDATE `ACTUAL_MINUTES` = VALUES(`ACTUAL_MINUTES`),
-                    `ATTENDANCE_SOURCE` = 'backfill_approved', `ATTENDANCE_REQUEST_ID` = @RequestId,
+                    `PAYROLL_SNAPSHOT_VERSION`=@PayrollSnapshotVersion, `ATTENDANCE_SOURCE` = 'backfill_approved', `ATTENDANCE_REQUEST_ID` = @RequestId,
                     `ATTENDANCE_APPROVED_BY` = @ActorId, `ATTENDANCE_APPROVED_AT` = @Now,
                     `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId;
                 """, new { InputId = Guid.NewGuid().ToString("D"), request.SettlementId, request.StaffId,
-                    request.Role, request.RequestedMinutes, RequestId = request.Id, ActorId = actorId, Now = now },
+                    request.Role, request.RequestedMinutes, request.PayrollSnapshotVersion, RequestId = request.Id, ActorId = actorId, Now = now },
                 transaction, cancellationToken: cancellationToken));
         }
         await connection.ExecuteAsync(new CommandDefinition("""
@@ -580,6 +637,9 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
                 BeforeJson = $"{{\"status\":\"pending\",\"requestId\":\"{request.Id}\"}}",
                 AfterJson = $"{{\"status\":\"{status}\",\"approvedMinutes\":{(approved ? request.RequestedMinutes : 0)}}}",
                 Reason = note, ActorId = actorId, Now = now }, transaction, cancellationToken: cancellationToken));
+        if (approved) await connection.ExecuteAsync(new CommandDefinition(
+            "UPDATE SETTLEMENT_RUNS SET INPUT_VERSION=INPUT_VERSION+1,STATUS='draft' WHERE ID=@SettlementId; UPDATE SETTLEMENT_RESULT_LINES SET ANOMALY_STATUS='stale' WHERE SETTLEMENT_ID=@SettlementId;",
+            new { request.SettlementId }, transaction, cancellationToken: cancellationToken));
         await transaction.CommitAsync(cancellationToken);
         return await GetAttendanceBackfillAsync(requestId, cancellationToken)
             ?? throw new InvalidOperationException("Reviewed attendance backfill request could not be read.");
@@ -589,7 +649,7 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
         CancellationToken cancellationToken)
         => await QuerySingleOrDefaultAsync<SettlementAttendanceBackfillRow>("""
             SELECT B.`ID` AS Id, B.`SETTLEMENT_ID` AS SettlementId, B.`STAFF_ID` AS StaffId,
-                   M.`DISPLAY_NAME` AS StaffName, B.`ROLE` AS Role, B.`REQUESTED_MINUTES` AS RequestedMinutes,
+                   M.`DISPLAY_NAME` AS StaffName, B.PAYROLL_SNAPSHOT_VERSION AS PayrollSnapshotVersion, B.`ROLE` AS Role, B.`REQUESTED_MINUTES` AS RequestedMinutes,
                    B.`REASON` AS Reason, B.`STATUS` AS Status, B.`REQUESTED_BY` AS RequestedBy,
                    B.`REQUESTED_AT` AS RequestedAt, B.`REVIEWED_BY` AS ReviewedBy,
                    B.`REVIEWED_AT` AS ReviewedAt, B.`REVIEW_NOTE` AS ReviewNote
@@ -603,6 +663,10 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var status = await connection.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT STATUS FROM SETTLEMENT_RUNS WHERE ID=@SettlementId FOR UPDATE;",
+            new { SettlementId = settlementId }, transaction, cancellationToken: cancellationToken));
+        if (status is null || status == "finalized") throw new ConflictException("正式結算已鎖定，請使用結算後更正。", "SETTLEMENT_LOCKED");
         var previousAmount = await connection.QuerySingleOrDefaultAsync<int?>(new CommandDefinition("""
             SELECT COALESCE(A.`ADJUSTED_AMOUNT`, O.`TOTAL_AMOUNT`)
             FROM `ORDERS` O
@@ -632,6 +696,10 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
                 BeforeJson = $"{{\"orderId\":\"{orderId}\",\"amount\":{previousAmount.Value}}}",
                 AfterJson = $"{{\"orderId\":\"{orderId}\",\"amount\":{adjustedAmount}}}", Reason = reason,
                 ActorId = actorId, Now = now }, transaction, cancellationToken: cancellationToken));
+        await connection.ExecuteAsync(new CommandDefinition("""
+            UPDATE SETTLEMENT_RUNS SET INPUT_VERSION=INPUT_VERSION+1,STATUS='draft',UPDATED_AT=@Now,UPDATED_BY=@ActorId WHERE ID=@SettlementId;
+            UPDATE SETTLEMENT_RESULT_LINES SET ANOMALY_STATUS='stale',ANOMALY_NOTE='訂單調整已更新，請重新計算。' WHERE SETTLEMENT_ID=@SettlementId;
+            """, new { SettlementId = settlementId, Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
         await transaction.CommitAsync(cancellationToken);
     }
 
@@ -745,7 +813,7 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
                `NET_CASH` AS NetCash, `RETAINED_AMOUNT` AS RetainedAmount,
                `PENDING_FINANCE_COUNT` AS PendingFinanceCount,
                `CORRECTS_SETTLEMENT_ID` AS CorrectsSettlementId,
-               `CORRECTION_VERSION` AS CorrectionVersion
+               `CORRECTION_VERSION` AS CorrectionVersion, INPUT_VERSION AS InputVersion, CALCULATION_VERSION AS CalculationVersion
         FROM `SETTLEMENT_RUNS`
         """;
 }
