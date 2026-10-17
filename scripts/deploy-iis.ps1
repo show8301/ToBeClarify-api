@@ -6,7 +6,9 @@ param(
     [string]$DeployPath,
 
     [Parameter(Mandatory = $true)]
-    [string]$HealthCheckUrl
+    [string]$HealthCheckUrl,
+
+    [switch]$EnableNotifications
 )
 
 Set-StrictMode -Version Latest
@@ -85,6 +87,39 @@ if (-not (Test-Path -LiteralPath $webConfigPath -PathType Leaf)) {
     throw "The IIS web.config file was not found: $webConfigPath"
 }
 
+$originalWebConfig = $null
+$notificationConfig = $null
+if ($EnableNotifications) {
+    $originalWebConfig = [System.IO.File]::ReadAllBytes($webConfigPath)
+    $notificationConfig = New-Object System.Xml.XmlDocument
+    $notificationConfig.PreserveWhitespace = $true
+    $notificationConfig.Load($webConfigPath)
+    $aspNetCoreNodes = $notificationConfig.SelectNodes('//system.webServer/aspNetCore')
+    if ($aspNetCoreNodes.Count -ne 1) {
+        throw 'Expected exactly one IIS aspNetCore configuration before enabling notifications.'
+    }
+    $aspNetCore = $aspNetCoreNodes[0]
+    $variables = $aspNetCore.SelectSingleNode('environmentVariables')
+    if ($null -eq $variables) {
+        $variables = $notificationConfig.CreateElement('environmentVariables')
+        [void]$aspNetCore.AppendChild($variables)
+    }
+    $notificationVariables = @($variables.SelectNodes('environmentVariable') |
+        Where-Object { $_.GetAttribute('name') -ieq 'Notifications__Enabled' })
+    if ($notificationVariables.Count -gt 1) {
+        throw 'Duplicate Notifications__Enabled IIS settings; resolve before deployment.'
+    }
+    if ($notificationVariables.Count -eq 0) {
+        $notificationVariable = $notificationConfig.CreateElement('environmentVariable')
+        [void]$variables.AppendChild($notificationVariable)
+    }
+    else {
+        $notificationVariable = $notificationVariables[0]
+    }
+    $notificationVariable.SetAttribute('name', 'Notifications__Enabled')
+    $notificationVariable.SetAttribute('value', 'true')
+}
+
 if (-not (Get-ChildItem -LiteralPath $deployRoot -Filter 'appsettings*.json' -File)) {
     throw "No server appsettings file was found in: $deployRoot"
 }
@@ -112,6 +147,7 @@ foreach ($item in $existingApplicationItems) {
 }
 
 $offlineCreated = $false
+$notificationsConfigUpdated = $false
 
 try {
     Set-Content -LiteralPath $offlinePath -Value 'API deployment in progress.' -Encoding UTF8
@@ -130,6 +166,18 @@ try {
 
     if (-not (Test-Path -LiteralPath (Join-Path $deployRoot 'ToBeClarify.Api.dll') -PathType Leaf)) {
         throw 'Deployment verification failed because ToBeClarify.Api.dll is missing.'
+    }
+
+    if ($EnableNotifications) {
+        $notificationsConfigUpdated = $true
+        $notificationConfig.Save($webConfigPath)
+        $verifiedConfig = New-Object System.Xml.XmlDocument
+        $verifiedConfig.Load($webConfigPath)
+        $verifiedFlag = $verifiedConfig.SelectSingleNode('//system.webServer/aspNetCore/environmentVariables/environmentVariable[@name="Notifications__Enabled"]')
+        if ($null -eq $verifiedFlag -or $verifiedFlag.GetAttribute('value') -ne 'true') {
+            throw 'Notification enablement was not persisted in IIS configuration.'
+        }
+        Write-Host 'Configured Notifications__Enabled=true for the API process.'
     }
 
     Remove-Item -LiteralPath $offlinePath -Force
@@ -170,6 +218,11 @@ catch {
         Set-Content -LiteralPath $offlinePath -Value 'API rollback in progress.' -Encoding UTF8
         $offlineCreated = $true
         Start-Sleep -Seconds 5
+    }
+
+    if ($notificationsConfigUpdated) {
+        [System.IO.File]::WriteAllBytes($webConfigPath, $originalWebConfig)
+        Write-Host 'Restored the previous notification environment setting.'
     }
 
     Get-ChildItem -LiteralPath $deployRoot -Force |

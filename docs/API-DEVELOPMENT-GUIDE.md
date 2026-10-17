@@ -576,6 +576,7 @@ resize 使用 `ResizeMode.Max`，會維持比例，不會強制裁成指定長�
 - Push 到 `dev` 或指向 `dev` 的 pull request：僅執行 CI build，不部署；API 目前沒有獨立測試環境。
 - Push 到 `main`：完成 build 後，由 self-hosted Windows X64 runner 部署到唯一的正式 IIS 環境。
 - `workflow_dispatch`：只有從 `main` 執行時才會進行正式 build + deploy；其他分支不會部署。
+- 通知啟用：確認通知 migration 已完成及音效已上傳後，可從 `main` 手動執行 `workflow_dispatch`，設定 `enable_notifications=true`。部署會在 API 停機期間將既有 IIS `web.config` 的 `Notifications__Enabled` 設為 `true`；環境變數覆蓋既有 JSON 設定，因此單純重發程式或上傳音效不會自動啟用通知。一般 push 與預設的手動部署保留既有旗標；部署失敗會連同程式還原本次旗標變更。
 
 整體需求所稱的「測試環境」是 Web 的 `dev` 測試站 `https://www-dev.marchgroup.net`。API 沒有獨立測試站，因此同一個測試環境部署請求中，API 直接依正式發布流程由 `main` 部署至 `https://api.marchgroup.net`；API `dev` 僅供建置與 artifact 驗證，不作為 API 功能驗收環境。
 - 同一 ref 新 run 會取消前一個尚未完成的 run。
