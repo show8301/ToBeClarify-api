@@ -11,7 +11,7 @@ using ToBeClarify.Api.Repositories.Admin.Settlement;
 
 namespace ToBeClarify.Api.Services.Admin.Settlement;
 
-public sealed class SettlementService : ISettlementService
+public sealed partial class SettlementService : ISettlementService
 {
     private static readonly string[] InputRoles = ["designated", "service", "manager", "backstage"];
     private readonly ISettlementRepository _repository;
@@ -742,6 +742,7 @@ public sealed class SettlementService : ISettlementService
     {
         Id = row.Id, BusinessDate = row.BusinessDate, SessionNo = row.SessionNo, DayType = row.DayType,
         InputVersion = row.InputVersion, CalculationVersion = row.CalculationVersion,
+        FinalizedAt = row.FinalizedAt, FinalizedBy = row.FinalizedBy,
         Status = row.Status, RuleVersionId = row.RuleVersionId, RuleSnapshotJson = row.RuleSnapshotJson,
         PublicTipAmount = row.PublicTipAmount, AdmissionFeeOverride = row.AdmissionFeeOverride,
         AdmissionFeeSnapshot = row.AdmissionFeeSnapshot, ActivityExpense = row.ActivityExpense,

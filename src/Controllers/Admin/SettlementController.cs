@@ -62,6 +62,27 @@ public sealed class SettlementController : ControllerBase
         SettlementReopenRequest request, CancellationToken cancellationToken)
         => Ok(ApiResponse<SettlementOverviewDto>.Ok(await _service.ReopenAsync(request, User, cancellationToken)));
 
+    [HttpPost("recalculation/preview")]
+    [Authorize(Policy = "AdminManager")]
+    public async Task<ActionResult<ApiResponse<SettlementRecalculationPreviewDto>>> PreviewRecalculation(
+        SettlementCalculateRequest request, CancellationToken cancellationToken)
+        => Ok(ApiResponse<SettlementRecalculationPreviewDto>.Ok(
+            await _service.PreviewRecalculationAsync(request, User, cancellationToken)));
+
+    [HttpPost("recalculation/confirm")]
+    [Authorize(Policy = "AdminManager")]
+    public async Task<ActionResult<ApiResponse<SettlementOverviewDto>>> ConfirmRecalculation(
+        ConfirmSettlementRecalculationRequest request, CancellationToken cancellationToken)
+        => Ok(ApiResponse<SettlementOverviewDto>.Ok(
+            await _service.ConfirmRecalculationAsync(request, User, cancellationToken)));
+
+    [HttpGet("recalculation/history")]
+    [Authorize(Policy = "AdminManager")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<SettlementRecalculationHistoryDto>>>> RecalculationHistory(
+        [FromQuery] DateOnly businessDate, [FromQuery] int sessionNo = 1, CancellationToken cancellationToken = default)
+        => Ok(ApiResponse<IReadOnlyList<SettlementRecalculationHistoryDto>>.Ok(
+            await _service.GetRecalculationHistoryAsync(businessDate, sessionNo, cancellationToken)));
+
     [HttpPost("attendance/backfill")]
     public async Task<ActionResult<ApiResponse<SettlementOverviewDto>>> SubmitAttendanceBackfill(
         SettlementAttendanceBackfillRequest request, CancellationToken cancellationToken)
