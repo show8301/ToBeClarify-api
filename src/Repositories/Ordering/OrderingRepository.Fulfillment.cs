@@ -284,8 +284,8 @@ public sealed partial class OrderingRepository
             return JsonSerializer.Deserialize<OrderFulfillmentDto>(previous.ResultJson)!;
         }
         if (unit.Version != request.ExpectedVersion) throw new ConflictException("其他店員已更新此項目，請重新載入後操作。", "FULFILLMENT_VERSION_CONFLICT");
-        if (unit.Kind == "nominee" && order.StoreConfirmationStatus == "pending")
-            throw new BusinessException("請先等待店家承接協調單。", "STORE_CONFIRMATION_REQUIRED");
+        var storeConfirmationStatus = ResolveFulfillmentStoreConfirmation(
+            unit.Kind, order.StoreConfirmationStatus, request.Action);
         if (unit.Status == "needs_coordination" &&
             (actorRole is not (AdminRole.Manager or AdminRole.Developer) || request.Action is not ("reschedule" or "carry_forward" or "cancel")))
             throw new ForbiddenException("此請求已交回經理，須由經理重新協調。", "NOMINEE_COORDINATION_REQUIRED");
@@ -437,14 +437,15 @@ public sealed partial class OrderingRepository
         var nextStatus = SummarizeFulfillmentStatus(data.Units);
         await connection.ExecuteAsync(new CommandDefinition("""
             UPDATE ORDERS SET ORDER_STATUS=@Status,UPDATED_AT=@Now,UPDATED_BY=@ActorId,
-                STORE_CONFIRMATION_STATUS=CASE WHEN STORE_CONFIRMATION_STATUS='pending' THEN 'approved' ELSE STORE_CONFIRMATION_STATUS END,
-                STORE_CONFIRMED_AT=CASE WHEN STORE_CONFIRMATION_STATUS='approved' THEN COALESCE(STORE_CONFIRMED_AT,@Now) ELSE STORE_CONFIRMED_AT END,
-                STORE_CONFIRMED_BY=CASE WHEN STORE_CONFIRMATION_STATUS='approved' THEN COALESCE(STORE_CONFIRMED_BY,@ActorId) ELSE STORE_CONFIRMED_BY END,
+                STORE_CONFIRMATION_STATUS=@StoreConfirmationStatus,
+                STORE_CONFIRMED_AT=CASE WHEN @StoreConfirmationStatus='approved' THEN COALESCE(STORE_CONFIRMED_AT,@Now) ELSE STORE_CONFIRMED_AT END,
+                STORE_CONFIRMED_BY=CASE WHEN @StoreConfirmationStatus='approved' THEN COALESCE(STORE_CONFIRMED_BY,@ActorId) ELSE STORE_CONFIRMED_BY END,
                 CONFIRMED_AT=CASE WHEN @Status IN ('confirmed','in_service','completed') THEN COALESCE(CONFIRMED_AT,@Now) ELSE CONFIRMED_AT END,
                 STARTED_AT=CASE WHEN @Status='in_service' THEN COALESCE(STARTED_AT,@Now) ELSE STARTED_AT END,
                 COMPLETED_AT=CASE WHEN @Status='completed' THEN @Now ELSE NULL END,
                 CANCELLED_AT=CASE WHEN @Status='cancelled' THEN @Now ELSE NULL END WHERE ID=@OrderId;
-            """, new { Status = nextStatus, Now = now, ActorId = actorId, OrderId = orderId }, tx, cancellationToken: ct));
+            """, new { Status = nextStatus, StoreConfirmationStatus = storeConfirmationStatus,
+                Now = now, ActorId = actorId, OrderId = orderId }, tx, cancellationToken: ct));
         await InsertHistoryAsync(connection, tx, orderId, order.OrderStatus, nextStatus,
             $"{unit.Name}：{request.Action} × {q}。{request.Reason}", "staff", actorId, now, ct);
         await InsertAuditAsync(connection, tx, orderId, sessionId, $"fulfillment.{request.Action}", before,
@@ -457,6 +458,16 @@ public sealed partial class OrderingRepository
                 ResultJson = JsonSerializer.Serialize(data), ActorId = actorId, Now = now }, tx, cancellationToken: ct));
         await tx.CommitAsync(ct);
         return data;
+    }
+
+    private static string ResolveFulfillmentStoreConfirmation(string unitKind, string currentStatus, string action)
+    {
+        // Cancellation withdraws only the unserved quantity. It must neither
+        // require store acceptance nor accept the rest of a pending order.
+        if (currentStatus != "pending" || action == "cancel") return currentStatus;
+        if (unitKind == "nominee")
+            throw new BusinessException("請先等待店家承接協調單。", "STORE_CONFIRMATION_REQUIRED");
+        return "approved";
     }
 
     private static async Task ApplyNomineeFulfillmentAsync(MySqlConnection connection, MySqlTransaction tx,

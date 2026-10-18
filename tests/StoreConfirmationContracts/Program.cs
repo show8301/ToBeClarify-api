@@ -8,6 +8,8 @@ var summary = typeof(OrderingRepository).GetMethod("SummarizeFulfillmentStatus",
     ?? throw new Exception("Fulfillment status calculation is missing.");
 var rejection = typeof(OrderingRepository).GetMethod("ValidateFulfillmentStoreRejection", BindingFlags.Static | BindingFlags.NonPublic)
     ?? throw new Exception("Store rejection validation is missing.");
+var storeTransition = typeof(OrderingRepository).GetMethod("ResolveFulfillmentStoreConfirmation", BindingFlags.Static | BindingFlags.NonPublic)
+    ?? throw new Exception("Fulfillment store transition policy is missing.");
 var passed = 0;
 void Check(bool condition, string label)
 {
@@ -17,6 +19,7 @@ void Check(bool condition, string label)
 }
 string Status(params FulfillmentUnitDto[] units) => (string)summary.Invoke(null, [units])!;
 int Credit(int remaining, params FulfillmentUnitDto[] units) => (int)rejection.Invoke(null, [units, remaining])!;
+string StoreStatus(string kind, string status, string action) => (string)storeTransition.Invoke(null, [kind, status, action])!;
 void Reject(Action action, string code, string label)
 {
     try { action(); throw new Exception($"Expected {code}: {label}"); }
@@ -37,6 +40,14 @@ var nominee = Unit();
 var meal = Unit("meal", 3, 10_000);
 var addon = Unit("addon");
 var tip = Unit("tip") with { Status = "completed", AcceptedQuantity = 1, StartedQuantity = 1, CompletedQuantity = 1 };
+foreach (var kind in new[] { "nominee", "meal", "addon", "room" })
+    Check(StoreStatus(kind, "pending", "cancel") == "pending", $"cancelling {kind} does not require or imply store approval");
+foreach (var action in new[] { "accept", "decline", "start", "start_now", "backfill", "complete", "reschedule", "carry_forward" })
+    Reject(() => StoreStatus("nominee", "pending", action), "STORE_CONFIRMATION_REQUIRED", $"pending nominee {action} still requires store approval");
+Check(StoreStatus("nominee", "approved", "cancel") == "approved", "cancellation preserves an existing store approval");
+Check(StoreStatus("nominee", "not_required", "cancel") == "not_required", "normal order cancellation does not invent store approval");
+Check(StoreStatus("nominee", "approved", "accept") == "approved", "accepted store gate still permits nominated staff acceptance");
+Check(StoreStatus("meal", "pending", "accept") == "approved", "existing meal acceptance policy is preserved");
 Check(Status(nominee) == "submitted", "store approval still waits for the nominated staff member");
 Check(Status(addon) == "submitted", "store approval does not accept an add-on service");
 Check(Status(meal) == "confirmed", "meal-only order can clear the store gate without recording delivery");
