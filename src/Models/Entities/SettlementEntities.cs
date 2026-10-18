@@ -224,6 +224,15 @@ public sealed class SettlementCashSummaryRow
     public bool HasCashRecords { get; set; }
 }
 
+public sealed class SettlementPendingFinanceItemRow
+{
+    public string SessionId { get; set; } = string.Empty;
+    public string CustomerName { get; set; } = string.Empty;
+    public string? OrderId { get; set; }
+    public string? OrderNumber { get; set; }
+    public int PendingRecordCount { get; set; }
+}
+
 public sealed class SettlementPeriodSummaryRow
 {
     public string? BusinessPeriodId { get; set; }

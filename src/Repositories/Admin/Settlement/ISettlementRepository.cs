@@ -18,6 +18,7 @@ public sealed class SettlementSourceData
     public IReadOnlyList<SettlementAttendanceBackfillRow> AttendanceBackfillRequests { get; init; } = [];
     public IReadOnlyList<SettlementRunRow> Runs { get; init; } = [];
     public SettlementCashSummaryRow Cash { get; init; } = new();
+    public IReadOnlyList<SettlementPendingFinanceItemRow> PendingFinanceItems { get; init; } = [];
     public SettlementPeriodSummaryRow Period { get; init; } = new();
     public IReadOnlyList<SettlementAnomalyDto> AttendanceAnomalies { get; init; } = [];
 }

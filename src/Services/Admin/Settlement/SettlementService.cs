@@ -788,7 +788,9 @@ public sealed class SettlementService : ISettlementService
                  source.Period.PeriodStatus == "open",
                  source.Period.PeriodStatus == "open" && source.Period.UnfinishedOrderCount == 0,
                  source.Period.PeriodStatus == "closed" && run.Status != "finalized",
-                 source.Cash.PendingFinanceCount > 0 || source.Period.UnfinishedOrderCount > 0),
+                 source.Cash.PendingFinanceCount > 0 || source.Period.UnfinishedOrderCount > 0,
+                 source.PendingFinanceItems.Select(x => new SettlementPendingFinanceItemDto(x.SessionId,
+                     x.CustomerName, x.OrderId, x.OrderNumber, x.PendingRecordCount)).ToArray()),
              source.PayrollAssignments.Select(x => new SettlementPayrollAssignmentDto(x.StaffId, x.DisplayName, x.PayrollRole,
                  x.PayrollSnapshotVersion, x.CanUseBackstage, x.StartedAt)).ToArray());
 
