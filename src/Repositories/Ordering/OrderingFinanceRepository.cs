@@ -40,6 +40,19 @@ public sealed class OrderingFinanceRepository(AppDbContext dbContext)
         var records = (await connection.QueryAsync<RecordRow>(new CommandDefinition(
             RecordsSql + " ORDER BY CREATED_AT, ID;", new { SessionId = sessionId }, transaction, cancellationToken: ct)))
             .Select(Map).ToArray();
+        if (records.Length > 0)
+        {
+            var actors = (await connection.QueryAsync<RecordActorRow>(new CommandDefinition("""
+                SELECT u.ID AS Id, s.DISPLAY_NAME AS DisplayName
+                FROM ADMIN_USERS u JOIN STAFF_MEMBERS s ON s.ID = u.STAFF_MEMBER_ID
+                WHERE u.ID IN @Ids;
+                """, new { Ids = records.Select(record => record.CreatedBy).Distinct().ToArray() },
+                transaction, cancellationToken: ct))).ToDictionary(actor => actor.Id, actor => actor.DisplayName, StringComparer.OrdinalIgnoreCase);
+            records = records.Select(record => record with
+            {
+                CreatedByDisplayName = actors.GetValueOrDefault(record.CreatedBy)
+            }).ToArray();
+        }
         // Fulfillment cancellation adjusts these totals and returns meal credit once.
         // Never add a second charge reduction for that same cancellation here.
         var orderAmount = await connection.QuerySingleAsync<long>(new CommandDefinition("""
@@ -582,6 +595,12 @@ public sealed class OrderingFinanceRepository(AppDbContext dbContext)
         x.SourceKind, x.OrderId, x.OrderItemId, x.SourcePeriodId, x.CashPeriodId, Offset(x.OccurredAt),
         x.AllocationStatus, x.HoldScope, x.Reason, x.ReversesRecordId, x.CaseId, Offset(x.CreatedAt), x.CreatedBy,
         Offset(x.UpdatedAt), x.UpdatedBy, x.ConfirmedAt is { } confirmed ? Offset(confirmed) : null, x.ConfirmedBy);
+
+    private sealed class RecordActorRow
+    {
+        public string Id { get; set; } = "";
+        public string? DisplayName { get; set; }
+    }
 
     private sealed class SessionRow
     {

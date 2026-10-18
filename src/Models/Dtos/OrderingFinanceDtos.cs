@@ -23,7 +23,10 @@ public sealed record OrderingFinanceRecordDto(
     string? OrderId, string? OrderItemId, string SourcePeriodId, string? CashPeriodId,
     DateTimeOffset OccurredAt, string AllocationStatus, string HoldScope, string Reason,
     string? ReversesRecordId, string? CaseId, DateTimeOffset CreatedAt, string CreatedBy,
-    DateTimeOffset UpdatedAt, string UpdatedBy, DateTimeOffset? ConfirmedAt, string? ConfirmedBy);
+    DateTimeOffset UpdatedAt, string UpdatedBy, DateTimeOffset? ConfirmedAt, string? ConfirmedBy)
+{
+    public string? CreatedByDisplayName { get; init; }
+}
 
 public sealed record OrderingFinanceAccountDto(
     string SessionId, string? SourcePeriodId, string BusinessDate, int FlowVersion, long Version,
