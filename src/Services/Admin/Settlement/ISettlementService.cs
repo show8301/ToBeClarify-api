@@ -5,6 +5,12 @@ namespace ToBeClarify.Api.Services.Admin.Settlement;
 
 public interface ISettlementService
 {
+    Task<SettlementRecalculationPreviewDto> PreviewRecalculationAsync(SettlementCalculateRequest request,
+        ClaimsPrincipal actor, CancellationToken cancellationToken);
+    Task<SettlementOverviewDto> ConfirmRecalculationAsync(ConfirmSettlementRecalculationRequest request,
+        ClaimsPrincipal actor, CancellationToken cancellationToken);
+    Task<IReadOnlyList<SettlementRecalculationHistoryDto>> GetRecalculationHistoryAsync(
+        DateOnly businessDate, int sessionNo, CancellationToken cancellationToken);
     Task<SettlementOverviewDto> GetOverviewAsync(DateOnly businessDate, int sessionNo,
         CancellationToken cancellationToken);
     Task<IReadOnlyList<SettlementRuleDto>> GetRulesAsync(string? dayType, CancellationToken cancellationToken);

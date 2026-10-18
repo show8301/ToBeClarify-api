@@ -1,10 +1,12 @@
 using ToBeClarify.Api.Models.Entities;
 using ToBeClarify.Api.Models.Dtos;
+using ToBeClarify.Api.Infrastructure;
 
 namespace ToBeClarify.Api.Repositories.Admin.Settlement;
 
-public sealed class SettlementSourceData
+public sealed record SettlementSourceData
 {
+    public IReadOnlyList<AttendanceMinuteEvent> AttendanceEvents { get; init; } = [];
     public IReadOnlyList<SettlementAttendanceCandidateRow> PayrollAssignments { get; init; } = [];
     public IReadOnlyList<SettlementOrderRevenueRow> Orders { get; init; } = [];
     public IReadOnlyList<SettlementOrderItemRevenueRow> Items { get; init; } = [];
@@ -25,6 +27,13 @@ public sealed class SettlementSourceData
 
 public interface ISettlementRepository
 {
+    Task<SettlementRecalculationPreviewDto> RecalculateFinalizedAsync(DateOnly businessDate, int sessionNo,
+        ConfirmSettlementRecalculationRequest? confirmation,
+        Func<SettlementRunRow, SettlementSourceData, IReadOnlyList<SettlementPaymentEventRow>,
+            IReadOnlyList<SettlementCorrectionEventRow>, SettlementRecalculationPlan> prepare,
+        string actorId, DateTime now, CancellationToken cancellationToken);
+    Task<IReadOnlyList<SettlementRecalculationHistoryDto>> GetRecalculationHistoryAsync(
+        DateOnly businessDate, int sessionNo, CancellationToken cancellationToken);
     Task<bool> StaffMembersExistAsync(IReadOnlyList<string> staffIds, CancellationToken cancellationToken);
     Task<IReadOnlyList<SettlementRuleRow>> GetRulesAsync(string? dayType, CancellationToken cancellationToken);
     Task<SettlementRuleRow?> GetEffectiveRuleAsync(string dayType, DateOnly businessDate, CancellationToken cancellationToken);

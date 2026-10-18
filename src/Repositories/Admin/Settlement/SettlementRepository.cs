@@ -9,7 +9,7 @@ using System.Text.Json;
 
 namespace ToBeClarify.Api.Repositories.Admin.Settlement;
 
-public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepository
+public sealed partial class SettlementRepository : DapperRepositoryBase, ISettlementRepository
 {
     public SettlementRepository(AppDbContext dbContext) : base(dbContext) { }
 
@@ -119,6 +119,14 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
     public async Task<SettlementSourceData> GetSourceDataAsync(string settlementId, DateOnly businessDate,
         CancellationToken cancellationToken)
     {
+        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
+        return await GetSourceDataCoreAsync(connection, null, settlementId, businessDate, cancellationToken);
+    }
+
+    private static async Task<SettlementSourceData> GetSourceDataCoreAsync(MySqlConnector.MySqlConnection connection,
+        MySqlConnector.MySqlTransaction? transaction, string settlementId, DateOnly businessDate,
+        CancellationToken cancellationToken)
+    {
         const string sql = """
             SELECT O.`ID` AS OrderId, O.`ORDER_NUMBER` AS OrderNumber, O.`TOTAL_AMOUNT` AS TotalAmount, O.`SUBTOTAL` AS Subtotal,
                    COALESCE(SUM(T.`TIP_AMOUNT`), 0) AS TipAmount, A.`ADJUSTED_AMOUNT` AS AdjustedAmount,
@@ -203,6 +211,7 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
             WHERE S.`BUSINESS_DATE` = @BusinessDate;
 
             SELECT I.`ID` AS Id, I.`SETTLEMENT_ID` AS SettlementId, I.`STAFF_ID` AS StaffId,
+                   I.`CREATED_AT` AS CreatedAt, I.`CREATED_BY` AS CreatedBy,
                    I.`PAYROLL_SNAPSHOT_VERSION` AS PayrollSnapshotVersion, I.`ROLE` AS Role, M.`DISPLAY_NAME` AS DisplayName, M.`ROLE_TITLE` AS RoleTitle,
                    M.`IS_ACTIVE` AS IsActive, COALESCE(P.`IS_WORKING`, S.`IS_WORKING`, FALSE) AS IsWorking,
                    I.`ACTUAL_MINUTES` AS ActualMinutes, I.`ACTIVITY_HOURS` AS ActivityHours,
@@ -305,10 +314,9 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
             FROM `BUSINESS_PERIODS` P WHERE P.`BUSINESS_DATE`=@BusinessDate;
             """;
 
-        await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         using var multi = await connection.QueryMultipleAsync(new CommandDefinition(sql,
             new { SettlementId = settlementId, BusinessDate = businessDate.ToDateTime(TimeOnly.MinValue) },
-            cancellationToken: cancellationToken));
+            transaction, cancellationToken: cancellationToken));
         var orders = (await multi.ReadAsync<SettlementOrderRevenueRow>()).AsList();
         var items = (await multi.ReadAsync<SettlementOrderItemRevenueRow>()).AsList();
         var nominees = (await multi.ReadAsync<SettlementNomineeRevenueRow>()).AsList();
@@ -326,7 +334,7 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
         var period = await multi.ReadFirstOrDefaultAsync<SettlementPeriodSummaryRow>() ?? new SettlementPeriodSummaryRow();
         var finalized = await connection.ExecuteScalarAsync<bool>(new CommandDefinition(
             "SELECT COUNT(*) > 0 FROM `SETTLEMENT_RUNS` WHERE `ID` = @SettlementId AND `STATUS` = 'finalized';",
-            new { SettlementId = settlementId }, cancellationToken: cancellationToken));
+            new { SettlementId = settlementId }, transaction, cancellationToken: cancellationToken));
         var eventsByStaff = attendanceEvents.GroupBy(x => x.StaffId)
             .ToDictionary(x => x.Key, x => x.ToArray(), StringComparer.Ordinal);
         foreach (var candidate in attendanceCandidates)
@@ -341,13 +349,14 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
         var attendanceAnomalies = (finalized ? [] : SettlementAttendanceSync.MergeMissingInputs(settlementId, staffInputs, attendanceCandidates)).ToList();
         if (!finalized && await connection.ExecuteScalarAsync<bool>(new CommandDefinition(
             "SELECT COUNT(*)>0 FROM SETTLEMENT_RUNS WHERE BUSINESS_DATE=@Date AND ID<>@SettlementId AND STATUS='finalized';",
-            new { Date = businessDate.ToDateTime(TimeOnly.MinValue), SettlementId = settlementId }, cancellationToken: cancellationToken)))
+            new { Date = businessDate.ToDateTime(TimeOnly.MinValue), SettlementId = settlementId }, transaction, cancellationToken: cancellationToken)))
             attendanceAnomalies.Add(new SettlementAnomalyDto("SETTLEMENT_DAY_FINALIZED", "本營業日已有正式結算，請回到已結算時段建立更正差額，不可再次全日計薪。"));
         return new SettlementSourceData { Orders = orders, Items = items, Nominees = nominees, Tips = tips,
             Rooms = rooms, Addons = addons, Admissions = admissions, StaffInputs = staffInputs, Results = results,
             AttendanceBackfillRequests = attendanceBackfillRequests, Cash = cash,
             PendingFinanceItems = pendingFinanceItems, Period = period,
-            PayrollAssignments = attendanceCandidates, AttendanceAnomalies = attendanceAnomalies };
+            PayrollAssignments = attendanceCandidates, AttendanceAnomalies = attendanceAnomalies,
+            AttendanceEvents = attendanceEvents };
     }
 
     public async Task SaveInputsAsync(string settlementId, SaveInputsData inputs, string actorId, DateTime now,
@@ -409,10 +418,20 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await SaveCalculationCoreAsync(connection, transaction, settlementId, calculation, actorId, now,
+            false, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    private static async Task SaveCalculationCoreAsync(MySqlConnector.MySqlConnection connection,
+        MySqlConnector.MySqlTransaction transaction, string settlementId, SaveCalculationData calculation,
+        string actorId, DateTime now, bool correctingFinalized, CancellationToken cancellationToken)
+    {
         var status = await connection.QuerySingleAsync<string>(new CommandDefinition(
             "SELECT `STATUS` FROM `SETTLEMENT_RUNS` WHERE `ID` = @SettlementId FOR UPDATE;",
             new { SettlementId = settlementId }, transaction, cancellationToken: cancellationToken));
-        if (status == "finalized") throw new BusinessException("正式結算已鎖定。", "SETTLEMENT_LOCKED");
+        if (status == "finalized" && !correctingFinalized)
+            throw new BusinessException("正式結算已鎖定。", "SETTLEMENT_LOCKED");
         var currentVersion = await connection.ExecuteScalarAsync<int>(new CommandDefinition(
             "SELECT INPUT_VERSION FROM SETTLEMENT_RUNS WHERE ID=@SettlementId;", new { SettlementId = settlementId }, transaction, cancellationToken: cancellationToken));
         if (currentVersion != calculation.Run.InputVersion)
@@ -440,15 +459,20 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
                 """, new { SettlementId = settlementId, input.StaffId, input.Role }, transaction, cancellationToken: cancellationToken));
             if (alreadyEntered > 0)
                 throw new ConflictException("計薪輸入已由其他操作更新，請重新計算。", "SETTLEMENT_INPUTS_CHANGED");
+            var newInputId = Guid.NewGuid().ToString("D");
             await connection.ExecuteAsync(new CommandDefinition("""
                 INSERT INTO `SETTLEMENT_STAFF_INPUTS`
                     (`ID`, `SETTLEMENT_ID`, `STAFF_ID`, `ROLE`, `ACTUAL_MINUTES`, `ATTENDANCE_SOURCE`, `PAYROLL_SNAPSHOT_VERSION`,
                      `PUBLIC_TIP_ELIGIBLE`, `IS_BACKSTAGE_PARTICIPANT`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
                 VALUES (@Id, @SettlementId, @StaffId, @Role, @ActualMinutes, 'clock', @PayrollSnapshotVersion,
                         @PublicTipEligible, @IsBackstageParticipant, @Now, @ActorId, @Now, @ActorId);
-                """, new { Id = Guid.NewGuid().ToString("D"), SettlementId = settlementId,
+                """, new { Id = newInputId, SettlementId = settlementId,
                     input.StaffId, input.Role, input.ActualMinutes, input.PayrollSnapshotVersion, input.PublicTipEligible, input.IsBackstageParticipant,
                     Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
+            input.Id = newInputId;
+            input.SettlementId = settlementId;
+            input.CreatedAt = now;
+            input.CreatedBy = actorId;
         }
         await connection.ExecuteAsync(new CommandDefinition("""
             UPDATE `SETTLEMENT_RESULT_LINES`
@@ -514,7 +538,6 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
                     result.AnomalyStatus, result.AnomalyNote, Now = now }, transaction,
                 cancellationToken: cancellationToken));
         }
-        await transaction.CommitAsync(cancellationToken);
     }
 
     public async Task FinalizeAsync(string settlementId, int expectedInputVersion, string actorId, DateTime now,

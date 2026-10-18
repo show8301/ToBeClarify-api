@@ -1,10 +1,38 @@
 using ToBeClarify.Api.Models.Dtos;
 using ToBeClarify.Api.Models.Entities;
+using ToBeClarify.Api.Infrastructure;
 
 namespace ToBeClarify.Api.Repositories.Admin.Settlement;
 
 public static class SettlementAttendanceSync
 {
+    public static SettlementSourceData RefreshFinalizedSource(string settlementId, SettlementSourceData source)
+    {
+        var inputs = source.StaffInputs.Select(input => new SettlementStaffInputRow
+        {
+            Id = input.Id, SettlementId = input.SettlementId, StaffId = input.StaffId,
+            CreatedAt = input.CreatedAt, CreatedBy = input.CreatedBy,
+            DisplayName = input.DisplayName, RoleTitle = input.RoleTitle, IsActive = input.IsActive,
+            IsWorking = input.IsWorking, Role = input.Role, PayrollSnapshotVersion = input.PayrollSnapshotVersion,
+            ActualMinutes = input.ActualMinutes, AttendanceSource = input.AttendanceSource,
+            AttendanceRequestId = input.AttendanceRequestId, AttendanceApprovedBy = input.AttendanceApprovedBy,
+            AttendanceApprovedAt = input.AttendanceApprovedAt, ActivityHours = input.ActivityHours,
+            PublicTipEligible = input.PublicTipEligible, IsBackstageParticipant = input.IsBackstageParticipant,
+            Note = input.Note
+        }).ToList();
+        var eventsByStaff = source.AttendanceEvents.GroupBy(x => x.StaffId)
+            .ToDictionary(x => x.Key, x => x.ToArray(), StringComparer.Ordinal);
+        foreach (var input in inputs)
+        {
+            var events = eventsByStaff.GetValueOrDefault(input.StaffId, []);
+            if (events.Any(x => x.EventType is "clock_out" or "scheduled_end" or "manual_interval" or "adjustment"))
+                input.ActualMinutes = AttendanceMinutes.Effective(events);
+            if (events.Any(x => x.Source is "scheduled" or "manual")) input.AttendanceSource = "clock";
+        }
+        var anomalies = MergeMissingInputs(settlementId, inputs, source.PayrollAssignments);
+        return source with { StaffInputs = inputs, AttendanceAnomalies = anomalies };
+    }
+
     public static IReadOnlyList<SettlementAnomalyDto> MergeMissingInputs(string settlementId,
         IList<SettlementStaffInputRow> inputs, IEnumerable<SettlementAttendanceCandidateRow> candidates)
     {
