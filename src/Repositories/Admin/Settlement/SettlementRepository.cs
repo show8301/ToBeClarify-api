@@ -272,6 +272,20 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
             INNER JOIN `CUSTOMER_ORDER_SESSIONS` S ON S.`ID` = F.`SESSION_ID`
             WHERE S.`BUSINESS_DATE` = @BusinessDate;
 
+            SELECT CAST(F.`SESSION_ID` AS CHAR(36)) AS SessionId,
+                   S.`CUSTOMER_NAME` AS CustomerName,
+                   CAST(F.`ORDER_ID` AS CHAR(36)) AS OrderId,
+                   O.`ORDER_NUMBER` AS OrderNumber,
+                   COUNT(*) AS PendingRecordCount
+            FROM `ORDERING_FINANCE_RECORDS` F
+            INNER JOIN `CUSTOMER_ORDER_SESSIONS` S ON S.`ID` = F.`SESSION_ID`
+            LEFT JOIN `ORDERS` O ON O.`ID` = F.`ORDER_ID`
+            WHERE S.`BUSINESS_DATE` = @BusinessDate
+              AND (F.`ALLOCATION_STATUS` = 'pending'
+                   OR F.`CASH_PERIOD_ID` IS NULL AND F.`KIND` IN ('cash_receipt', 'cash_refund'))
+            GROUP BY F.`SESSION_ID`, S.`CUSTOMER_NAME`, F.`ORDER_ID`, O.`ORDER_NUMBER`
+            ORDER BY S.`CUSTOMER_NAME`, O.`ORDER_NUMBER`;
+
             SELECT MAX(P.`ID`) AS BusinessPeriodId, COALESCE(MAX(P.`PERIOD_STATUS`), 'scheduled') AS PeriodStatus,
                    COALESCE(MAX(P.`INTAKE_MODE`), 'staff_only') AS IntakeMode,
                    MAX(P.`ACTUAL_CLOSED_AT`) AS ActualClosedAt, MAX(P.`SETTLED_AT`) AS SettledAt,
@@ -308,6 +322,7 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
         var results = (await multi.ReadAsync<SettlementResultLineRow>()).AsList();
         var attendanceBackfillRequests = (await multi.ReadAsync<SettlementAttendanceBackfillRow>()).AsList();
         var cash = await multi.ReadFirstOrDefaultAsync<SettlementCashSummaryRow>() ?? new SettlementCashSummaryRow();
+        var pendingFinanceItems = (await multi.ReadAsync<SettlementPendingFinanceItemRow>()).AsList();
         var period = await multi.ReadFirstOrDefaultAsync<SettlementPeriodSummaryRow>() ?? new SettlementPeriodSummaryRow();
         var finalized = await connection.ExecuteScalarAsync<bool>(new CommandDefinition(
             "SELECT COUNT(*) > 0 FROM `SETTLEMENT_RUNS` WHERE `ID` = @SettlementId AND `STATUS` = 'finalized';",
@@ -330,7 +345,8 @@ public sealed class SettlementRepository : DapperRepositoryBase, ISettlementRepo
             attendanceAnomalies.Add(new SettlementAnomalyDto("SETTLEMENT_DAY_FINALIZED", "本營業日已有正式結算，請回到已結算時段建立更正差額，不可再次全日計薪。"));
         return new SettlementSourceData { Orders = orders, Items = items, Nominees = nominees, Tips = tips,
             Rooms = rooms, Addons = addons, Admissions = admissions, StaffInputs = staffInputs, Results = results,
-            AttendanceBackfillRequests = attendanceBackfillRequests, Cash = cash, Period = period,
+            AttendanceBackfillRequests = attendanceBackfillRequests, Cash = cash,
+            PendingFinanceItems = pendingFinanceItems, Period = period,
             PayrollAssignments = attendanceCandidates, AttendanceAnomalies = attendanceAnomalies };
     }
 

@@ -164,6 +164,9 @@ public sealed record SettlementOverviewDto(
 public sealed record SettlementPayrollAssignmentDto(string StaffId, string DisplayName, string? PayrollRole,
     int? PayrollSnapshotVersion, bool CanUseBackstage, DateTime? StartedAt);
 
+public sealed record SettlementPendingFinanceItemDto(string SessionId, string CustomerName, string? OrderId,
+    string? OrderNumber, int PendingRecordCount);
+
 public sealed record SettlementWorkflowDto(
     string? BusinessPeriodId,
     string PeriodStatus,
@@ -178,7 +181,8 @@ public sealed record SettlementWorkflowDto(
     bool CanStopNewOrders,
     bool CanClose,
     bool CanFinalize,
-    bool CanCarryForward);
+    bool CanCarryForward,
+    IReadOnlyList<SettlementPendingFinanceItemDto>? PendingFinanceItems = null);
 
 public sealed class SaveSettlementInputsRequest
 {
