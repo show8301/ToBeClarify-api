@@ -68,13 +68,16 @@ public sealed partial class OrderingRepository
         var units = await connection.QueryAsync<FulfillmentUnit>(new CommandDefinition(
             UnitSelect + " WHERE ORDER_ID=@OrderId ORDER BY CREATED_AT, ID;", new { OrderId = orderId }, transaction, cancellationToken: ct));
         return new OrderFulfillmentDto(orderId, order.BusinessPeriodId, order.FlowVersion, order.OrderStatus,
-            units.Select(u => new FulfillmentUnitDto(u.Id, u.OrderItemId, u.NomineeId, u.Kind, u.Name, u.StaffId,
+            units.Select(ToFulfillmentUnitDto).ToArray());
+    }
+
+    private static FulfillmentUnitDto ToFulfillmentUnitDto(FulfillmentUnit u)
+        => new(u.Id, u.OrderItemId, u.NomineeId, u.Kind, u.Name, u.StaffId,
                 u.Quantity, u.AcceptedQuantity, u.StartedQuantity, u.CompletedQuantity, u.CancelledQuantity,
                 u.Status, u.Version, u.OriginalAmount, u.OriginalCredit, u.CancelledAmount, u.ReturnedCredit,
                 u.PurchasedMinutes, Offset(u.ScheduledStartsAt), Offset(u.ScheduledEndsAt), Offset(u.ActualStartsAt),
                 Offset(u.ActualEndsAt), Offset(u.OriginalScheduledStartsAt), Offset(u.OriginalScheduledEndsAt),
-                u.RestMinutesReserved, u.FulfillmentPeriodId, Array.Empty<string>())).ToArray());
-    }
+                u.RestMinutesReserved, u.FulfillmentPeriodId, Array.Empty<string>());
 
     public async Task<FulfillmentStartPreviewDto> GetFulfillmentStartPreviewAsync(string orderId, string unitId,
         DateTime now, CancellationToken cancellationToken)
@@ -431,13 +434,7 @@ public sealed partial class OrderingRepository
             await ApplyCompensationAsync(connection, tx, order, unit, request, actorId, now, ct);
         await InsertFulfillmentEventAsync(connection, tx, order, unit, request, actorId, now, ct);
         var data = await ReadFulfillmentAsync(connection, tx, orderId, ct);
-        var active = data.Units.Where(u => u.Status != "cancelled").ToArray();
-        var nextStatus = active.Length == 0 ? "cancelled" : active.All(u => u.Status == "completed") ? "completed"
-            : active.Any(u => u.StartedQuantity > u.CompletedQuantity) ? "in_service"
-            : active.Any(u => u.Status == "needs_coordination")
-                ? (active.Any(u => u.AcceptedQuantity > 0 && u.Kind != "tip" && u.Status != "completed") ? "partially_confirmed" : "needs_reschedule")
-            : active.Any(u => u.Kind is "nominee" or "addon" && u.AcceptedQuantity == 0)
-                ? (active.Any(u => u.AcceptedQuantity > 0 && u.Kind != "tip") ? "partially_confirmed" : "submitted") : "confirmed";
+        var nextStatus = SummarizeFulfillmentStatus(data.Units);
         await connection.ExecuteAsync(new CommandDefinition("""
             UPDATE ORDERS SET ORDER_STATUS=@Status,UPDATED_AT=@Now,UPDATED_BY=@ActorId,
                 STORE_CONFIRMATION_STATUS=CASE WHEN STORE_CONFIRMATION_STATUS='pending' THEN 'approved' ELSE STORE_CONFIRMATION_STATUS END,

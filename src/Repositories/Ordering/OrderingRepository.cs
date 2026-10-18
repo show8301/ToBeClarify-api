@@ -1038,14 +1038,30 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        await EnsureLegacyOrderMutationAsync(connection, transaction, orderId, cancellationToken);
+        // Store acceptance precedes fulfillment in both flows. Use the same
+        // session -> order lock order as individual fulfillment transitions.
+        var sessionId = await connection.ExecuteScalarAsync<string?>(new CommandDefinition(
+            "SELECT SESSION_ID FROM ORDERS WHERE ID=@OrderId;", new { OrderId = orderId }, transaction,
+            cancellationToken: cancellationToken))
+            ?? throw new BusinessException("找不到訂單。", "ORDER_NOT_FOUND");
+        await connection.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT ID FROM CUSTOMER_ORDER_SESSIONS WHERE ID=@SessionId FOR UPDATE;",
+            new { SessionId = sessionId }, transaction, cancellationToken: cancellationToken));
         var order = await connection.QuerySingleOrDefaultAsync<OrderRow>(new CommandDefinition("""
             SELECT `ID` AS Id, `SESSION_ID` AS SessionId, `ORDER_KIND` AS OrderKind,
                    `ORDER_STATUS` AS OrderStatus, `STORE_CONFIRMATION_STATUS` AS StoreConfirmationStatus,
-                   `MEAL_CREDIT_APPLIED` AS MealCreditApplied
+                   `MEAL_CREDIT_APPLIED` AS MealCreditApplied, `FLOW_VERSION` AS FlowVersion,
+                   CAST(`BUSINESS_PERIOD_ID` AS CHAR(36)) AS BusinessPeriodId
             FROM `ORDERS` WHERE `ID` = @OrderId FOR UPDATE;
             """, new { OrderId = orderId }, transaction, cancellationToken: cancellationToken))
             ?? throw new BusinessException("找不到訂單。", "ORDER_NOT_FOUND");
+        if (order.FlowVersion >= 2)
+        {
+            await DecideFulfillmentStoreConfirmationAsync(connection, transaction, order, decision, reason,
+                actorId, actorRole, now, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return;
+        }
         if (order.StoreConfirmationStatus != "pending" ||
             order.OrderStatus is not ("submitted" or "partially_confirmed"))
             throw new BusinessException("此訂單目前不需要店員協調確認。", "STORE_CONFIRMATION_NOT_PENDING");
