@@ -135,7 +135,7 @@ public sealed partial class CustomerDeliveryRepository(AppDbContext db)
         LEFT JOIN (SELECT SESSION_ID,SUM(CASE WHEN KIND IN ('cash_receipt','cash_refund') THEN 1 ELSE 0 END) AS CashCount,
                           SUM(CASE WHEN KIND='cash_receipt' THEN AMOUNT WHEN KIND='cash_refund' THEN -AMOUNT ELSE 0 END) AS NetReceived,
                           SUM(CASE WHEN KIND='charge_add' THEN AMOUNT WHEN KIND='charge_reduce' THEN -AMOUNT ELSE 0 END) AS ChargeAdjustments
-                   FROM ORDERING_FINANCE_RECORDS
+                   FROM ORDERING_FINANCE_RECORDS WHERE VOIDED_AT IS NULL
                    GROUP BY SESSION_ID) F ON F.SESSION_ID=S.ID
         LEFT JOIN ORDERING_SESSION_ADMISSIONS EA ON EA.SESSION_ID=S.ID
         LEFT JOIN (SELECT SESSION_ID,
@@ -143,7 +143,7 @@ public sealed partial class CustomerDeliveryRepository(AppDbContext db)
             SUM(CASE WHEN KIND='cash_receipt' THEN AMOUNT ELSE 0 END) AS AdmissionReceived,
             SUM(CASE WHEN KIND='cash_refund' THEN AMOUNT ELSE 0 END) AS AdmissionRefunded,
             COUNT(*) AS RecordCount
-            FROM ORDERING_FINANCE_RECORDS WHERE SOURCE_KIND='admission' GROUP BY SESSION_ID) A ON A.SESSION_ID=S.ID
+            FROM ORDERING_FINANCE_RECORDS WHERE SOURCE_KIND='admission' AND VOIDED_AT IS NULL GROUP BY SESSION_ID) A ON A.SESSION_ID=S.ID
         LEFT JOIN (SELECT SESSION_ID,COUNT(*) AS PendingCount
                    FROM ART_DELIVERIES WHERE STATUS IN ('pending','in_progress','ready')
                    GROUP BY SESSION_ID) D ON D.SESSION_ID=S.ID

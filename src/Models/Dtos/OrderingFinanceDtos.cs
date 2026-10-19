@@ -16,6 +16,25 @@ public sealed record SaveOrderingFinanceRecordRequest
     public string HoldScope { get; init; } = "none";
     public string Reason { get; init; } = "";
     public string? ReversesRecordId { get; init; }
+    public string? TipDistributionMode { get; init; }
+    public IReadOnlyList<SaveOrderingFinanceTipAllocationRequest> TipAllocations { get; init; } = [];
+    public string? LinkedCashRecordId { get; init; }
+}
+
+public sealed record SaveOrderingFinanceTipAllocationRequest(string StaffId, decimal? Percentage);
+
+public sealed record OrderingFinanceTipAllocationDto(string StaffId, string StaffName, decimal? Percentage, long Amount);
+
+public sealed record CalculatedOrderingFinanceTipAllocation(string StaffId, decimal? Percentage, long Amount);
+
+public sealed record OrderingFinanceTipStaffOptionDto(string StaffId, string DisplayName, IReadOnlyList<string> Roles);
+
+public sealed record VoidOrderingFinanceRecordRequest
+{
+    public string OperationId { get; init; } = "";
+    public long ExpectedAccountVersion { get; init; }
+    public long ExpectedRecordVersion { get; init; }
+    public string Reason { get; init; } = "";
 }
 
 public sealed record OrderingFinanceRecordDto(
@@ -26,6 +45,14 @@ public sealed record OrderingFinanceRecordDto(
     DateTimeOffset UpdatedAt, string UpdatedBy, DateTimeOffset? ConfirmedAt, string? ConfirmedBy)
 {
     public string? CreatedByDisplayName { get; init; }
+    public bool IsVoided { get; init; }
+    public DateTimeOffset? VoidedAt { get; init; }
+    public string? VoidedBy { get; init; }
+    public string? VoidedByDisplayName { get; init; }
+    public string? VoidReason { get; init; }
+    public string? TipDistributionMode { get; init; }
+    public string? LinkedCashRecordId { get; init; }
+    public IReadOnlyList<OrderingFinanceTipAllocationDto> TipAllocations { get; init; } = [];
 }
 
 public sealed record OrderingFinanceAccountDto(
