@@ -68,6 +68,48 @@ foreach (var useCash in new[] { false, true })
     Equal(result.CompanySubsidy, Math.Ceiling(pay + 30) - (pay + 30), $"{context}: rounding subsidy");
 }
 
+var noOrderSources = Calculate(new SettlementSourceData
+{
+    PayrollAssignments = [Assignment("service")], StaffInputs = [Input("service")],
+    Orders = [new() { OrderId = "shared-pool", Subtotal = 1000, TotalAmount = 1000 }],
+    Items = [new() { ItemId = "meal", OrderId = "shared-pool", ItemType = "menu_item", LineTotal = 1000 }]
+}, new()).Single(x => x.Role == "service");
+Check(noOrderSources.Sources.Count == 0, "Service shared-pool allocation does not expose individual order sources.");
+
+var provenanceSource = new SettlementSourceData
+{
+    PayrollAssignments = [Assignment("designated")],
+    StaffInputs = [Input("designated")],
+    Orders =
+    [
+        new() { OrderId = "source-a", OrderNumber = "A001", Subtotal = 1010, TotalAmount = 1010, TipAmount = 10 },
+        new() { OrderId = "source-b", OrderNumber = "B002", Subtotal = 1005, TotalAmount = 1005, TipAmount = 5 }
+    ],
+    Items =
+    [
+        new() { ItemId = "nomination-a", OrderId = "source-a", ItemType = "nomination_base", ReferenceId = "staff", LineTotal = 1000 },
+        new() { ItemId = "nomination-b", OrderId = "source-b", ItemType = "nomination_base", ReferenceId = "staff", LineTotal = 1000 }
+    ],
+    Tips =
+    [
+        new() { OrderId = "source-a", StaffId = "staff", StaffAmount = 10 },
+        new() { OrderId = "source-b", StaffId = "staff", StaffAmount = 5 }
+    ],
+    Cash = new() { HasCashRecords = true, NetCash = 1000 }
+};
+var provenanceResult = Calculate(provenanceSource, new()).Single(x => x.Role == "designated");
+var revenueSources = provenanceResult.Sources.Where(x => x.Kind == "designated_revenue").OrderBy(x => x.OrderNumber).ToArray();
+var tipSources = provenanceResult.Sources.Where(x => x.Kind == "designated_tip").OrderBy(x => x.OrderNumber).ToArray();
+Check(revenueSources.Select(x => x.OrderNumber).SequenceEqual(["A001", "B002"]),
+    "Designated revenue sources retain each order number.");
+Equal(revenueSources.Sum(x => x.BasisAmount), provenanceResult.RevenueBase,
+    "Designated order bases reconcile to the payroll revenue base after cash allocation.");
+Equal(revenueSources.Sum(x => x.Amount), provenanceResult.RevenueShare,
+    "Designated order shares reconcile to the payroll revenue share after cash allocation.");
+Check(tipSources.Select(x => x.OrderNumber).SequenceEqual(["A001", "B002"]),
+    "Designated tip sources retain each order number.");
+Equal(tipSources.Sum(x => x.Amount), provenanceResult.DesignatedTip,
+    "Designated tip order amounts reconcile to the payroll tip.");
 var developer = Assignment("service", true);
 var eventSource = new SettlementSourceData
 {

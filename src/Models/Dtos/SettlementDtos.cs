@@ -143,7 +143,18 @@ public sealed record SettlementResultLineDto(
     decimal CompanySubsidy,
     decimal ManualAdjustment,
     string AnomalyStatus,
-    string? AnomalyNote);
+    string? AnomalyNote,
+    bool SourceDetailsSnapshotted = false,
+    IReadOnlyList<SettlementResultSourceDto>? Sources = null);
+
+public sealed record SettlementResultSourceDto(
+    string Kind,
+    string OrderId,
+    string OrderNumber,
+    string Label,
+    decimal BasisAmount,
+    decimal Percentage,
+    decimal Amount);
 
 public sealed record SettlementAnomalyOrderDto(string OrderId, string OrderNumber);
 

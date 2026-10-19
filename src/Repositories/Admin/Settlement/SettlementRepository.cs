@@ -251,11 +251,20 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
                    R.`PREFERRED_PAY` AS PreferredPay, R.`BEFORE_ROUNDING` AS BeforeRounding,
                    R.`AFTER_ROUNDING` AS AfterRounding, R.`COMPANY_SUBSIDY` AS CompanySubsidy,
                    R.`MANUAL_ADJUSTMENT` AS ManualAdjustment, R.`ANOMALY_STATUS` AS AnomalyStatus,
-                   R.`ANOMALY_NOTE` AS AnomalyNote
+                   R.`ANOMALY_NOTE` AS AnomalyNote,
+                   R.`SOURCE_SNAPSHOT_ID` AS SourceSnapshotId
             FROM `SETTLEMENT_RESULT_LINES` R
             LEFT JOIN `STAFF_MEMBERS` M ON M.`ID` = R.`STAFF_ID`
             WHERE R.`SETTLEMENT_ID` = @SettlementId AND R.ANOMALY_STATUS<>'stale'
             ORDER BY R.`ROLE`, M.`DISPLAY_NAME`;
+
+            SELECT S.`ID` AS Id, S.`RESULT_LINE_ID` AS ResultLineId, S.`SOURCE_SNAPSHOT_ID` AS SnapshotId, S.`SOURCE_KIND` AS Kind,
+                   S.`ORDER_ID` AS OrderId, S.`ORDER_NUMBER` AS OrderNumber, S.`SOURCE_LABEL` AS Label,
+                   S.`BASIS_AMOUNT` AS BasisAmount, S.`PERCENTAGE` AS Percentage, S.`AMOUNT` AS Amount
+            FROM `SETTLEMENT_RESULT_SOURCES` S
+            INNER JOIN `SETTLEMENT_RESULT_LINES` R ON R.`ID`=S.`RESULT_LINE_ID` AND R.`SOURCE_SNAPSHOT_ID`=S.`SOURCE_SNAPSHOT_ID`
+            WHERE R.`SETTLEMENT_ID`=@SettlementId AND R.`ANOMALY_STATUS`<>'stale'
+            ORDER BY S.`ORDER_NUMBER`, S.`SOURCE_KIND`, S.`SOURCE_LABEL`;
 
             SELECT B.`ID` AS Id, B.`SETTLEMENT_ID` AS SettlementId, B.`STAFF_ID` AS StaffId,
                    M.`DISPLAY_NAME` AS StaffName, B.PAYROLL_SNAPSHOT_VERSION AS PayrollSnapshotVersion, B.`ROLE` AS Role,
@@ -328,6 +337,7 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
         var attendanceCandidates = (await multi.ReadAsync<SettlementAttendanceCandidateRow>()).AsList();
         var attendanceEvents = (await multi.ReadAsync<AttendanceMinuteEvent>()).AsList();
         var results = (await multi.ReadAsync<SettlementResultLineRow>()).AsList();
+        var resultSources = (await multi.ReadAsync<SettlementResultSourceRow>()).AsList();
         var attendanceBackfillRequests = (await multi.ReadAsync<SettlementAttendanceBackfillRow>()).AsList();
         var cash = await multi.ReadFirstOrDefaultAsync<SettlementCashSummaryRow>() ?? new SettlementCashSummaryRow();
         var pendingFinanceItems = (await multi.ReadAsync<SettlementPendingFinanceItemRow>()).AsList();
@@ -339,6 +349,10 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
             .ToDictionary(x => x.Key, x => x.ToArray(), StringComparer.Ordinal);
         foreach (var candidate in attendanceCandidates)
             candidate.ActualMinutes = AttendanceMinutes.Effective(eventsByStaff.GetValueOrDefault(candidate.StaffId, []));
+        var sourcesByLine = resultSources.GroupBy(x => x.ResultLineId)
+            .ToDictionary(x => x.Key, x => (IReadOnlyList<SettlementResultSourceRow>)x.ToArray(), StringComparer.Ordinal);
+        foreach (var result in results)
+            result.Sources = sourcesByLine.GetValueOrDefault(result.Id, []);
         foreach (var input in finalized ? Enumerable.Empty<SettlementStaffInputRow>() : staffInputs)
         {
             var events = eventsByStaff.GetValueOrDefault(input.StaffId, []);
@@ -512,16 +526,18 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
 
         foreach (var result in calculation.Results)
         {
+            var resultLineId = string.IsNullOrWhiteSpace(result.Id) ? Guid.NewGuid().ToString("D") : result.Id;
+            var sourceSnapshotId = Guid.NewGuid().ToString("D");
             await connection.ExecuteAsync(new CommandDefinition("""
                 INSERT INTO `SETTLEMENT_RESULT_LINES`
                     (`ID`, `SETTLEMENT_ID`, `STAFF_ID`, `ROLE`, `PAYABLE_HOURS`, `HOURLY_RATE`, `BASE_PAY`,
                      `REVENUE_BASE`, `REVENUE_PERCENTAGE`, `REVENUE_SHARE`, `DESIGNATED_TIP`, `PUBLIC_TIP`,
                      `PREFERRED_PAY`, `BEFORE_ROUNDING`, `AFTER_ROUNDING`, `COMPANY_SUBSIDY`, `MANUAL_ADJUSTMENT`,
-                     `ANOMALY_STATUS`, `ANOMALY_NOTE`, `CREATED_AT`)
+                     `ANOMALY_STATUS`, `ANOMALY_NOTE`, `SOURCE_SNAPSHOT_ID`, `CREATED_AT`)
                 VALUES (@Id, @SettlementId, @StaffId, @Role, @PayableHours, @HourlyRate, @BasePay,
                         @RevenueBase, @RevenuePercentage, @RevenueShare, @DesignatedTip, @PublicTip,
                         @PreferredPay, @BeforeRounding, @AfterRounding, @CompanySubsidy, @ManualAdjustment,
-                        @AnomalyStatus, @AnomalyNote, @Now)
+                        @AnomalyStatus, @AnomalyNote, @SourceSnapshotId, @Now)
                 ON DUPLICATE KEY UPDATE `PAYABLE_HOURS` = VALUES(`PAYABLE_HOURS`), `HOURLY_RATE` = VALUES(`HOURLY_RATE`),
                     `BASE_PAY` = VALUES(`BASE_PAY`), `REVENUE_BASE` = VALUES(`REVENUE_BASE`),
                     `REVENUE_PERCENTAGE` = VALUES(`REVENUE_PERCENTAGE`), `REVENUE_SHARE` = VALUES(`REVENUE_SHARE`),
@@ -529,14 +545,26 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
                     `PREFERRED_PAY` = VALUES(`PREFERRED_PAY`), `BEFORE_ROUNDING` = VALUES(`BEFORE_ROUNDING`),
                     `AFTER_ROUNDING` = VALUES(`AFTER_ROUNDING`), `COMPANY_SUBSIDY` = VALUES(`COMPANY_SUBSIDY`),
                     `MANUAL_ADJUSTMENT` = VALUES(`MANUAL_ADJUSTMENT`), `ANOMALY_STATUS` = VALUES(`ANOMALY_STATUS`),
-                    `ANOMALY_NOTE` = VALUES(`ANOMALY_NOTE`);
-                """, new { Id = string.IsNullOrWhiteSpace(result.Id) ? Guid.NewGuid().ToString("D") : result.Id,
-                    SettlementId = settlementId, result.StaffId, result.Role, result.PayableHours,
+                    `ANOMALY_NOTE` = VALUES(`ANOMALY_NOTE`), `SOURCE_SNAPSHOT_ID` = VALUES(`SOURCE_SNAPSHOT_ID`);
+                """, new { Id = resultLineId,
+                    SourceSnapshotId = sourceSnapshotId, SettlementId = settlementId, result.StaffId, result.Role, result.PayableHours,
                     result.HourlyRate, result.BasePay, result.RevenueBase, result.RevenuePercentage,
                     result.RevenueShare, result.DesignatedTip, result.PublicTip, result.PreferredPay,
                     result.BeforeRounding, result.AfterRounding, result.CompanySubsidy, result.ManualAdjustment,
                     result.AnomalyStatus, result.AnomalyNote, Now = now }, transaction,
                 cancellationToken: cancellationToken));
+            foreach (var source in result.Sources)
+            {
+                await connection.ExecuteAsync(new CommandDefinition("""
+                    INSERT INTO `SETTLEMENT_RESULT_SOURCES`
+                      (`ID`,`RESULT_LINE_ID`,`SOURCE_SNAPSHOT_ID`,`SOURCE_KIND`,`ORDER_ID`,`ORDER_NUMBER`,`SOURCE_LABEL`,
+                       `BASIS_AMOUNT`,`PERCENTAGE`,`AMOUNT`,`CREATED_AT`)
+                    VALUES (@Id,@ResultLineId,@SnapshotId,@Kind,@OrderId,@OrderNumber,@Label,
+                            @BasisAmount,@Percentage,@Amount,@Now);
+                    """, new { Id = Guid.NewGuid().ToString("D"), ResultLineId = resultLineId, SnapshotId = sourceSnapshotId,
+                    source.Kind, source.OrderId, source.OrderNumber, source.Label, source.BasisAmount,
+                    source.Percentage, source.Amount, Now = now }, transaction, cancellationToken: cancellationToken));
+            }
         }
     }
 
