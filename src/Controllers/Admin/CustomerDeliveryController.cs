@@ -76,7 +76,7 @@ public sealed class CustomerDeliveryController(CustomerIdentityService customers
     public async Task<IActionResult> Link(string id, AddDeliveryLinkRequest request, CancellationToken ct)
         => Ok(ApiResponse<ArtDeliveryDto>.Ok(await deliveries.AddLink(id, request, User, ct)));
 
-    [HttpPost("art-deliveries/{id}/assets/upload"), Consumes("multipart/form-data"), RequestSizeLimit(11 * 1024 * 1024)]
+    [HttpPost("art-deliveries/{id}/assets/upload"), Consumes("multipart/form-data"), RequestSizeLimit(32 * 1024 * 1024)]
     public async Task<IActionResult> Upload(string id, IFormFile file, [FromForm] string? label, CancellationToken ct)
         => Ok(ApiResponse<ArtDeliveryDto>.Ok(await deliveries.Upload(id, file, label, User, ct)));
 

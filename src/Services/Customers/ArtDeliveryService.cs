@@ -13,6 +13,7 @@ namespace ToBeClarify.Api.Services.Customers;
 
 public sealed class ArtDeliveryService(CustomerDeliveryRepository repository, CustomerIdentityService identities, DeliveryCodeProtector codes)
 {
+    private const long MaxDeliveryImageBytes = 30L * 1024 * 1024;
     private static string ClaimCode() => "D-" + string.Join('-', Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).Chunk(8).Select(x => new string(x)));
     private static string ClaimHash(string code)
     {
@@ -68,8 +69,8 @@ public sealed class ArtDeliveryService(CustomerDeliveryRepository repository, Cu
     }
     public async Task<ArtDeliveryDto> Upload(string id, IFormFile file, string? label, ClaimsPrincipal actor, CancellationToken ct)
     {
-        if (file is null || file.Length is <= 0 or > 10 * 1024 * 1024)
-            throw new BusinessException("圖片需為 10 MiB 以內。", "DELIVERY_IMAGE_SIZE");
+        if (file is null || file.Length <= 0 || file.Length > MaxDeliveryImageBytes)
+            throw new BusinessException("圖片需為 30 MiB 以內。", "DELIVERY_IMAGE_SIZE");
         var title = Required(string.IsNullOrWhiteSpace(label) ? "作品圖片" : label, 160);
         byte[] bytes;
         try
@@ -89,7 +90,7 @@ public sealed class ArtDeliveryService(CustomerDeliveryRepository repository, Cu
             image.Metadata.IptcProfile = null;
             await using var output = new MemoryStream();
             await image.SaveAsync(output, new PngEncoder { SkipMetadata = true }, ct);
-            if (output.Length > 12 * 1024 * 1024) throw new BusinessException("圖片無損處理後超過 12 MiB，請縮小圖片或使用雲端連結。", "DELIVERY_IMAGE_SIZE");
+            if (output.Length > MaxDeliveryImageBytes) throw new BusinessException("圖片無損處理後超過 30 MiB，請縮小圖片或使用雲端連結。", "DELIVERY_IMAGE_SIZE");
             bytes = output.ToArray();
         }
         catch (UnknownImageFormatException) { throw new BusinessException("圖片格式不支援。", "DELIVERY_IMAGE_INVALID"); }
