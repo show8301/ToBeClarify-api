@@ -39,7 +39,11 @@ public sealed partial class SettlementService : ISettlementService
         var rule = await GetRuleForRunAsync(run, businessDate, cancellationToken);
         var source = await _repository.GetSourceDataAsync(run.Id, businessDate, cancellationToken);
         if (run.Status == "finalized")
-            return MapOverview(run, rule, source, source.Results, BuildFinalizedSummary(run, source.Results));
+        {
+            var financeAnomalies = new List<SettlementAnomalyDto>();
+            _ = new SettlementRevenueAllocation(source, financeAnomalies);
+            return MapOverview(run, rule, source, source.Results, BuildFinalizedSummary(run, source.Results), financeAnomalies);
+        }
         var calculation = Calculate(run, rule, source);
         return MapOverview(run, rule, source, calculation.Results, calculation.Summary, calculation.Anomalies);
     }
@@ -801,7 +805,7 @@ public sealed partial class SettlementService : ISettlementService
                     x.AttendanceSource, x.AttendanceRequestId ?? backfill?.Id, backfill?.Status,
                     backfill?.Reason, x.AttendanceApprovedBy, x.AttendanceApprovedAt, x.PayrollSnapshotVersion);
             }).ToArray(),
-            results.Select(MapResult).ToArray(), anomalies ?? [],
+            results.Select(MapResult).ToArray(), (anomalies ?? []).Select(item => EnrichAnomaly(source, item)).ToArray(),
              source.AttendanceBackfillRequests.Select(x => new SettlementAttendanceBackfillDto(x.Id, x.StaffId,
                  x.StaffName, x.Role, x.RequestedMinutes, x.Reason, x.Status, x.RequestedBy, x.RequestedAt,
                  x.ReviewedBy, x.ReviewedAt, x.ReviewNote)).ToArray(),
@@ -817,6 +821,43 @@ public sealed partial class SettlementService : ISettlementService
                      x.CustomerName, x.OrderId, x.OrderNumber, x.PendingRecordCount)).ToArray()),
              source.PayrollAssignments.Select(x => new SettlementPayrollAssignmentDto(x.StaffId, x.DisplayName, x.PayrollRole,
                  x.PayrollSnapshotVersion, x.CanUseBackstage, x.StartedAt)).ToArray());
+
+    private static SettlementAnomalyDto EnrichAnomaly(SettlementSourceData source, SettlementAnomalyDto anomaly)
+    {
+        var sourceRecord = source.CashAllocations.FirstOrDefault(item => item.Id == anomaly.SourceId);
+        var sourceItem = sourceRecord?.OrderItemId is null ? null
+            : source.Items.FirstOrDefault(item => item.ItemId == sourceRecord.OrderItemId);
+        var orderId = sourceRecord?.OrderId ?? sourceItem?.OrderId
+            ?? (anomaly.Code.StartsWith("ORDER_", StringComparison.Ordinal) ? anomaly.SourceId : anomaly.OrderId);
+        var order = orderId is null ? null : source.Orders.FirstOrDefault(item => item.OrderId == orderId);
+        var relatedRows = anomaly.Code.StartsWith("ORDER_", StringComparison.Ordinal) && orderId is not null
+            ? source.CashAllocations.Where(item => item.OrderId == orderId).ToArray()
+            : anomaly.Code.StartsWith("ADMISSION_", StringComparison.Ordinal) && anomaly.SourceId is not null
+                ? source.CashAllocations.Where(item => item.SessionId == anomaly.SourceId && item.SourceKind == "admission").ToArray()
+                : sourceRecord is null ? [] : [sourceRecord];
+        var financeSources = relatedRows.Select(item =>
+        {
+            var linkedItem = item.OrderItemId is null ? null
+                : source.Items.FirstOrDefault(row => row.ItemId == item.OrderItemId);
+            var linkedOrderId = item.OrderId ?? linkedItem?.OrderId;
+            var linkedOrder = linkedOrderId is null ? null : source.Orders.FirstOrDefault(row => row.OrderId == linkedOrderId);
+            return new SettlementFinanceSourceDto(item.Id, item.SourceKind, item.Kind, item.Amount, item.Reason,
+                item.AllocationStatus, item.HoldScope, linkedOrderId,
+                item.OrderNumber ?? linkedOrder?.OrderNumber, item.OrderItemId, linkedItem?.ItemName);
+        }).ToArray();
+        var customerRow = sourceRecord ?? relatedRows.FirstOrDefault();
+        var orderDto = order is null ? null : new SettlementAnomalyOrderDto(order.OrderId, order.OrderNumber);
+        var orders = anomaly.Orders ?? (orderDto is null ? null : [orderDto]);
+        return anomaly with
+        {
+            SessionId = anomaly.SessionId ?? customerRow?.SessionId,
+            CustomerName = anomaly.CustomerName ?? customerRow?.CustomerName,
+            OrderId = anomaly.OrderId ?? order?.OrderId ?? sourceRecord?.OrderId ?? sourceItem?.OrderId,
+            OrderNumber = anomaly.OrderNumber ?? order?.OrderNumber ?? sourceRecord?.OrderNumber,
+            Orders = orders,
+            FinanceSources = financeSources.Length > 0 ? financeSources : anomaly.FinanceSources
+        };
+    }
 
     private static SettlementRuleDto MapRule(SettlementRuleRow row) => new(row.Id, row.DayType,
         DateOnly.FromDateTime(row.EffectiveFrom), row.DesignatedHourlyRate, row.ServiceManagerHourlyRate,

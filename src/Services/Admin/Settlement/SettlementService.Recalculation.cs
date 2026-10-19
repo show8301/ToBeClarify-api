@@ -11,12 +11,13 @@ namespace ToBeClarify.Api.Services.Admin.Settlement;
 
 public sealed partial class SettlementService
 {
-    public Task<SettlementRecalculationPreviewDto> PreviewRecalculationAsync(SettlementCalculateRequest request,
+    public Task<SettlementRecalculationPreviewDto> PreviewRecalculationAsync(PreviewSettlementRecalculationRequest request,
         ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
         ValidateDate(request.BusinessDate);
         return _repository.RecalculateFinalizedAsync(request.BusinessDate, request.SessionNo, null,
-            PrepareRecalculation, ActorId(actor), _clock.LocalDateTime, cancellationToken);
+            (run, source, payments, corrections) => PrepareRecalculation(run, source, payments, corrections, request.Adjustments),
+            ActorId(actor), _clock.LocalDateTime, cancellationToken);
     }
 
     public async Task<SettlementOverviewDto> ConfirmRecalculationAsync(ConfirmSettlementRecalculationRequest request,
@@ -27,7 +28,8 @@ public sealed partial class SettlementService
             || request.Reason.Trim().Length > 500)
             throw new BusinessException("重新結算需要有效操作編號與 500 字以內的補正原因。", "SETTLEMENT_RECALCULATION_INVALID");
         await _repository.RecalculateFinalizedAsync(request.BusinessDate, request.SessionNo, request,
-            PrepareRecalculation, ActorId(actor), _clock.LocalDateTime, cancellationToken);
+            (run, source, payments, corrections) => PrepareRecalculation(run, source, payments, corrections, request.Adjustments),
+            ActorId(actor), _clock.LocalDateTime, cancellationToken);
         return await GetOverviewAsync(request.BusinessDate, request.SessionNo, cancellationToken);
     }
 
@@ -40,7 +42,8 @@ public sealed partial class SettlementService
     }
 
     private SettlementRecalculationPlan PrepareRecalculation(SettlementRunRow run, SettlementSourceData source,
-        IReadOnlyList<SettlementPaymentEventRow> payments, IReadOnlyList<SettlementCorrectionEventRow> corrections)
+        IReadOnlyList<SettlementPaymentEventRow> payments, IReadOnlyList<SettlementCorrectionEventRow> corrections,
+        SettlementRecalculationAdjustmentsRequest? adjustments)
     {
         // Use the finalized rule, even when newer rules have since been published.
         SettlementRuleRow? rule = null;
@@ -49,12 +52,35 @@ public sealed partial class SettlementService
         if (rule is null || string.IsNullOrWhiteSpace(rule.Id) || rule.Id != run.RuleVersionId)
             throw new BusinessException("缺少有效的原結算規則快照，請先核對原始結算資料。", "SETTLEMENT_RULE_SNAPSHOT_REQUIRED");
 
-        var refreshed = SettlementAttendanceSync.RefreshFinalizedSource(run.Id, source);
         var calculationRun = CopyRun(run);
-        if (refreshed.Admissions.FirstOrDefault()?.UseAdmissionLedger != true && run.AdmissionFeeOverride is null)
+        var refreshed = SettlementAttendanceSync.RefreshFinalizedSource(run.Id, source);
+        if (refreshed.Admissions.FirstOrDefault()?.UseAdmissionLedger != true && calculationRun.AdmissionFeeOverride is null)
             calculationRun.AdmissionFeeOverride = run.AdmissionFeeSnapshot;
+        var changedAdjustmentInputs = false;
+        if (adjustments is not null)
+        {
+            ValidateRecalculationAdjustments(adjustments, refreshed);
+            calculationRun.DayType = adjustments.DayType;
+            calculationRun.PublicTipAmount = adjustments.PublicTipAmount;
+            calculationRun.AdmissionFeeOverride = adjustments.AdmissionFeeOverride;
+            calculationRun.ActivityExpense = adjustments.ActivityExpense;
+            calculationRun.CompanyShareHours = adjustments.CompanyShareHours;
+            calculationRun.ActivityHoursConfirmed = adjustments.ActivityHoursConfirmed;
+            var proposedInputs = ApplyRecalculationStaffInputs(run.Id, adjustments.StaffInputs,
+                adjustments.RemovedStaffInputs, refreshed);
+            changedAdjustmentInputs = !RecalculationInputsEqual(refreshed.StaffInputs, proposedInputs)
+                || run.DayType != calculationRun.DayType
+                || run.PublicTipAmount != calculationRun.PublicTipAmount
+                || run.AdmissionFeeOverride != calculationRun.AdmissionFeeOverride
+                || run.ActivityExpense != calculationRun.ActivityExpense
+                || run.CompanyShareHours != calculationRun.CompanyShareHours
+                || run.ActivityHoursConfirmed != calculationRun.ActivityHoursConfirmed;
+            refreshed = refreshed with { StaffInputs = proposedInputs };
+        }
         var calculation = Calculate(calculationRun, rule, refreshed);
-        calculation.Run.AdmissionFeeOverride = run.AdmissionFeeOverride;
+        calculation.Run.AdmissionFeeOverride = adjustments is null
+            ? run.AdmissionFeeOverride
+            : calculationRun.AdmissionFeeOverride;
         var anomalies = calculation.Anomalies.ToList();
         if (source.Period.PeriodStatus is not ("closed" or "settled")
             || source.Period.UnfinishedOrderCount > 0 || source.Period.ActiveServiceCount > 0)
@@ -77,6 +103,8 @@ public sealed partial class SettlementService
             var oldInput = source.StaffInputs.SingleOrDefault(x => x.StaffId == key.StaffId && x.Role == key.Role);
             var newInput = refreshed.StaffInputs.SingleOrDefault(x => x.StaffId == key.StaffId && x.Role == key.Role);
             if (oldInput?.ActualMinutes == newInput?.ActualMinutes
+                && oldInput?.ActivityHours == newInput?.ActivityHours
+                && oldInput?.IsBackstageParticipant == newInput?.IsBackstageParticipant
                 && JsonSerializer.Serialize(before is null ? null : MapResult(before))
                     == JsonSerializer.Serialize(after is null ? null : MapResult(after))) continue;
             changes.Add(new SettlementRecalculationChangeDto(key.StaffId,
@@ -84,7 +112,8 @@ public sealed partial class SettlementService
                 key.Role, oldInput?.ActualMinutes, newInput?.ActualMinutes,
                 before?.PayableHours ?? 0, after?.PayableHours ?? 0,
                 before?.AfterRounding ?? 0, after?.AfterRounding ?? 0,
-                (decimal)(after?.AfterRounding ?? 0) - (before?.AfterRounding ?? 0)));
+                (decimal)(after?.AfterRounding ?? 0) - (before?.AfterRounding ?? 0),
+                oldInput?.ActivityHours, newInput?.ActivityHours));
         }
         var activeCorrections = corrections.Where(x => x.Status != "cancelled").ToArray();
         var balances = calculation.Results.Where(x => x.StaffId is not null)
@@ -101,18 +130,99 @@ public sealed partial class SettlementService
             }).ToArray();
         var beforePayroll = source.Results.Sum(x => (decimal)x.AfterRounding);
         var afterPayroll = calculation.Results.Sum(x => (decimal)x.AfterRounding);
-        var token = RecalculationToken(new { run, source, payments, corrections });
+        var token = RecalculationToken(new { run, source, payments, corrections, adjustments });
         var hasChanges = changes.Count > 0 || run.NetCash != calculation.Run.NetCash
             || run.CompanyIncome != calculation.Run.CompanyIncome || run.GrossRevenue != calculation.Run.GrossRevenue
             || run.RetainedAmount != calculation.Run.RetainedAmount
-            || run.PendingFinanceCount != calculation.Run.PendingFinanceCount;
+            || run.PendingFinanceCount != calculation.Run.PendingFinanceCount || changedAdjustmentInputs;
         var preview = new SettlementRecalculationPreviewDto(DateOnly.FromDateTime(run.BusinessDate),
             run.SessionNo, token, run.CorrectionVersion, hasChanges, beforePayroll, afterPayroll,
             afterPayroll - beforePayroll, run.NetCash, calculation.Run.NetCash,
-            run.CompanyIncome, calculation.Run.CompanyIncome, changes, balances, anomalies,
+            run.CompanyIncome, calculation.Run.CompanyIncome, changes, balances,
+            anomalies.Select(item => EnrichAnomaly(source, item)).ToArray(),
             activeCorrections.Select(x => new SettlementRecalculationExistingCorrectionDto(x.StaffId, x.AmountDelta, x.Reason)).ToArray());
         return new SettlementRecalculationPlan(calculation.ToSave(rule, refreshed.StaffInputs), preview);
     }
+
+    private static void ValidateRecalculationAdjustments(SettlementRecalculationAdjustmentsRequest adjustments,
+        SettlementSourceData source)
+    {
+        if (adjustments.DayType is not ("normal" or "event") || adjustments.PublicTipAmount < 0
+            || adjustments.ActivityExpense < 0 || adjustments.AdmissionFeeOverride < 0
+            || adjustments.CompanyShareHours is < 0 or > 100000)
+            throw new BusinessException("重新結算輸入超出允許範圍。", "SETTLEMENT_RECALCULATION_INPUT_INVALID");
+        if (adjustments.StaffInputs.GroupBy(x => (x.StaffId, x.Role)).Any(x => x.Count() > 1))
+            throw new BusinessException("同一人同一角色只能有一筆計薪輸入。", "SETTLEMENT_INPUT_DUPLICATED");
+        if (adjustments.RemovedStaffInputs.GroupBy(x => (x.StaffId, x.Role)).Any(x => x.Count() > 1)
+            || adjustments.StaffInputs.Select(x => (x.StaffId, x.Role))
+                .Intersect(adjustments.RemovedStaffInputs.Select(x => (x.StaffId, x.Role))).Any())
+            throw new BusinessException("同一筆計薪輸入不可同時修改與移除。", "SETTLEMENT_INPUT_DUPLICATED");
+        var assignments = source.PayrollAssignments.ToDictionary(x => x.StaffId, StringComparer.Ordinal);
+        foreach (var input in adjustments.StaffInputs)
+        {
+            if (!assignments.TryGetValue(input.StaffId, out var assignment)
+                || (input.Role != assignment.PayrollRole && !(input.Role == "backstage" && assignment.CanUseBackstage))
+                || input.PayrollSnapshotVersion != assignment.PayrollSnapshotVersion)
+                throw new BusinessException("重新結算人員或職位與上班快照不符，請重新載入後核對。", "SETTLEMENT_PAYROLL_SNAPSHOT_INVALID");
+        }
+    }
+
+    private static List<SettlementStaffInputRow> ApplyRecalculationStaffInputs(string settlementId,
+        IReadOnlyList<SettlementRecalculationStaffInputAdjustmentRequest> proposed,
+        IReadOnlyList<SettlementRecalculationStaffInputKeyRequest> removed, SettlementSourceData refreshed)
+    {
+        var current = refreshed.StaffInputs.ToDictionary(x => (x.StaffId, x.Role));
+        var assignments = refreshed.PayrollAssignments.ToDictionary(x => x.StaffId, StringComparer.Ordinal);
+        foreach (var key in removed)
+        {
+            if (!current.Remove((key.StaffId, key.Role)))
+                throw new BusinessException("要移除的計薪輸入已更新，請重新讀取結算資料。", "SETTLEMENT_RECALCULATION_INPUT_CHANGED");
+        }
+        foreach (var input in proposed)
+        {
+            var exists = current.TryGetValue((input.StaffId, input.Role), out var existing);
+            var assignment = assignments[input.StaffId];
+            if (!exists && (!input.ActualMinutesChanged || !input.ActivityHoursChanged || !input.BackstageParticipantChanged))
+                throw new BusinessException("新增計薪輸入缺少完整調整值，請重新載入後再試。", "SETTLEMENT_RECALCULATION_INPUT_INVALID");
+            var row = exists ? new SettlementStaffInputRow
+            {
+                Id = existing!.Id, SettlementId = existing.SettlementId, StaffId = existing.StaffId,
+                CreatedAt = existing.CreatedAt, CreatedBy = existing.CreatedBy, DisplayName = existing.DisplayName,
+                RoleTitle = existing.RoleTitle, IsActive = existing.IsActive, IsWorking = existing.IsWorking,
+                Role = existing.Role, PayrollSnapshotVersion = existing.PayrollSnapshotVersion,
+                AttendanceSource = existing.AttendanceSource, AttendanceRequestId = existing.AttendanceRequestId,
+                AttendanceApprovedBy = existing.AttendanceApprovedBy, AttendanceApprovedAt = existing.AttendanceApprovedAt,
+                PublicTipEligible = existing.PublicTipEligible, Note = existing.Note
+            } : new SettlementStaffInputRow
+            {
+                SettlementId = settlementId, StaffId = input.StaffId, Role = input.Role,
+                PayrollSnapshotVersion = assignment.PayrollSnapshotVersion, DisplayName = assignment.DisplayName,
+                RoleTitle = assignment.RoleTitle, IsActive = assignment.IsActive, IsWorking = assignment.ActualMinutes > 0,
+                AttendanceSource = "manual", PublicTipEligible = input.Role != "backstage"
+            };
+            if (input.ActualMinutesChanged && exists && input.ActualMinutes != existing!.ActualMinutes)
+            {
+                row.AttendanceSource = "manual";
+                row.AttendanceRequestId = null;
+                row.AttendanceApprovedBy = null;
+                row.AttendanceApprovedAt = null;
+            }
+            if (input.ActualMinutesChanged) row.ActualMinutes = input.ActualMinutes;
+            if (input.ActivityHoursChanged) row.ActivityHours = input.ActivityHours;
+            if (input.BackstageParticipantChanged)
+                row.IsBackstageParticipant = input.Role == "backstage" && assignment.CanUseBackstage
+                    && input.IsBackstageParticipant;
+            current[(input.StaffId, input.Role)] = row;
+        }
+        return current.Values.OrderBy(x => x.StaffId, StringComparer.Ordinal).ThenBy(x => x.Role, StringComparer.Ordinal).ToList();
+    }
+
+    private static bool RecalculationInputsEqual(IReadOnlyList<SettlementStaffInputRow> current,
+        IReadOnlyList<SettlementStaffInputRow> proposed)
+        => JsonSerializer.Serialize(current.OrderBy(x => x.StaffId, StringComparer.Ordinal).ThenBy(x => x.Role, StringComparer.Ordinal)
+                .Select(x => new { x.StaffId, x.Role, x.ActualMinutes, x.ActivityHours, x.IsBackstageParticipant, x.Note }))
+            == JsonSerializer.Serialize(proposed.OrderBy(x => x.StaffId, StringComparer.Ordinal).ThenBy(x => x.Role, StringComparer.Ordinal)
+                .Select(x => new { x.StaffId, x.Role, x.ActualMinutes, x.ActivityHours, x.IsBackstageParticipant, x.Note }));
 
     internal static string RecalculationToken(object value)
     {

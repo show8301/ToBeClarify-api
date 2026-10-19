@@ -325,12 +325,15 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
                     WHERE S3.`BUSINESS_DATE`=@BusinessDate AND U.`UNIT_STATUS`='in_service') AS ActiveServiceCount
             FROM `BUSINESS_PERIODS` P WHERE P.`BUSINESS_DATE`=@BusinessDate;
 
-            SELECT F.ID AS Id, F.SESSION_ID AS SessionId, F.SOURCE_KIND AS SourceKind,
+            SELECT F.ID AS Id, F.SESSION_ID AS SessionId, S.CUSTOMER_NAME AS CustomerName,
+                   F.SOURCE_KIND AS SourceKind,
                    F.ORDER_ID AS OrderId, F.ORDER_ITEM_ID AS OrderItemId, F.KIND AS Kind,
                    F.AMOUNT AS Amount, F.ALLOCATION_STATUS AS AllocationStatus,
-                   F.HOLD_SCOPE AS HoldScope, F.CASH_PERIOD_ID AS CashPeriodId
+                   F.HOLD_SCOPE AS HoldScope, F.CASH_PERIOD_ID AS CashPeriodId,
+                   F.REASON AS Reason, O.ORDER_NUMBER AS OrderNumber
             FROM ORDERING_FINANCE_RECORDS F
             INNER JOIN CUSTOMER_ORDER_SESSIONS S ON S.ID=F.SESSION_ID
+            LEFT JOIN ORDERS O ON O.ID=F.ORDER_ID
             WHERE S.BUSINESS_DATE=@BusinessDate;
             """;
 
@@ -470,11 +473,14 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
             {
                 await connection.ExecuteAsync(new CommandDefinition("""
                     UPDATE `SETTLEMENT_STAFF_INPUTS`
-                    SET `ACTUAL_MINUTES` = @ActualMinutes, `ATTENDANCE_SOURCE` = @AttendanceSource,
+                    SET `ACTUAL_MINUTES` = @ActualMinutes, `ACTIVITY_HOURS` = @ActivityHours,
+                        `IS_BACKSTAGE_PARTICIPANT` = @IsBackstageParticipant, `NOTE` = @Note,
+                        `ATTENDANCE_SOURCE` = @AttendanceSource,
                         `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId
                     WHERE `ID` = @Id AND `SETTLEMENT_ID` = @SettlementId;
                     """, new { input.Id, SettlementId = settlementId, input.ActualMinutes,
-                        input.AttendanceSource, Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
+                        input.ActivityHours, input.IsBackstageParticipant, input.Note, input.AttendanceSource,
+                        Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
                 continue;
             }
             var alreadyEntered = await connection.ExecuteScalarAsync<int>(new CommandDefinition(
@@ -488,12 +494,13 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
             var newInputId = Guid.NewGuid().ToString("D");
             await connection.ExecuteAsync(new CommandDefinition("""
                 INSERT INTO `SETTLEMENT_STAFF_INPUTS`
-                    (`ID`, `SETTLEMENT_ID`, `STAFF_ID`, `ROLE`, `ACTUAL_MINUTES`, `ATTENDANCE_SOURCE`, `PAYROLL_SNAPSHOT_VERSION`,
-                     `PUBLIC_TIP_ELIGIBLE`, `IS_BACKSTAGE_PARTICIPANT`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
-                VALUES (@Id, @SettlementId, @StaffId, @Role, @ActualMinutes, 'clock', @PayrollSnapshotVersion,
-                        @PublicTipEligible, @IsBackstageParticipant, @Now, @ActorId, @Now, @ActorId);
+                    (`ID`, `SETTLEMENT_ID`, `STAFF_ID`, `ROLE`, `ACTUAL_MINUTES`, `ACTIVITY_HOURS`, `ATTENDANCE_SOURCE`, `PAYROLL_SNAPSHOT_VERSION`,
+                     `PUBLIC_TIP_ELIGIBLE`, `IS_BACKSTAGE_PARTICIPANT`, `NOTE`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`)
+                VALUES (@Id, @SettlementId, @StaffId, @Role, @ActualMinutes, @ActivityHours, @AttendanceSource, @PayrollSnapshotVersion,
+                        @PublicTipEligible, @IsBackstageParticipant, @Note, @Now, @ActorId, @Now, @ActorId);
                 """, new { Id = newInputId, SettlementId = settlementId,
-                    input.StaffId, input.Role, input.ActualMinutes, input.PayrollSnapshotVersion, input.PublicTipEligible, input.IsBackstageParticipant,
+                    input.StaffId, input.Role, input.ActualMinutes, input.ActivityHours, input.AttendanceSource,
+                    input.PayrollSnapshotVersion, input.PublicTipEligible, input.IsBackstageParticipant, input.Note,
                     Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
             input.Id = newInputId;
             input.SettlementId = settlementId;
@@ -507,7 +514,11 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
             """, new { SettlementId = settlementId }, transaction, cancellationToken: cancellationToken));
         await connection.ExecuteAsync(new CommandDefinition("""
             UPDATE `SETTLEMENT_RUNS`
-            SET INPUT_VERSION=INPUT_VERSION+1, CALCULATION_VERSION=2, `RULE_VERSION_ID` = @RuleVersionId, `RULE_SNAPSHOT_JSON` = @RuleSnapshotJson,
+            SET INPUT_VERSION=INPUT_VERSION+1, CALCULATION_VERSION=2, `DAY_TYPE`=@DayType,
+                `PUBLIC_TIP_AMOUNT`=@PublicTipAmount, `ADMISSION_FEE_OVERRIDE`=@AdmissionFeeOverride,
+                `ACTIVITY_EXPENSE`=@ActivityExpense, `COMPANY_SHARE_HOURS`=@CompanyShareHours,
+                `ACTIVITY_HOURS_CONFIRMED`=@ActivityHoursConfirmed,
+                `RULE_VERSION_ID` = @RuleVersionId, `RULE_SNAPSHOT_JSON` = @RuleSnapshotJson,
                 `ADMISSION_FEE_SNAPSHOT` = @AdmissionFeeSnapshot, `GROSS_REVENUE` = @GrossRevenue,
                 `DESIGNATED_REVENUE_BASE` = @DesignatedRevenueBase, `DEDICATED_ROOM_GROSS` = @DedicatedRoomGross,
                 `DEDICATED_ROOM_OWNER_SHARE` = @DedicatedRoomOwnerShare,
@@ -523,7 +534,10 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
                 `RETAINED_AMOUNT` = @RetainedAmount, `PENDING_FINANCE_COUNT` = @PendingFinanceCount,
                 `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId
             WHERE `ID` = @SettlementId;
-            """, new { SettlementId = settlementId, calculation.Run.RuleVersionId,
+            """, new { SettlementId = settlementId, calculation.Run.DayType, calculation.Run.PublicTipAmount,
+                calculation.Run.AdmissionFeeOverride, calculation.Run.ActivityExpense,
+                calculation.Run.CompanyShareHours, calculation.Run.ActivityHoursConfirmed,
+                calculation.Run.RuleVersionId,
                 calculation.Run.RuleSnapshotJson, calculation.Run.AdmissionFeeSnapshot,
                 calculation.Run.GrossRevenue, calculation.Run.DesignatedRevenueBase,
                 calculation.Run.DedicatedRoomGross, calculation.Run.DedicatedRoomOwnerShare,

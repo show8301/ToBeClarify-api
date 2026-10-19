@@ -86,6 +86,17 @@ public sealed partial class SettlementRepository
                     ?? Guid.NewGuid().ToString("D");
             result.SettlementId = run.Id;
         }
+        var retainedInputIds = plan.Calculation.StaffInputs.Where(x => !string.IsNullOrWhiteSpace(x.Id))
+            .Select(x => x.Id).Distinct(StringComparer.Ordinal).ToArray();
+        if (retainedInputIds.Length == 0)
+            await connection.ExecuteAsync(new CommandDefinition(
+                "DELETE FROM SETTLEMENT_STAFF_INPUTS WHERE SETTLEMENT_ID=@SettlementId;",
+                new { SettlementId = run.Id }, transaction, cancellationToken: cancellationToken));
+        else
+            await connection.ExecuteAsync(new CommandDefinition(
+                "DELETE FROM SETTLEMENT_STAFF_INPUTS WHERE SETTLEMENT_ID=@SettlementId AND ID NOT IN @RetainedInputIds;",
+                new { SettlementId = run.Id, RetainedInputIds = retainedInputIds }, transaction,
+                cancellationToken: cancellationToken));
         await SaveCalculationCoreAsync(connection, transaction, run.Id, plan.Calculation, actorId, now,
             true, cancellationToken);
         var updated = await connection.ExecuteAsync(new CommandDefinition("""
