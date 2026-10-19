@@ -26,6 +26,15 @@ SettlementStaffInputRow Staff(string id, string role) => new()
     int? adjusted = null, int? netCash = null, int expense = 0, decimal? admission = null)
 {
     var subtotal = items.Sum(item => item.LineTotal);
+    var cashRecords = new List<SettlementCashAllocationRow>();
+    var entryCash = admission.HasValue ? Math.Min(admission.Value, netCash ?? 0) : 0;
+    if (admission.HasValue)
+        cashRecords.Add(Cash("admission", "charge_add", admission.Value));
+    if (netCash.HasValue)
+    {
+        cashRecords.Add(Cash("admission", "cash_receipt", entryCash));
+        cashRecords.Add(Cash("order", "cash_receipt", netCash.Value - entryCash));
+    }
     var source = new SettlementSourceData
     {
         Orders = [new() { OrderId = "order", Subtotal = subtotal, TotalAmount = subtotal - credit,
@@ -34,7 +43,8 @@ SettlementStaffInputRow Staff(string id, string role) => new()
             .Select(x => new SettlementAttendanceCandidateRow { StaffId = x.Item1, PayrollRole = x.Item2, PayrollSnapshotVersion = 1 }).ToArray(),
         Admissions = admission.HasValue ? [new() { UseAdmissionLedger = true, LedgerReceivable = admission.Value, SessionCount = 99 }] : [],
         Items = items, StaffInputs = [Staff("Alice", "designated"), Staff("Bob", "designated"), Staff("Manager", "service")],
-        Cash = new() { HasCashRecords = netCash.HasValue, NetCash = netCash ?? 0 }
+        Cash = new() { HasCashRecords = netCash.HasValue, NetCash = netCash ?? 0 },
+        CashAllocations = cashRecords
     };
     var run = new SettlementRunRow
     {
@@ -45,6 +55,12 @@ SettlementStaffInputRow Staff(string id, string role) => new()
     return ((SettlementRunRow)result.GetType().GetProperty("Run")!.GetValue(result)!,
         (IReadOnlyList<SettlementResultLineRow>)result.GetType().GetProperty("Results")!.GetValue(result)!);
 }
+SettlementCashAllocationRow Cash(string sourceKind, string kind, decimal amount) => new()
+{
+    Id = Guid.NewGuid().ToString("D"), SessionId = "session", SourceKind = sourceKind,
+    OrderId = sourceKind == "order" ? "order" : null, Kind = kind, Amount = amount,
+    AllocationStatus = "confirmed", HoldScope = "none", CashPeriodId = "period"
+};
 void Equal(decimal actual, decimal expected, string name)
 {
     if (actual != expected) throw new Exception($"{name}: expected {expected}, got {actual}");
@@ -96,7 +112,9 @@ Equal(cash.Results.Sum(row => row.RevenueShare) + cash.Run.CompanyIncome + 100, 
 var legacy = Calculate([Item("legacy-food", 1000)], credit: 100);
 Equal(legacy.Run.MealRevenue, 900, "legacy unclassified orders retain meal accounting");
 var legacyActivity = Calculate([Item("legacy-food", 1000)], activity: true, netCash: 500, expense: 100);
-Equal(legacyActivity.Run.CompanyIncome, 112.5m, "legacy activity cash allocation remains unchanged");
+Equal(legacyActivity.Run.CompanyIncome, 100, "activity expense is deducted once from recognized order revenue");
+Equal(legacyActivity.Results.Sum(row => row.RevenueShare) + legacyActivity.Run.CompanyIncome + 100, 500,
+    "activity allocation reconciles after removing the whole-day scaling stage");
 var admitted = Calculate([Item("meal",150_000)], credit:100_000, admission:100_000, netCash:150_000);
 Equal(admitted.Run.GrossRevenue,150_000,"admission plus meal net credit is charged once");
 Equal(admitted.Run.AdmissionRevenue,100_000,"ledger amount replaces session count estimate");
