@@ -260,6 +260,9 @@ public sealed class SettlementCashAllocationRow
     public string AllocationStatus { get; set; } = string.Empty;
     public string HoldScope { get; set; } = string.Empty;
     public string? CashPeriodId { get; set; }
+    public string? Reason { get; set; }
+    public string? CustomerName { get; set; }
+    public string? OrderNumber { get; set; }
 }
 
 public sealed class SettlementPendingFinanceItemRow

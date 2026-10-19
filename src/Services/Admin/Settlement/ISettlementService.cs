@@ -5,7 +5,7 @@ namespace ToBeClarify.Api.Services.Admin.Settlement;
 
 public interface ISettlementService
 {
-    Task<SettlementRecalculationPreviewDto> PreviewRecalculationAsync(SettlementCalculateRequest request,
+    Task<SettlementRecalculationPreviewDto> PreviewRecalculationAsync(PreviewSettlementRecalculationRequest request,
         ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<SettlementOverviewDto> ConfirmRecalculationAsync(ConfirmSettlementRecalculationRequest request,
         ClaimsPrincipal actor, CancellationToken cancellationToken);

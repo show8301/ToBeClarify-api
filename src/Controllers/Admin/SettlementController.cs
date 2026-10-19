@@ -65,7 +65,7 @@ public sealed class SettlementController : ControllerBase
     [HttpPost("recalculation/preview")]
     [Authorize(Policy = "AdminManager")]
     public async Task<ActionResult<ApiResponse<SettlementRecalculationPreviewDto>>> PreviewRecalculation(
-        SettlementCalculateRequest request, CancellationToken cancellationToken)
+        PreviewSettlementRecalculationRequest request, CancellationToken cancellationToken)
         => Ok(ApiResponse<SettlementRecalculationPreviewDto>.Ok(
             await _service.PreviewRecalculationAsync(request, User, cancellationToken)));
 

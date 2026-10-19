@@ -78,8 +78,21 @@ Check(Equals(reordered, same), "SQL row order does not invalidate a preview.");
 var altered = token.Invoke(null, [new { rows = new[] { new { id = "a", amount = 3 }, new { id = "b", amount = 2 } } }]);
 Check(!Equals(reordered, altered), "A source amount change invalidates the previous preview token.");
 var paymentChange = payments.Append(new() { Id = "new-payment", StaffId = "xiaomi", EventKind = "payout", Amount = 1 }).ToArray();
-var changedPaymentPlan = (SettlementRecalculationPlan)prepare.Invoke(service, [run, source, paymentChange, corrections])!;
+var changedPaymentPlan = (SettlementRecalculationPlan)prepare.Invoke(service, [run, source, paymentChange, corrections, null])!;
 Check(changedPaymentPlan.Preview.SourceToken != plan.Preview.SourceToken, "A payment recorded after preview requires rechecking balances.");
+var adjustments = new SettlementRecalculationAdjustmentsRequest
+{
+    DayType = "normal", PublicTipAmount = 123,
+    StaffInputs = [new() { StaffId = "xiaomi", Role = "manager", PayrollSnapshotVersion = 1,
+        ActualMinutes = 177, ActualMinutesChanged = true }]
+};
+var adjustedPlan = PrepareWithAdjustments(source, adjustments);
+Check(adjustedPlan.Calculation.StaffInputs.Single().ActualMinutes == 177,
+    "Staged payroll input adjustments are applied to the next version calculation.");
+Check(adjustedPlan.Calculation.Run.PublicTipAmount == 123 && adjustedPlan.Preview.HasChanges,
+    "Run-level input adjustments are included in the preview without requiring a reason at preview time.");
+Check(source.StaffInputs.Single().ActualMinutes == 57 && source.Results.Single().PayableHours == 1,
+    "Previewing staged adjustments leaves the currently finalized version unchanged.");
 var confirmation = new ConfirmSettlementRecalculationRequest
 {
     SourceToken = plan.Preview.SourceToken, ExpectedCorrectionVersion = plan.Preview.CorrectionVersion,
@@ -117,7 +130,10 @@ run.RuleSnapshotJson = originalJson;
 Console.WriteLine($"Passed {checks} settlement recalculation memory checks; no database connections were used.");
 
 SettlementRecalculationPlan Prepare(SettlementSourceData value)
-    => (SettlementRecalculationPlan)prepare.Invoke(service, [run, value, payments, corrections])!;
+    => PrepareWithAdjustments(value, null);
+SettlementRecalculationPlan PrepareWithAdjustments(SettlementSourceData value,
+    SettlementRecalculationAdjustmentsRequest? changes)
+    => (SettlementRecalculationPlan)prepare.Invoke(service, [run, value, payments, corrections, changes])!;
 void Check(bool condition, string description)
 {
     if (!condition) throw new Exception(description);

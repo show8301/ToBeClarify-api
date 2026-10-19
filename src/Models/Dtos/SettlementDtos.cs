@@ -163,8 +163,14 @@ public sealed record SettlementResultSourceDto(
 
 public sealed record SettlementAnomalyOrderDto(string OrderId, string OrderNumber);
 
+public sealed record SettlementFinanceSourceDto(string Id, string SourceKind, string Kind, decimal Amount,
+    string? Reason, string AllocationStatus, string HoldScope, string? OrderId, string? OrderNumber,
+    string? OrderItemId, string? ItemName);
+
 public sealed record SettlementAnomalyDto(string Code, string Message, string? SourceId = null,
-    string? StaffName = null, IReadOnlyList<SettlementAnomalyOrderDto>? Orders = null);
+    string? StaffName = null, IReadOnlyList<SettlementAnomalyOrderDto>? Orders = null,
+    string? SessionId = null, string? CustomerName = null, string? OrderId = null, string? OrderNumber = null,
+    IReadOnlyList<SettlementFinanceSourceDto>? FinanceSources = null);
 
 public sealed record SettlementOverviewDto(
     SettlementRunDto Run,
