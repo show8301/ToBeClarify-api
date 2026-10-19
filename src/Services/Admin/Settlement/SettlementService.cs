@@ -566,8 +566,7 @@ public sealed partial class SettlementService : ISettlementService
                 result.RevenueBase *= factor;
                 result.RevenueShare *= factor;
             }
-            result.PreferredPay = result.Role == "dedicated_room_owner"
-                ? result.RevenueShare : Math.Max(result.BasePay, result.RevenueShare);
+            result.PreferredPay = CalculateRolePay(result.Role, result.BasePay, result.RevenueShare);
             result.BeforeRounding = result.PreferredPay + result.DesignatedTip + result.PublicTip;
             result.AfterRounding = checked((int)Math.Ceiling(result.BeforeRounding));
             result.CompanySubsidy = result.AfterRounding - result.BeforeRounding;
@@ -703,7 +702,7 @@ public sealed partial class SettlementService : ISettlementService
         string? anomalyNote)
     {
         var basePay = hours * hourlyRate;
-        var preferred = role == "dedicated_room_owner" ? revenueShare : Math.Max(basePay, revenueShare);
+        var preferred = CalculateRolePay(role, basePay, revenueShare);
         var before = preferred + designatedTip + publicTip;
         var after = checked((int)Math.Ceiling(before));
         return new SettlementResultLineRow
@@ -715,6 +714,14 @@ public sealed partial class SettlementService : ISettlementService
             CompanySubsidy = after - before, AnomalyStatus = anomalyStatus, AnomalyNote = anomalyNote
         };
     }
+
+    private static decimal CalculateRolePay(string role, decimal basePay, decimal revenueShare)
+        => role switch
+        {
+            "service" or "manager" => basePay + revenueShare,
+            "dedicated_room_owner" => revenueShare,
+            _ => Math.Max(basePay, revenueShare)
+        };
 
     private static decimal PublicTipFor(SettlementStaffInputRow? input, decimal hours, decimal publicTips, decimal totalHours)
         => input is null || !IsPublicTipEligible(input, hours) || totalHours <= 0 ? 0 : publicTips * hours / totalHours;
