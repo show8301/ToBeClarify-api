@@ -33,9 +33,39 @@ foreach (var role in new[] { "service", "manager", "designated", "backstage" })
     Equal(result.Sum(x => x.DesignatedTip), 11, $"{role}: designated tip once");
     Equal(result.Sum(x => x.PublicTip), role == "backstage" ? 0 : 19, $"{role}: public tips once");
     Equal(result.Where(x => x.Role == "support_service_share").Sum(x => x.RevenueShare), role == "designated" ? 0 : 700,
-        $"{role}: direct support commission is separate from primary wage comparison");
-    Equal(result.Sum(x => x.AfterRounding), role == "designated" ? 730 : role == "backstage" ? 711 : 830,
+        $"{role}: direct support commission is separate from primary pay");
+    Equal(result.Sum(x => x.AfterRounding), role == "designated" ? 730 : role == "backstage" ? 711 : 905,
         $"{role}: payable total");
+}
+
+foreach (var role in new[] { "service", "manager", "designated" })
+foreach (var dayType in new[] { "normal", "event" })
+foreach (var revenue in new[] { 0, 201, 2001 })
+foreach (var useCash in new[] { false, true })
+{
+    var source = new SettlementSourceData
+    {
+        PayrollAssignments = [Assignment(role)], StaffInputs = [Input(role)],
+        Orders = [new() { OrderId = "payroll", Subtotal = revenue, TotalAmount = revenue }],
+        Items = [new() { ItemId = "meal", OrderId = "payroll", ItemType = "menu_item", LineTotal = revenue }],
+        Tips = [new() { StaffId = "staff", StaffAmount = 11 }],
+        Cash = new() { HasCashRecords = useCash, NetCash = revenue / 2m }
+    };
+    var result = Calculate(source, new()
+    {
+        DayType = dayType, ActivityHoursConfirmed = true, CompanyShareHours = 1, PublicTipAmount = 19
+    }).Single(x => x.Role == role);
+    var allocatedRevenue = revenue * (useCash ? 0.5m : 1m);
+    var share = dayType == "event" ? allocatedRevenue / 2m
+        : role == "designated" ? 0 : allocatedRevenue / 4m;
+    var pay = role is "service" or "manager" ? 100 + share : Math.Max(100, share);
+    var context = $"{role}, {dayType}, revenue {revenue}, cash {useCash}";
+    Equal(result.BasePay, 100, $"{context}: hourly wage remains intact");
+    Equal(result.RevenueShare, share, $"{context}: revenue allocation");
+    Equal(result.PreferredPay, pay, $"{context}: role-specific wage formula");
+    Equal(result.BeforeRounding, pay + 30, $"{context}: tips added once");
+    Equal(result.AfterRounding, Math.Ceiling(pay + 30), $"{context}: round up after adding all pay");
+    Equal(result.CompanySubsidy, Math.Ceiling(pay + 30) - (pay + 30), $"{context}: rounding subsidy");
 }
 
 var developer = Assignment("service", true);
@@ -52,6 +82,7 @@ Equal(eventResults.Sum(x => x.BasePay), 100, "event: developer participation doe
 Equal(eventResults.Sum(x => x.DesignatedTip), 13, "event: designated tip is not repeated on backstage participation");
 Equal(eventResults.Sum(x => x.PublicTip), 20, "event: public tips once");
 Equal(eventResults.Sum(x => x.RevenueShare), 600, "event: existing activity weighting is retained");
+Equal(eventResults.Sum(x => x.AfterRounding), 733, "event: primary hourly wage adds to activity share without duplicating backstage wages or tips");
 eventSource.StaffInputs[0].ActivityHours = 0;
 eventSource.StaffInputs[1].ActivityHours = 0;
 Equal(Calculate(eventSource, new() { DayType = "event", ActivityHoursConfirmed = true, CompanyShareHours = 1 })
