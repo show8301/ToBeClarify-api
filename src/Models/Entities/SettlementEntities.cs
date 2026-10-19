@@ -142,6 +142,22 @@ public sealed class SettlementResultLineRow
     public decimal ManualAdjustment { get; set; }
     public string AnomalyStatus { get; set; } = "normal";
     public string? AnomalyNote { get; set; }
+    public string? SourceSnapshotId { get; set; }
+    public IReadOnlyList<SettlementResultSourceRow> Sources { get; set; } = [];
+}
+
+public sealed class SettlementResultSourceRow
+{
+    public string Id { get; set; } = string.Empty;
+    public string ResultLineId { get; set; } = string.Empty;
+    public string SnapshotId { get; set; } = string.Empty;
+    public string Kind { get; set; } = string.Empty;
+    public string OrderId { get; set; } = string.Empty;
+    public string OrderNumber { get; set; } = string.Empty;
+    public string Label { get; set; } = string.Empty;
+    public decimal BasisAmount { get; set; }
+    public decimal Percentage { get; set; }
+    public decimal Amount { get; set; }
 }
 
 public sealed class SettlementOrderRevenueRow

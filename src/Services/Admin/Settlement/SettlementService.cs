@@ -256,6 +256,7 @@ public sealed partial class SettlementService : ISettlementService
         var designatedBase = new Dictionary<string, decimal>(StringComparer.Ordinal);
         var designatedShare = new Dictionary<string, decimal>(StringComparer.Ordinal);
         var designatedOrders = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        var designatedSourceRows = new Dictionary<string, List<SettlementResultSourceRow>>(StringComparer.Ordinal);
         var champagneBase = new Dictionary<string, decimal>(StringComparer.Ordinal);
         var designatedTips = source.Tips.Where(x => !string.IsNullOrWhiteSpace(x.StaffId))
             .GroupBy(x => x.StaffId!, StringComparer.Ordinal).ToDictionary(x => x.Key, x => (decimal)x.Sum(t => t.StaffAmount), StringComparer.Ordinal);
@@ -283,7 +284,7 @@ public sealed partial class SettlementService : ISettlementService
             return revenueSubtotal <= 0 ? 0 : rawAmount * (decimal)revenueCollected / revenueSubtotal;
         }
 
-        void AddDesignated(string staffId, decimal amount, decimal percentage, string orderId)
+        void AddDesignated(string staffId, decimal amount, decimal percentage, string orderId, string label)
         {
             if (string.IsNullOrWhiteSpace(staffId)) return;
             if (!designatedOrders.TryGetValue(staffId, out var orders))
@@ -291,6 +292,24 @@ public sealed partial class SettlementService : ISettlementService
             orders.Add(orderId);
             designatedBase[staffId] = designatedBase.GetValueOrDefault(staffId) + amount;
             designatedShare[staffId] = designatedShare.GetValueOrDefault(staffId) + amount * percentage / 100m;
+            if (!designatedSourceRows.TryGetValue(staffId, out var sourceRows))
+                designatedSourceRows[staffId] = sourceRows = [];
+            var source = sourceRows.FirstOrDefault(x => x.OrderId == orderId && x.Label == label
+                && x.Percentage == percentage);
+            if (source is null)
+            {
+                source = new SettlementResultSourceRow
+                {
+                    Kind = "designated_revenue",
+                    OrderId = orderId,
+                    OrderNumber = orderMap.GetValueOrDefault(orderId)?.OrderNumber ?? orderId,
+                    Label = label,
+                    Percentage = percentage
+                };
+                sourceRows.Add(source);
+            }
+            source.BasisAmount += amount;
+            source.Amount += amount * percentage / 100m;
         }
 
         foreach (var orderItems in itemMap.Values)
@@ -304,7 +323,7 @@ public sealed partial class SettlementService : ISettlementService
                     (item.ItemType is "menu_item" or "menu_set") && !item.IsChampagneTower);
                 if (item.ItemType == "nomination_base")
                 {
-                    AddDesignated(item.ReferenceId ?? string.Empty, amount, rule.DesignatedSharePercentage, item.OrderId);
+                    AddDesignated(item.ReferenceId ?? string.Empty, amount, rule.DesignatedSharePercentage, item.OrderId, "指名商品");
                     directCompany += amount * (100m - rule.DesignatedSharePercentage) / 100m;
                 }
                 else if (item.ItemType == "staff_service")
@@ -316,7 +335,7 @@ public sealed partial class SettlementService : ISettlementService
                         anomalies.Add(new SettlementAnomalyDto("SERVICE_STAFF_UNRESOLVED", "服務項目找不到唯一指名人員。", item.ItemId));
                     else
                     {
-                        AddDesignated(staffId, amount, rule.DesignatedSharePercentage, item.OrderId);
+                        AddDesignated(staffId, amount, rule.DesignatedSharePercentage, item.OrderId, "指名服務");
                         directCompany += amount * (100m - rule.DesignatedSharePercentage) / 100m;
                     }
                 }
@@ -338,7 +357,7 @@ public sealed partial class SettlementService : ISettlementService
         foreach (var addon in source.Addons)
         {
             var amount = AmountFor(addon.OrderId, addon.LineTotal);
-            AddDesignated(addon.StaffId, amount, rule.DesignatedSharePercentage, addon.OrderId);
+            AddDesignated(addon.StaffId, amount, rule.DesignatedSharePercentage, addon.OrderId, "額外服務");
             directCompany += amount * (100m - rule.DesignatedSharePercentage) / 100m;
             staffNames.TryAdd(addon.StaffId, addon.StaffId);
         }
@@ -364,7 +383,7 @@ public sealed partial class SettlementService : ISettlementService
             var nominees = room.OrderId is not null ? nomineeMap.GetValueOrDefault(room.OrderId, []) : [];
             if (nominees.Length == 1)
             {
-                AddDesignated(nominees[0], amount, rule.PublicRoomStaffPercentage, room.OrderId!);
+                AddDesignated(nominees[0], amount, rule.PublicRoomStaffPercentage, room.OrderId!, "公共包廂服務");
                 directCompany += amount * (100m - rule.PublicRoomStaffPercentage) / 100m;
                 staffNames.TryAdd(nominees[0], nominees[0]);
             }
@@ -449,6 +468,26 @@ public sealed partial class SettlementService : ISettlementService
                     tip.Value - assigned, 0, 1, staffNames.GetValueOrDefault(tip.Key), "normal", null));
             else if (assigned > tip.Value)
                 anomalies.Add(new SettlementAnomalyDto("DESIGNATED_TIP_DUPLICATED", "指定小費分配超過來源金額，請核對收入列。", tip.Key));
+        }
+        foreach (var result in results.Where(x => (x.Role is "designated" or "designated_tip") && x.StaffId is not null))
+        {
+            var sources = new List<SettlementResultSourceRow>();
+            if (result.Role == "designated" && run.DayType != "event"
+                && designatedSourceRows.TryGetValue(result.StaffId!, out var revenueSources))
+                sources.AddRange(revenueSources);
+            sources.AddRange(source.Tips.Where(x => x.StaffId == result.StaffId && x.StaffAmount > 0)
+                .GroupBy(x => x.OrderId, StringComparer.Ordinal)
+                .Select(group => new SettlementResultSourceRow
+                {
+                    Kind = "designated_tip",
+                    OrderId = group.Key,
+                    OrderNumber = orderMap.GetValueOrDefault(group.Key)?.OrderNumber ?? group.Key,
+                    Label = "指定小費",
+                    BasisAmount = group.Sum(x => (decimal)x.StaffAmount),
+                    Percentage = 100,
+                    Amount = group.Sum(x => (decimal)x.StaffAmount)
+                }));
+            result.Sources = sources;
         }
         if (source.Cash.HasCashRecords || admission?.UseAdmissionLedger == true)
             ApplyCashSnapshot(runCopy, results, source.Items.Any(x => x.IsChampagneTower));
@@ -565,6 +604,11 @@ public sealed partial class SettlementService : ISettlementService
             {
                 result.RevenueBase *= factor;
                 result.RevenueShare *= factor;
+                foreach (var source in result.Sources.Where(x => x.Kind == "designated_revenue"))
+                {
+                    source.BasisAmount *= factor;
+                    source.Amount *= factor;
+                }
             }
             result.PreferredPay = CalculateRolePay(result.Role, result.BasePay, result.RevenueShare);
             result.BeforeRounding = result.PreferredPay + result.DesignatedTip + result.PublicTip;
@@ -818,7 +862,9 @@ public sealed partial class SettlementService : ISettlementService
     private static SettlementResultLineDto MapResult(SettlementResultLineRow row) => new(row.StaffId, row.DisplayName,
         row.Role, row.PayableHours, row.HourlyRate, row.BasePay, row.RevenueBase, row.RevenuePercentage,
         row.RevenueShare, row.DesignatedTip, row.PublicTip, row.PreferredPay, row.BeforeRounding,
-        row.AfterRounding, row.CompanySubsidy, row.ManualAdjustment, row.AnomalyStatus, row.AnomalyNote);
+        row.AfterRounding, row.CompanySubsidy, row.ManualAdjustment, row.AnomalyStatus, row.AnomalyNote,
+        row.SourceSnapshotId is not null, row.Sources.Select(x => new SettlementResultSourceDto(x.Kind, x.OrderId,
+            x.OrderNumber, x.Label, x.BasisAmount, x.Percentage, x.Amount)).ToArray());
 
     private static SaveStaffInputData MapInput(SaveSettlementStaffInputRequest input) => new()
     {
