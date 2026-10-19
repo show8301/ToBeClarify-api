@@ -46,10 +46,12 @@ foreach (var useCash in new[] { false, true })
     var source = new SettlementSourceData
     {
         PayrollAssignments = [Assignment(role)], StaffInputs = [Input(role)],
-        Orders = [new() { OrderId = "payroll", Subtotal = revenue, TotalAmount = revenue }],
+        Orders = [new() { OrderId = "payroll", Subtotal = revenue, TotalAmount = revenue },
+            new() { OrderId = "tip", Subtotal = 11, TotalAmount = 11, TipAmount = 11 }],
         Items = [new() { ItemId = "meal", OrderId = "payroll", ItemType = "menu_item", LineTotal = revenue }],
-        Tips = [new() { StaffId = "staff", StaffAmount = 11 }],
-        Cash = new() { HasCashRecords = useCash, NetCash = revenue / 2m }
+        Tips = [new() { OrderId = "tip", StaffId = "staff", StaffAmount = 11 }],
+        Cash = new() { HasCashRecords = useCash, NetCash = revenue / 2m + 11 },
+        CashAllocations = useCash ? [Cash("payroll", revenue / 2m), Cash("tip", 11)] : []
     };
     var result = Calculate(source, new()
     {
@@ -95,7 +97,8 @@ var provenanceSource = new SettlementSourceData
         new() { OrderId = "source-a", StaffId = "staff", StaffAmount = 10 },
         new() { OrderId = "source-b", StaffId = "staff", StaffAmount = 5 }
     ],
-    Cash = new() { HasCashRecords = true, NetCash = 1000 }
+    Cash = new() { HasCashRecords = true, NetCash = 1007.5m },
+    CashAllocations = [Cash("source-a", 505), Cash("source-b", 502.5m)]
 };
 var provenanceResult = Calculate(provenanceSource, new()).Single(x => x.Role == "designated");
 var revenueSources = provenanceResult.Sources.Where(x => x.Kind == "designated_revenue").OrderBy(x => x.OrderNumber).ToArray();
@@ -110,6 +113,108 @@ Check(tipSources.Select(x => x.OrderNumber).SequenceEqual(["A001", "B002"]),
     "Designated tip sources retain each order number.");
 Equal(tipSources.Sum(x => x.Amount), provenanceResult.DesignatedTip,
     "Designated tip order amounts reconcile to the payroll tip.");
+
+// The reported 2026-10-18 order: two distinct 150,000 G items, with unrelated
+// day cash that previously multiplied both bases by 28,170,000 / 22,160,000.
+var isolatedOrder = new SettlementSourceData
+{
+    PayrollAssignments = [Assignment("designated")], StaffInputs = [Input("designated")],
+    Orders = [new() { OrderId = "reported", OrderNumber = "20261018-223028-9149", Subtotal = 300000, TotalAmount = 300000 },
+        new() { OrderId = "other", Subtotal = 21860000, TotalAmount = 21860000 }],
+    Items = [new() { ItemId = "base", ItemName = "基礎指名費", OrderId = "reported", ItemType = "nomination_base", ReferenceId = "staff", LineTotal = 150000 },
+        new() { ItemId = "service", ItemName = "簽繪拍立得", ParentItemId = "base", OrderId = "reported", ItemType = "staff_service", LineTotal = 150000 },
+        new() { ItemId = "other-item", OrderId = "other", ItemType = "menu_item", LineTotal = 21860000 }],
+    Cash = new() { HasCashRecords = true, NetCash = 28170000 },
+    CashAllocations = [Cash("reported", 300000), Cash("other", 21860000), Cash(null, 6010000)]
+};
+var isolatedResult = Calculate(isolatedOrder, new()).Single(x => x.Role == "designated");
+Equal(isolatedResult.RevenueBase, 300000, "Unrelated day cash cannot inflate this order's 300,000 G basis.");
+Equal(isolatedResult.RevenueShare, 210000, "The order earns 300,000 G × 70%, once.");
+Check(isolatedResult.Sources.Count == 2 && isolatedResult.Sources.Select(x => x.OrderItemId).Distinct().Count() == 2,
+    "One order retains two distinct original item identities.");
+Check(isolatedResult.Sources.All(x => x.OriginalAmount == 150000 && x.BasisAmount == 150000 && x.Amount == 105000),
+    "Each source records its 150,000 G original amount, recognized basis and 105,000 G share.");
+Check(Anomalies(isolatedOrder).Any(x => x.Code == "FINANCE_CASH_ALLOCATION_REQUIRED"),
+    "Unallocated cash requires reconciliation instead of increasing every employee's commission.");
+var unpaidOther = isolatedOrder with { CashAllocations = [Cash("reported", 300000)] };
+Equal(Calculate(unpaidOther, new()).Single(x => x.Role == "designated").RevenueShare, 210000,
+    "An unrelated unpaid order cannot reduce a fully paid order's commission.");
+Equal(Summary(unpaidOther).MealRevenue, 0, "Unpaid order revenue is not recognized from another order's cash.");
+var refundedOrder = isolatedOrder with { CashAllocations = [Cash("reported", 300000), Cash("reported", 100000, "cash_refund")] };
+Equal(Calculate(refundedOrder, new()).Single(x => x.Role == "designated").RevenueShare, 140000,
+    "Refunds reduce only their order's commission.");
+Equal(Calculate(refundedOrder, new()).Single(x => x.Role == "designated").AfterRounding, 140000,
+    "Repeating payment ratios do not add a spurious Gil when the final wage is an exact integer.");
+var held = Cash("reported", 300000); held.HoldScope = "order";
+Equal(Calculate(isolatedOrder with { CashAllocations = [held] }, new()).Single(x => x.Role == "designated").RevenueShare,
+    0, "Held cash does not fund commission.");
+var overpaidOrder = isolatedOrder with { CashAllocations = [Cash("reported", 450000)] };
+Equal(Calculate(overpaidOrder, new()).Single(x => x.Role == "designated").RevenueBase, 300000,
+    "Overpayments cannot increase an order beyond its charge amount.");
+Check(Anomalies(overpaidOrder).Any(x => x.Code == "ORDER_CASH_RECONCILIATION_REQUIRED"),
+    "Excess receipts require review before finalizing or confirming recalculation.");
+var itemCashA = Cash("reported", 150000); itemCashA.SourceKind = "item"; itemCashA.OrderItemId = "base";
+var itemCashB = Cash("reported", 150000); itemCashB.SourceKind = "item"; itemCashB.OrderItemId = "service";
+Equal(Calculate(isolatedOrder with { CashAllocations = [itemCashA, itemCashB] }, new()).Single(x => x.Role == "designated").RevenueBase,
+    300000, "Two item payments are summed once into their own order.");
+var pendingCash = Cash("reported", 300000); pendingCash.AllocationStatus = "pending";
+Equal(Calculate(isolatedOrder with { CashAllocations = [pendingCash] }, new()).Single(x => x.Role == "designated").RevenueShare,
+    0, "Unconfirmed receipts do not fund commission.");
+var wrongItemCash = Cash("reported", 300000); wrongItemCash.SourceKind = "item"; wrongItemCash.OrderItemId = "other-item";
+var wrongItemSource = isolatedOrder with { CashAllocations = [wrongItemCash] };
+Equal(Calculate(wrongItemSource, new()).Single(x => x.Role == "designated").RevenueShare, 0,
+    "An item from another order cannot fund this order's commission.");
+Check(Anomalies(wrongItemSource).Any(x => x.Code == "FINANCE_ITEM_ALLOCATION_INVALID"),
+    "An inconsistent item and order association requires reconciliation.");
+var chargeReduction = Cash("reported", 50000, "charge_reduce");
+var unresolvedCharge = isolatedOrder with { CashAllocations = [Cash("reported", 250000), chargeReduction] };
+Check(Anomalies(unresolvedCharge).Any(x => x.Code == "ORDER_CHARGE_RECONCILIATION_REQUIRED"),
+    "A separate charge reduction requires an explicit matching settlement adjustment.");
+var reconciledCharge = unresolvedCharge with
+{
+    Orders = [new() { OrderId = "reported", OrderNumber = "20261018-223028-9149",
+        Subtotal = 300000, TotalAmount = 300000, AdjustedAmount = 250000 }]
+};
+Check(!Anomalies(reconciledCharge).Any(x => x.Code == "ORDER_CHARGE_RECONCILIATION_REQUIRED"),
+    "The matching saved settlement adjustment resolves the charge difference.");
+Equal(Calculate(reconciledCharge, new()).Single(x => x.Role == "designated").RevenueShare, 175000,
+    "An explicitly reconciled charge reduction affects only that order's basis.");
+
+var tipCashSource = new SettlementSourceData
+{
+    PayrollAssignments = [Assignment("designated")], StaffInputs = [Input("designated")],
+    Orders = [new() { OrderId = "tip-order", Subtotal = 1100, TotalAmount = 1100, TipAmount = 100 }],
+    Items = [new() { ItemId = "tip-base", OrderId = "tip-order", ItemType = "nomination_base", ReferenceId = "staff", LineTotal = 1000 }],
+    Tips = [new() { OrderId = "tip-order", StaffId = "staff", TipAmount = 100, StaffAmount = 50, StoreAmount = 50 }],
+    Cash = new() { HasCashRecords = true, NetCash = 550 }, CashAllocations = [Cash("tip-order", 550)]
+};
+var partialTipResult = Calculate(tipCashSource, new()).Single(x => x.Role == "designated");
+Equal(partialTipResult.RevenueBase, 500, "Partial receipts recognize revenue excluding the proportional tip.");
+Equal(partialTipResult.DesignatedTip, 25, "Only the paid fraction of a designated tip is payable.");
+Equal(Summary(tipCashSource).CompanyIncome, 137.5m, "Store tips are company income without entering revenue-share pools.");
+Equal(partialTipResult.PublicTip, 0, "Store tips do not automatically change the manual public-tip pool.");
+
+var admissionA = Cash(null, 100); admissionA.SourceKind = "admission"; admissionA.SessionId = "A";
+var chargeA = Cash(null, 50, "charge_add"); chargeA.SourceKind = "admission"; chargeA.SessionId = "A";
+var chargeB = Cash(null, 50, "charge_add"); chargeB.SourceKind = "admission"; chargeB.SessionId = "B";
+var admissionSource = new SettlementSourceData
+{
+    Admissions = [new() { UseAdmissionLedger = true, LedgerReceivable = 100 }],
+    Cash = new() { HasCashRecords = true, NetCash = 100 }, CashAllocations = [admissionA, chargeA, chargeB]
+};
+Equal(Summary(admissionSource).AdmissionRevenue, 50, "One customer's admission overpayment does not pay another customer's admission.");
+Check(Anomalies(admissionSource).Any(x => x.Code == "ADMISSION_CASH_RECONCILIATION_REQUIRED"), "Admission excess cash needs reconciliation.");
+
+var secondAssignment = Assignment("service"); secondAssignment.StaffId = "second";
+var secondInput = Input("service"); secondInput.StaffId = "second"; secondInput.ActualMinutes = 180;
+var publicTipSource = new SettlementSourceData
+{
+    PayrollAssignments = [Assignment("designated"), secondAssignment],
+    StaffInputs = [Input("designated"), secondInput]
+};
+var publicTipResults = Calculate(publicTipSource, new() { PublicTipAmount = 400 });
+Equal(publicTipResults.Single(x => x.StaffId == "staff").PublicTip, 100, "Public tips retain the existing payable-hours weighting.");
+Equal(publicTipResults.Single(x => x.StaffId == "second").PublicTip, 300, "Three payable hours receive three quarters of public tips.");
 var developer = Assignment("service", true);
 var eventSource = new SettlementSourceData
 {
@@ -181,6 +286,19 @@ IReadOnlyList<SettlementResultLineRow> Calculate(SettlementSourceData source, Se
     var result = method.Invoke(service, [run, rule, source])!;
     return (IReadOnlyList<SettlementResultLineRow>)result.GetType().GetProperty("Results")!.GetValue(result)!;
 }
+IReadOnlyList<SettlementAnomalyDto> Anomalies(SettlementSourceData source)
+{
+    var result = method.Invoke(service, [new SettlementRunRow(), rule, source])!;
+    return (IReadOnlyList<SettlementAnomalyDto>)result.GetType().GetProperty("Anomalies")!.GetValue(result)!;
+}
+SettlementSummaryDto Summary(SettlementSourceData source)
+{
+    var result = method.Invoke(service, [new SettlementRunRow(), rule, source])!;
+    return (SettlementSummaryDto)result.GetType().GetProperty("Summary")!.GetValue(result)!;
+}
+static SettlementCashAllocationRow Cash(string? orderId, decimal amount, string kind = "cash_receipt")
+    => new() { Id = Guid.NewGuid().ToString("D"), SessionId = "session", SourceKind = orderId is null ? "unallocated" : "order",
+        OrderId = orderId, Kind = kind, Amount = amount, AllocationStatus = "confirmed", HoldScope = "none", CashPeriodId = "period" };
 static SettlementAttendanceCandidateRow Assignment(string role, bool developer = false)
     => new() { StaffId = "staff", DisplayName = "staff", PayrollRole = role, PayrollSnapshotVersion = 1, CanUseBackstage = developer };
 static SettlementStaffInputRow Input(string role)

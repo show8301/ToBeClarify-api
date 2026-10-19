@@ -155,6 +155,11 @@ public sealed class SettlementResultSourceRow
     public string OrderId { get; set; } = string.Empty;
     public string OrderNumber { get; set; } = string.Empty;
     public string Label { get; set; } = string.Empty;
+    public string? OrderItemId { get; set; }
+    public string? ItemName { get; set; }
+    public decimal? OriginalAmount { get; set; }
+    public decimal? OrderPayableAmount { get; set; }
+    public decimal? OrderCollectedAmount { get; set; }
     public decimal BasisAmount { get; set; }
     public decimal Percentage { get; set; }
     public decimal Amount { get; set; }
@@ -173,6 +178,8 @@ public sealed class SettlementOrderRevenueRow
 
 public sealed class SettlementOrderItemRevenueRow
 {
+    public string ItemName { get; set; } = string.Empty;
+    public int? OriginalLineTotal { get; set; }
     public bool IsChampagneTower { get; set; }
     public string? RecipientStaffId { get; set; }
     public string? RecipientStaffName { get; set; }
@@ -197,6 +204,7 @@ public sealed class SettlementTipRevenueRow
     public string? StaffId { get; set; }
     public int StaffAmount { get; set; }
     public int TipAmount { get; set; }
+    public int StoreAmount { get; set; }
 }
 
 public sealed class SettlementRoomRevenueRow
@@ -238,6 +246,20 @@ public sealed class SettlementCashSummaryRow
     public long SourceVersion { get; set; }
     public DateTime? LatestRecordedAt { get; set; }
     public bool HasCashRecords { get; set; }
+}
+
+public sealed class SettlementCashAllocationRow
+{
+    public string Id { get; set; } = string.Empty;
+    public string SessionId { get; set; } = string.Empty;
+    public string SourceKind { get; set; } = string.Empty;
+    public string? OrderId { get; set; }
+    public string? OrderItemId { get; set; }
+    public string Kind { get; set; } = string.Empty;
+    public decimal Amount { get; set; }
+    public string AllocationStatus { get; set; } = string.Empty;
+    public string HoldScope { get; set; } = string.Empty;
+    public string? CashPeriodId { get; set; }
 }
 
 public sealed class SettlementPendingFinanceItemRow

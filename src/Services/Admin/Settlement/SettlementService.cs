@@ -258,8 +258,11 @@ public sealed partial class SettlementService : ISettlementService
         var designatedOrders = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         var designatedSourceRows = new Dictionary<string, List<SettlementResultSourceRow>>(StringComparer.Ordinal);
         var champagneBase = new Dictionary<string, decimal>(StringComparer.Ordinal);
+        var allocation = new SettlementRevenueAllocation(source, anomalies);
         var designatedTips = source.Tips.Where(x => !string.IsNullOrWhiteSpace(x.StaffId))
-            .GroupBy(x => x.StaffId!, StringComparer.Ordinal).ToDictionary(x => x.Key, x => (decimal)x.Sum(t => t.StaffAmount), StringComparer.Ordinal);
+            .GroupBy(x => x.StaffId!, StringComparer.Ordinal).ToDictionary(x => x.Key,
+                x => x.Sum(t => allocation.Recognize(t.OrderId, t.StaffAmount)), StringComparer.Ordinal);
+        var storeTipIncome = source.Tips.Sum(t => allocation.Recognize(t.OrderId, t.StoreAmount));
         decimal directCompany = 0;
         decimal mealRevenue = 0;
         decimal dedicatedGross = 0;
@@ -272,7 +275,7 @@ public sealed partial class SettlementService : ISettlementService
         {
             if (!orderMap.TryGetValue(orderId, out var order)) return rawAmount;
             var collected = order.AdjustedAmount ?? order.TotalAmount;
-            var revenueCollected = Math.Max(0, collected - order.TipAmount);
+            var revenueCollected = allocation.Recognize(orderId, Math.Max(0, collected - order.TipAmount));
             if (itemMap.TryGetValue(orderId, out var lines) && lines.Any(x => x.IsChampagneTower))
             {
                 var eligibleTotal = lines.Where(x => (x.ItemType is "menu_item" or "menu_set") && !x.IsChampagneTower).Sum(x => (decimal)x.LineTotal);
@@ -284,7 +287,8 @@ public sealed partial class SettlementService : ISettlementService
             return revenueSubtotal <= 0 ? 0 : rawAmount * (decimal)revenueCollected / revenueSubtotal;
         }
 
-        void AddDesignated(string staffId, decimal amount, decimal percentage, string orderId, string label)
+        void AddDesignated(string staffId, decimal amount, decimal percentage, string orderId, string label,
+            decimal originalAmount, string? orderItemId = null, string? itemName = null)
         {
             if (string.IsNullOrWhiteSpace(staffId)) return;
             if (!designatedOrders.TryGetValue(staffId, out var orders))
@@ -295,7 +299,7 @@ public sealed partial class SettlementService : ISettlementService
             if (!designatedSourceRows.TryGetValue(staffId, out var sourceRows))
                 designatedSourceRows[staffId] = sourceRows = [];
             var source = sourceRows.FirstOrDefault(x => x.OrderId == orderId && x.Label == label
-                && x.Percentage == percentage);
+                && x.Percentage == percentage && x.OrderItemId == orderItemId);
             if (source is null)
             {
                 source = new SettlementResultSourceRow
@@ -304,11 +308,15 @@ public sealed partial class SettlementService : ISettlementService
                     OrderId = orderId,
                     OrderNumber = orderMap.GetValueOrDefault(orderId)?.OrderNumber ?? orderId,
                     Label = label,
+                    OrderItemId = orderItemId,
+                    ItemName = itemName,
+                    OriginalAmount = 0,
                     Percentage = percentage
                 };
                 sourceRows.Add(source);
             }
             source.BasisAmount += amount;
+            source.OriginalAmount += originalAmount;
             source.Amount += amount * percentage / 100m;
         }
 
@@ -323,7 +331,8 @@ public sealed partial class SettlementService : ISettlementService
                     (item.ItemType is "menu_item" or "menu_set") && !item.IsChampagneTower);
                 if (item.ItemType == "nomination_base")
                 {
-                    AddDesignated(item.ReferenceId ?? string.Empty, amount, rule.DesignatedSharePercentage, item.OrderId, "指名商品");
+                    AddDesignated(item.ReferenceId ?? string.Empty, amount, rule.DesignatedSharePercentage,
+                        item.OrderId, "指名商品", item.OriginalLineTotal ?? item.LineTotal, item.ItemId, item.ItemName);
                     directCompany += amount * (100m - rule.DesignatedSharePercentage) / 100m;
                 }
                 else if (item.ItemType == "staff_service")
@@ -335,7 +344,8 @@ public sealed partial class SettlementService : ISettlementService
                         anomalies.Add(new SettlementAnomalyDto("SERVICE_STAFF_UNRESOLVED", "服務項目找不到唯一指名人員。", item.ItemId));
                     else
                     {
-                        AddDesignated(staffId, amount, rule.DesignatedSharePercentage, item.OrderId, "指名服務");
+                        AddDesignated(staffId, amount, rule.DesignatedSharePercentage,
+                            item.OrderId, "指名服務", item.OriginalLineTotal ?? item.LineTotal, item.ItemId, item.ItemName);
                         directCompany += amount * (100m - rule.DesignatedSharePercentage) / 100m;
                     }
                 }
@@ -357,7 +367,7 @@ public sealed partial class SettlementService : ISettlementService
         foreach (var addon in source.Addons)
         {
             var amount = AmountFor(addon.OrderId, addon.LineTotal);
-            AddDesignated(addon.StaffId, amount, rule.DesignatedSharePercentage, addon.OrderId, "額外服務");
+            AddDesignated(addon.StaffId, amount, rule.DesignatedSharePercentage, addon.OrderId, "額外服務", addon.LineTotal);
             directCompany += amount * (100m - rule.DesignatedSharePercentage) / 100m;
             staffNames.TryAdd(addon.StaffId, addon.StaffId);
         }
@@ -367,7 +377,9 @@ public sealed partial class SettlementService : ISettlementService
             var rawAmount = room.OrderItemId is not null && itemMap.TryGetValue(room.OrderId ?? string.Empty, out var orderItems)
                 ? orderItems.FirstOrDefault(i => i.ItemId == room.OrderItemId)?.LineTotal ?? (int)room.TotalAmount
                 : (int)room.TotalAmount;
-            var amount = room.OrderId is null ? room.TotalAmount : AmountFor(room.OrderId, rawAmount);
+            var amount = room.OrderId is null ? (allocation.UsesLedger ? 0 : room.TotalAmount) : AmountFor(room.OrderId, rawAmount);
+            if (room.OrderId is null && allocation.UsesLedger && room.TotalAmount > 0)
+                anomalies.Add(new("ROOM_CASH_ALLOCATION_REQUIRED", "包廂沒有可核對收款的訂單來源，請先確認款項歸屬。", room.Id));
             if (!string.IsNullOrWhiteSpace(room.OwnerStaffId))
             {
                 dedicatedGross += amount;
@@ -383,7 +395,8 @@ public sealed partial class SettlementService : ISettlementService
             var nominees = room.OrderId is not null ? nomineeMap.GetValueOrDefault(room.OrderId, []) : [];
             if (nominees.Length == 1)
             {
-                AddDesignated(nominees[0], amount, rule.PublicRoomStaffPercentage, room.OrderId!, "公共包廂服務");
+                AddDesignated(nominees[0], amount, rule.PublicRoomStaffPercentage, room.OrderId!,
+                    "公共包廂服務", rawAmount, room.OrderItemId, room.RoomName);
                 directCompany += amount * (100m - rule.PublicRoomStaffPercentage) / 100m;
                 staffNames.TryAdd(nominees[0], nominees[0]);
             }
@@ -398,7 +411,7 @@ public sealed partial class SettlementService : ISettlementService
         var admission = source.Admissions.FirstOrDefault();
         var admissionFee = admission?.UseAdmissionLedger == true ? 0 : run.AdmissionFeeOverride ?? ParseMoney(admission?.AdmissionFeeText);
         var admissionRevenue = admission?.UseAdmissionLedger == true
-            ? admission.LedgerReceivable : (admission?.SessionCount ?? 0) * admissionFee;
+            ? allocation.AdmissionRevenue : (admission?.SessionCount ?? 0) * admissionFee;
         if (admission?.UseAdmissionLedger == true && admission.UnrecordedCount > 0)
             anomalies.Add(new SettlementAnomalyDto("ADMISSION_LEDGER_INCOMPLETE", $"有 {admission.UnrecordedCount} 筆入場帳未登錄，未推定已收款。", null));
         if (admission?.UseAdmissionLedger == true && run.AdmissionFeeOverride is not null)
@@ -412,7 +425,7 @@ public sealed partial class SettlementService : ISettlementService
         var companyIncome = companyRevenue * rule.CompanyPercentage / 100m;
         var grossRevenue = designatedRevenueBase + dedicatedGross + publicRoomUnassigned + admissionRevenue + mealRevenue + unknownRevenue;
         var runCopy = CopyRun(run);
-        runCopy.CalculationVersion = 2;
+        runCopy.CalculationVersion = 3;
         runCopy.RuleVersionId = rule.Id;
         runCopy.RuleSnapshotJson = JsonSerializer.Serialize(rule);
         runCopy.AdmissionFeeSnapshot = admissionFee;
@@ -439,7 +452,7 @@ public sealed partial class SettlementService : ISettlementService
 
         var champagneShare = champagneBase.Values.Sum() * rule.DesignatedSharePercentage / 100m;
         var results = (run.DayType == "event"
-            ? CalculateEventResults(runCopy, source, rule, grossRevenue - champagneShare, anomalies)
+            ? CalculateEventResults(runCopy, source, rule, grossRevenue - champagneShare, designatedTips, anomalies)
             : CalculateNormalResults(runCopy, source, rule, designatedBase, designatedShare, designatedTips,
                 servicePool, backstagePool, dedicatedShareByOwner, staffNames, designatedOrders, anomalies)).ToList();
         runCopy.ActivityNetRevenue = run.DayType == "event" ? grossRevenue - champagneShare - run.ActivityExpense : 0;
@@ -456,6 +469,9 @@ public sealed partial class SettlementService : ISettlementService
             runCopy.BackstagePool = 0;
             runCopy.CompanyIncome = activityDenominator <= 0 ? 0 : runCopy.ActivityNetRevenue * (run.CompanyShareHours ?? 0) / activityDenominator;
         }
+        // The order's store tip portion belongs to company income directly;
+        // it is excluded from revenue pools and from the manual public-tip pool.
+        runCopy.CompanyIncome += storeTipIncome;
         foreach (var tip in designatedTips)
         {
             var primary = source.StaffInputs.FirstOrDefault(input => input.StaffId == tip.Key
@@ -483,14 +499,19 @@ public sealed partial class SettlementService : ISettlementService
                     OrderId = group.Key,
                     OrderNumber = orderMap.GetValueOrDefault(group.Key)?.OrderNumber ?? group.Key,
                     Label = "指定小費",
-                    BasisAmount = group.Sum(x => (decimal)x.StaffAmount),
+                    OriginalAmount = group.Sum(x => (decimal)x.StaffAmount),
+                    BasisAmount = group.Sum(x => allocation.Recognize(x.OrderId, x.StaffAmount)),
                     Percentage = 100,
-                    Amount = group.Sum(x => (decimal)x.StaffAmount)
+                    Amount = group.Sum(x => allocation.Recognize(x.OrderId, x.StaffAmount))
                 }));
             result.Sources = sources;
+            foreach (var detail in sources)
+            {
+                if (!orderMap.TryGetValue(detail.OrderId, out var order)) continue;
+                detail.OrderPayableAmount = Math.Max(0, order.AdjustedAmount ?? order.TotalAmount);
+                detail.OrderCollectedAmount = allocation.Recognize(order.OrderId, detail.OrderPayableAmount.Value);
+            }
         }
-        if (source.Cash.HasCashRecords || admission?.UseAdmissionLedger == true)
-            ApplyCashSnapshot(runCopy, results, source.Items.Any(x => x.IsChampagneTower));
         var summary = new SettlementSummaryDto(runCopy.GrossRevenue, runCopy.DesignatedRevenueBase,
             runCopy.DedicatedRoomGross, runCopy.DedicatedRoomOwnerShare, runCopy.DedicatedRoomCompanyRemainder,
             runCopy.PublicRoomUnassignedRevenue, runCopy.AdmissionRevenue, runCopy.MealRevenue, runCopy.CompanyRevenue,
@@ -570,53 +591,6 @@ public sealed partial class SettlementService : ISettlementService
             ToOffset(row.CreatedAt), row.CreatedBy);
     }
 
-    private static void ApplyCashSnapshot(SettlementRunRow run, IReadOnlyList<SettlementResultLineRow> results, bool hasChampagne)
-    {
-        var splitActivity = run.DayType == "event" && hasChampagne;
-        var calculatedGross = run.GrossRevenue;
-        var allocatableCash = Math.Max(0, run.NetCash - run.RetainedAmount);
-        var factor = calculatedGross <= 0 ? 0 : allocatableCash / calculatedGross;
-        if (calculatedGross <= 0 && allocatableCash > 0) factor = 1;
-        run.GrossRevenue = calculatedGross * factor;
-        run.DesignatedRevenueBase *= factor;
-        run.DedicatedRoomGross *= factor;
-        run.DedicatedRoomOwnerShare *= factor;
-        run.DedicatedRoomCompanyRemainder *= factor;
-        run.PublicRoomUnassignedRevenue *= factor;
-        run.AdmissionRevenue *= factor;
-        run.MealRevenue *= factor;
-        run.CompanyRevenue *= factor;
-        run.ServiceManagerPool *= factor;
-        run.BackstagePool *= factor;
-        run.CompanyIncome *= factor;
-        run.ActivityNetRevenue = splitActivity
-            ? (run.ActivityNetRevenue + run.ActivityExpense) * factor - run.ActivityExpense
-            : run.GrossRevenue - run.ActivityExpense;
-        var activityDenominator = results.Where(x => x.Role != "champagne_recipient").Sum(x => x.RevenueBase)
-            + (run.CompanyShareHours ?? 0);
-        if (splitActivity) run.CompanyIncome = activityDenominator <= 0 ? 0
-            : run.ActivityNetRevenue * (run.CompanyShareHours ?? 0) / activityDenominator;
-        foreach (var result in results)
-        {
-            if (splitActivity && result.Role != "champagne_recipient")
-                result.RevenueShare = activityDenominator <= 0 ? 0 : run.ActivityNetRevenue * result.RevenueBase / activityDenominator;
-            else
-            {
-                result.RevenueBase *= factor;
-                result.RevenueShare *= factor;
-                foreach (var source in result.Sources.Where(x => x.Kind == "designated_revenue"))
-                {
-                    source.BasisAmount *= factor;
-                    source.Amount *= factor;
-                }
-            }
-            result.PreferredPay = CalculateRolePay(result.Role, result.BasePay, result.RevenueShare);
-            result.BeforeRounding = result.PreferredPay + result.DesignatedTip + result.PublicTip;
-            result.AfterRounding = checked((int)Math.Ceiling(result.BeforeRounding));
-            result.CompanySubsidy = result.AfterRounding - result.BeforeRounding;
-        }
-    }
-
     private static IReadOnlyList<SettlementResultLineRow> CalculateNormalResults(SettlementRunRow run,
         SettlementSourceData source, SettlementRuleRow rule, IReadOnlyDictionary<string, decimal> designatedBase,
         IReadOnlyDictionary<string, decimal> designatedShare, IReadOnlyDictionary<string, decimal> designatedTips,
@@ -688,7 +662,8 @@ public sealed partial class SettlementService : ISettlementService
     }
 
     private static IReadOnlyList<SettlementResultLineRow> CalculateEventResults(SettlementRunRow run,
-        SettlementSourceData source, SettlementRuleRow rule, decimal grossRevenue, List<SettlementAnomalyDto> anomalies)
+        SettlementSourceData source, SettlementRuleRow rule, decimal grossRevenue,
+        IReadOnlyDictionary<string, decimal> designatedTips, List<SettlementAnomalyDto> anomalies)
     {
         if (!run.ActivityHoursConfirmed || run.CompanyShareHours is null)
             anomalies.Add(new SettlementAnomalyDto("EVENT_ACTIVITY_INPUT_REQUIRED", "活動日需要確認個人活動分配時數與公司份額時數。"));
@@ -710,9 +685,6 @@ public sealed partial class SettlementService : ISettlementService
             .Sum(x => payable.GetValueOrDefault((x.StaffId, x.Role)));
         if (run.PublicTipAmount > 0 && publicTipHours <= 0)
             anomalies.Add(new SettlementAnomalyDto("PUBLIC_TIP_DENOMINATOR_ZERO", "公共小費分配總工時為 0，需手動處理。"));
-        var designatedTips = source.Tips.Where(x => !string.IsNullOrWhiteSpace(x.StaffId))
-            .GroupBy(x => x.StaffId!, StringComparer.Ordinal)
-            .ToDictionary(x => x.Key, x => (decimal)x.Sum(t => t.StaffAmount), StringComparer.Ordinal);
         return source.StaffInputs.Where(x => activityHours.ContainsKey((x.StaffId, x.Role)))
             .Select(input =>
             {
@@ -864,7 +836,8 @@ public sealed partial class SettlementService : ISettlementService
         row.RevenueShare, row.DesignatedTip, row.PublicTip, row.PreferredPay, row.BeforeRounding,
         row.AfterRounding, row.CompanySubsidy, row.ManualAdjustment, row.AnomalyStatus, row.AnomalyNote,
         row.SourceSnapshotId is not null, row.Sources.Select(x => new SettlementResultSourceDto(x.Kind, x.OrderId,
-            x.OrderNumber, x.Label, x.BasisAmount, x.Percentage, x.Amount)).ToArray());
+            x.OrderNumber, x.Label, x.BasisAmount, x.Percentage, x.Amount,
+            x.OrderItemId, x.ItemName, x.OriginalAmount, x.OrderPayableAmount, x.OrderCollectedAmount)).ToArray());
 
     private static SaveStaffInputData MapInput(SaveSettlementStaffInputRequest input) => new()
     {

@@ -154,7 +154,12 @@ public sealed record SettlementResultSourceDto(
     string Label,
     decimal BasisAmount,
     decimal Percentage,
-    decimal Amount);
+    decimal Amount,
+    string? OrderItemId = null,
+    string? ItemName = null,
+    decimal? OriginalAmount = null,
+    decimal? OrderPayableAmount = null,
+    decimal? OrderCollectedAmount = null);
 
 public sealed record SettlementAnomalyOrderDto(string OrderId, string OrderNumber);
 

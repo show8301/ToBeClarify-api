@@ -141,6 +141,7 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
             GROUP BY O.`ID`, O.`ORDER_NUMBER`, O.`TOTAL_AMOUNT`, O.`SUBTOTAL`, O.`MEAL_CREDIT_APPLIED`, A.`ADJUSTED_AMOUNT`;
 
             SELECT O.`ID` AS OrderId, I.`ID` AS ItemId, I.`ITEM_TYPE` AS ItemType,
+                   I.`NAME_SNAPSHOT` AS ItemName, I.`LINE_TOTAL` AS OriginalLineTotal,
                    I.`REFERENCE_ID` AS ReferenceId, I.`PARENT_ITEM_ID` AS ParentItemId,
                    CASE WHEN EXISTS (SELECT 1 FROM `ORDER_ITEMS` C WHERE C.`ORDER_ID` = O.`ID` AND C.`IS_CHAMPAGNE_TOWER`)
                      THEN GREATEST(0, I.`LINE_TOTAL` - COALESCE(
@@ -166,7 +167,7 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
               AND O.`ORDER_STATUS` NOT IN ('cancelled', 'expired', 'rejected');
 
             SELECT T.`ORDER_ID` AS OrderId, T.`STAFF_ID` AS StaffId,
-                   T.`STAFF_AMOUNT` AS StaffAmount, T.`TIP_AMOUNT` AS TipAmount
+                   T.`STAFF_AMOUNT` AS StaffAmount, T.`TIP_AMOUNT` AS TipAmount, T.`STORE_AMOUNT` AS StoreAmount
             FROM `ORDER_TIPS` T
             INNER JOIN `ORDERS` O ON O.`ID` = T.`ORDER_ID`
             INNER JOIN `CUSTOMER_ORDER_SESSIONS` S ON S.`ID` = O.`SESSION_ID`
@@ -260,6 +261,8 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
 
             SELECT S.`ID` AS Id, S.`RESULT_LINE_ID` AS ResultLineId, S.`SOURCE_SNAPSHOT_ID` AS SnapshotId, S.`SOURCE_KIND` AS Kind,
                    S.`ORDER_ID` AS OrderId, S.`ORDER_NUMBER` AS OrderNumber, S.`SOURCE_LABEL` AS Label,
+                   S.`ORDER_ITEM_ID` AS OrderItemId, S.`ITEM_NAME` AS ItemName, S.`ORIGINAL_AMOUNT` AS OriginalAmount,
+                   S.`ORDER_PAYABLE_AMOUNT` AS OrderPayableAmount, S.`ORDER_COLLECTED_AMOUNT` AS OrderCollectedAmount,
                    S.`BASIS_AMOUNT` AS BasisAmount, S.`PERCENTAGE` AS Percentage, S.`AMOUNT` AS Amount
             FROM `SETTLEMENT_RESULT_SOURCES` S
             INNER JOIN `SETTLEMENT_RESULT_LINES` R ON R.`ID`=S.`RESULT_LINE_ID` AND R.`SOURCE_SNAPSHOT_ID`=S.`SOURCE_SNAPSHOT_ID`
@@ -321,6 +324,14 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
                     INNER JOIN `CUSTOMER_ORDER_SESSIONS` S3 ON S3.`ID`=O2.`SESSION_ID`
                     WHERE S3.`BUSINESS_DATE`=@BusinessDate AND U.`UNIT_STATUS`='in_service') AS ActiveServiceCount
             FROM `BUSINESS_PERIODS` P WHERE P.`BUSINESS_DATE`=@BusinessDate;
+
+            SELECT F.ID AS Id, F.SESSION_ID AS SessionId, F.SOURCE_KIND AS SourceKind,
+                   F.ORDER_ID AS OrderId, F.ORDER_ITEM_ID AS OrderItemId, F.KIND AS Kind,
+                   F.AMOUNT AS Amount, F.ALLOCATION_STATUS AS AllocationStatus,
+                   F.HOLD_SCOPE AS HoldScope, F.CASH_PERIOD_ID AS CashPeriodId
+            FROM ORDERING_FINANCE_RECORDS F
+            INNER JOIN CUSTOMER_ORDER_SESSIONS S ON S.ID=F.SESSION_ID
+            WHERE S.BUSINESS_DATE=@BusinessDate;
             """;
 
         using var multi = await connection.QueryMultipleAsync(new CommandDefinition(sql,
@@ -342,6 +353,7 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
         var cash = await multi.ReadFirstOrDefaultAsync<SettlementCashSummaryRow>() ?? new SettlementCashSummaryRow();
         var pendingFinanceItems = (await multi.ReadAsync<SettlementPendingFinanceItemRow>()).AsList();
         var period = await multi.ReadFirstOrDefaultAsync<SettlementPeriodSummaryRow>() ?? new SettlementPeriodSummaryRow();
+        var cashAllocations = (await multi.ReadAsync<SettlementCashAllocationRow>()).AsList();
         var finalized = await connection.ExecuteScalarAsync<bool>(new CommandDefinition(
             "SELECT COUNT(*) > 0 FROM `SETTLEMENT_RUNS` WHERE `ID` = @SettlementId AND `STATUS` = 'finalized';",
             new { SettlementId = settlementId }, transaction, cancellationToken: cancellationToken));
@@ -369,7 +381,7 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
             Rooms = rooms, Addons = addons, Admissions = admissions, StaffInputs = staffInputs, Results = results,
             AttendanceBackfillRequests = attendanceBackfillRequests, Cash = cash,
             PendingFinanceItems = pendingFinanceItems, Period = period,
-            PayrollAssignments = attendanceCandidates, AttendanceAnomalies = attendanceAnomalies,
+            PayrollAssignments = attendanceCandidates, AttendanceAnomalies = attendanceAnomalies, CashAllocations = cashAllocations,
             AttendanceEvents = attendanceEvents };
     }
 
@@ -558,12 +570,16 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
                 await connection.ExecuteAsync(new CommandDefinition("""
                     INSERT INTO `SETTLEMENT_RESULT_SOURCES`
                       (`ID`,`RESULT_LINE_ID`,`SOURCE_SNAPSHOT_ID`,`SOURCE_KIND`,`ORDER_ID`,`ORDER_NUMBER`,`SOURCE_LABEL`,
-                       `BASIS_AMOUNT`,`PERCENTAGE`,`AMOUNT`,`CREATED_AT`)
+                       `BASIS_AMOUNT`,`PERCENTAGE`,`AMOUNT`,`CREATED_AT`,`ORDER_ITEM_ID`,`ITEM_NAME`,`ORIGINAL_AMOUNT`,
+                       `ORDER_PAYABLE_AMOUNT`,`ORDER_COLLECTED_AMOUNT`)
                     VALUES (@Id,@ResultLineId,@SnapshotId,@Kind,@OrderId,@OrderNumber,@Label,
-                            @BasisAmount,@Percentage,@Amount,@Now);
+                            @BasisAmount,@Percentage,@Amount,@Now,@OrderItemId,@ItemName,@OriginalAmount,
+                            @OrderPayableAmount,@OrderCollectedAmount);
                     """, new { Id = Guid.NewGuid().ToString("D"), ResultLineId = resultLineId, SnapshotId = sourceSnapshotId,
                     source.Kind, source.OrderId, source.OrderNumber, source.Label, source.BasisAmount,
-                    source.Percentage, source.Amount, Now = now }, transaction, cancellationToken: cancellationToken));
+                    source.Percentage, source.Amount, source.OrderItemId, source.ItemName, source.OriginalAmount,
+                    source.OrderPayableAmount, source.OrderCollectedAmount,
+                    Now = now }, transaction, cancellationToken: cancellationToken));
             }
         }
     }
