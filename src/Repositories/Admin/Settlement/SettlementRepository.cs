@@ -167,12 +167,31 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
               AND O.`ORDER_STATUS` NOT IN ('cancelled', 'expired', 'rejected');
 
             SELECT T.`ORDER_ID` AS OrderId, T.`STAFF_ID` AS StaffId,
-                   T.`STAFF_AMOUNT` AS StaffAmount, T.`TIP_AMOUNT` AS TipAmount, T.`STORE_AMOUNT` AS StoreAmount
+                   T.`STAFF_AMOUNT` AS StaffAmount, T.`TIP_AMOUNT` AS TipAmount, T.`STORE_AMOUNT` AS StoreAmount,
+                   T.`TIP_AMOUNT` AS BasisAmount, T.`STAFF_PERCENTAGE` AS Percentage,
+                   '指定小費' AS SourceLabel, 'order_tip' AS SourceType
             FROM `ORDER_TIPS` T
             INNER JOIN `ORDERS` O ON O.`ID` = T.`ORDER_ID`
             INNER JOIN `CUSTOMER_ORDER_SESSIONS` S ON S.`ID` = O.`SESSION_ID`
             WHERE S.`BUSINESS_DATE` = @BusinessDate
-              AND O.`ORDER_STATUS` NOT IN ('cancelled', 'expired', 'rejected');
+              AND O.`ORDER_STATUS` NOT IN ('cancelled', 'expired', 'rejected')
+            UNION ALL
+            SELECT R.`ORDER_ID` AS OrderId, A.`STAFF_ID` AS StaffId,
+                   A.`AMOUNT` AS StaffAmount, R.`AMOUNT` AS TipAmount, 0 AS StoreAmount,
+                   CASE WHEN R.`TIP_DISTRIBUTION_MODE`='custom' THEN R.`AMOUNT` ELSE A.`AMOUNT` END AS BasisAmount,
+                   CASE WHEN R.`TIP_DISTRIBUTION_MODE`='custom' THEN A.`PERCENTAGE` ELSE 100 END AS Percentage,
+                   CASE R.`TIP_DISTRIBUTION_MODE`
+                     WHEN 'equal' THEN '補登小費（均分）'
+                     WHEN 'designated' THEN '補登小費（指定）'
+                     ELSE '補登小費（自訂比例）' END AS SourceLabel,
+                   'tip_supplement' AS SourceType
+            FROM `ORDERING_FINANCE_RECORDS` R
+            INNER JOIN `ORDERING_FINANCE_TIP_ALLOCATIONS` A ON A.`RECORD_ID`=R.`ID`
+            INNER JOIN `CUSTOMER_ORDER_SESSIONS` S ON S.`ID`=R.`SESSION_ID`
+            INNER JOIN `ORDERS` O ON O.`ID`=R.`ORDER_ID`
+            WHERE S.`BUSINESS_DATE`=@BusinessDate AND R.`KIND`='tip_supplement'
+              AND R.`VOIDED_AT` IS NULL
+              AND O.`ORDER_STATUS` NOT IN ('cancelled','expired','rejected');
 
             SELECT R.`ID` AS Id, R.`ORDER_ID` AS OrderId, R.`ORDER_ITEM_ID` AS OrderItemId,
                    R.`ROOM_ID` AS RoomId, R.`ROOM_NAME_SNAPSHOT` AS RoomName,
@@ -208,8 +227,8 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
             LEFT JOIN ORDERING_SESSION_ADMISSIONS SA ON SA.SESSION_ID=S.ID
             LEFT JOIN (SELECT SESSION_ID,COUNT(*) AS RecordCount,
                 SUM(CASE WHEN KIND='charge_add' THEN AMOUNT WHEN KIND='charge_reduce' THEN -AMOUNT ELSE 0 END) AS Receivable
-                FROM ORDERING_FINANCE_RECORDS WHERE SOURCE_KIND='admission' GROUP BY SESSION_ID) AF ON AF.SESSION_ID=S.ID
-            WHERE S.`BUSINESS_DATE` = @BusinessDate;
+                FROM ORDERING_FINANCE_RECORDS WHERE SOURCE_KIND='admission' AND VOIDED_AT IS NULL GROUP BY SESSION_ID) AF ON AF.SESSION_ID=S.ID
+            WHERE S.`BUSINESS_DATE` = @BusinessDate AND F.`VOIDED_AT` IS NULL;
 
             SELECT I.`ID` AS Id, I.`SETTLEMENT_ID` AS SettlementId, I.`STAFF_ID` AS StaffId,
                    I.`CREATED_AT` AS CreatedAt, I.`CREATED_BY` AS CreatedBy,
@@ -291,7 +310,7 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
                    CAST(SUM(CASE WHEN F.`KIND` IN ('cash_receipt','cash_refund') THEN 1 ELSE 0 END) > 0 AS UNSIGNED) AS HasCashRecords
             FROM `ORDERING_FINANCE_RECORDS` F
             INNER JOIN `CUSTOMER_ORDER_SESSIONS` S ON S.`ID` = F.`SESSION_ID`
-            WHERE S.`BUSINESS_DATE` = @BusinessDate;
+            WHERE S.`BUSINESS_DATE` = @BusinessDate AND F.`VOIDED_AT` IS NULL;
 
             SELECT CAST(F.`SESSION_ID` AS CHAR(36)) AS SessionId,
                    S.`CUSTOMER_NAME` AS CustomerName,
@@ -302,6 +321,7 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
             INNER JOIN `CUSTOMER_ORDER_SESSIONS` S ON S.`ID` = F.`SESSION_ID`
             LEFT JOIN `ORDERS` O ON O.`ID` = F.`ORDER_ID`
             WHERE S.`BUSINESS_DATE` = @BusinessDate
+              AND F.`VOIDED_AT` IS NULL
               AND (F.`ALLOCATION_STATUS` = 'pending'
                    OR F.`CASH_PERIOD_ID` IS NULL AND F.`KIND` IN ('cash_receipt', 'cash_refund'))
             GROUP BY F.`SESSION_ID`, S.`CUSTOMER_NAME`, F.`ORDER_ID`, O.`ORDER_NUMBER`
@@ -334,7 +354,7 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
             FROM ORDERING_FINANCE_RECORDS F
             INNER JOIN CUSTOMER_ORDER_SESSIONS S ON S.ID=F.SESSION_ID
             LEFT JOIN ORDERS O ON O.ID=F.ORDER_ID
-            WHERE S.BUSINESS_DATE=@BusinessDate;
+            WHERE S.BUSINESS_DATE=@BusinessDate AND F.VOIDED_AT IS NULL;
             """;
 
         using var multi = await connection.QueryMultipleAsync(new CommandDefinition(sql,

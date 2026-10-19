@@ -25,6 +25,11 @@ public sealed class OrderingFinanceController(OrderingFinanceService service) : 
         string sessionId, CancellationToken ct)
         => Ok(ApiResponse<IReadOnlyList<OrderingFinancePeriodOptionDto>>.Ok(await service.GetPeriodOptionsAsync(sessionId, ct)));
 
+    [HttpGet("tip-staff-options")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<OrderingFinanceTipStaffOptionDto>>>> TipStaffOptions(
+        string sessionId, CancellationToken ct)
+        => Ok(ApiResponse<IReadOnlyList<OrderingFinanceTipStaffOptionDto>>.Ok(await service.GetTipStaffOptionsAsync(sessionId, ct)));
+
     [HttpGet("admission")]
     public async Task<ActionResult<ApiResponse<OrderingAdmissionDto?>>> Admission(string sessionId, CancellationToken ct)
         => Ok(ApiResponse<OrderingAdmissionDto?>.Ok(await service.GetAdmissionAsync(sessionId, ct)));
@@ -63,4 +68,9 @@ public sealed class OrderingFinanceController(OrderingFinanceService service) : 
     public async Task<ActionResult<ApiResponse<OrderingFinanceOperationDto>>> CorrectOrConfirm(string sessionId,
         string recordId, SaveOrderingFinanceRecordRequest request, CancellationToken ct)
         => Ok(ApiResponse<OrderingFinanceOperationDto>.Ok(await service.SaveAsync(sessionId, recordId, request, User, ct)));
+
+    [HttpPost("records/{recordId}/void")]
+    public async Task<ActionResult<ApiResponse<OrderingFinanceOperationDto>>> Void(string sessionId,
+        string recordId, VoidOrderingFinanceRecordRequest request, CancellationToken ct)
+        => Ok(ApiResponse<OrderingFinanceOperationDto>.Ok(await service.VoidAsync(sessionId, recordId, request, User, ct)));
 }

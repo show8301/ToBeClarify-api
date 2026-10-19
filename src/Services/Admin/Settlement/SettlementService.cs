@@ -265,7 +265,8 @@ public sealed partial class SettlementService : ISettlementService
         var allocation = new SettlementRevenueAllocation(source, anomalies);
         var designatedTips = source.Tips.Where(x => !string.IsNullOrWhiteSpace(x.StaffId))
             .GroupBy(x => x.StaffId!, StringComparer.Ordinal).ToDictionary(x => x.Key,
-                x => x.Sum(t => allocation.Recognize(t.OrderId, t.StaffAmount)), StringComparer.Ordinal);
+                x => x.Sum(t => t.SourceType == "tip_supplement"
+                    ? (decimal)t.StaffAmount : allocation.Recognize(t.OrderId, t.StaffAmount)), StringComparer.Ordinal);
         var storeTipIncome = source.Tips.Sum(t => allocation.Recognize(t.OrderId, t.StoreAmount));
         decimal directCompany = 0;
         decimal mealRevenue = 0;
@@ -496,17 +497,23 @@ public sealed partial class SettlementService : ISettlementService
                 && designatedSourceRows.TryGetValue(result.StaffId!, out var revenueSources))
                 sources.AddRange(revenueSources);
             sources.AddRange(source.Tips.Where(x => x.StaffId == result.StaffId && x.StaffAmount > 0)
-                .GroupBy(x => x.OrderId, StringComparer.Ordinal)
-                .Select(group => new SettlementResultSourceRow
+                .GroupBy(x => new { x.OrderId, x.SourceType, x.SourceLabel, x.Percentage })
+                .Select(group =>
                 {
-                    Kind = "designated_tip",
-                    OrderId = group.Key,
-                    OrderNumber = orderMap.GetValueOrDefault(group.Key)?.OrderNumber ?? group.Key,
-                    Label = "指定小費",
-                    OriginalAmount = group.Sum(x => (decimal)x.StaffAmount),
-                    BasisAmount = group.Sum(x => allocation.Recognize(x.OrderId, x.StaffAmount)),
-                    Percentage = 100,
-                    Amount = group.Sum(x => allocation.Recognize(x.OrderId, x.StaffAmount))
+                    var isSupplement = group.Key.SourceType == "tip_supplement";
+                    return new SettlementResultSourceRow
+                    {
+                        Kind = "designated_tip",
+                        OrderId = group.Key.OrderId,
+                        OrderNumber = orderMap.GetValueOrDefault(group.Key.OrderId)?.OrderNumber ?? group.Key.OrderId,
+                        Label = string.IsNullOrWhiteSpace(group.Key.SourceLabel) ? "指定小費" : group.Key.SourceLabel,
+                        OriginalAmount = group.Sum(x => (decimal)(isSupplement ? x.TipAmount : x.StaffAmount)),
+                        BasisAmount = group.Sum(x => isSupplement ? (decimal)x.BasisAmount
+                            : allocation.Recognize(x.OrderId, x.StaffAmount)),
+                        Percentage = isSupplement ? group.Key.Percentage : 100,
+                        Amount = group.Sum(x => isSupplement ? (decimal)x.StaffAmount
+                            : allocation.Recognize(x.OrderId, x.StaffAmount))
+                    };
                 }));
             result.Sources = sources;
             foreach (var detail in sources)

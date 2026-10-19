@@ -23,6 +23,8 @@ public sealed class OrderingFinanceRepository(AppDbContext dbContext)
                SOURCE_PERIOD_ID AS SourcePeriodId, CASH_PERIOD_ID AS CashPeriodId,
                OCCURRED_AT AS OccurredAt, ALLOCATION_STATUS AS AllocationStatus, HOLD_SCOPE AS HoldScope,
                REASON AS Reason, REVERSES_RECORD_ID AS ReversesRecordId, CASE_ID AS CaseId,
+               VOIDED_AT AS VoidedAt, VOIDED_BY AS VoidedBy, VOID_REASON AS VoidReason,
+               TIP_DISTRIBUTION_MODE AS TipDistributionMode, LINKED_CASH_RECORD_ID AS LinkedCashRecordId,
                CREATED_AT AS CreatedAt, CREATED_BY AS CreatedBy,
                UPDATED_AT AS UpdatedAt, UPDATED_BY AS UpdatedBy,
                CONFIRMED_AT AS ConfirmedAt, CONFIRMED_BY AS ConfirmedBy
@@ -37,20 +39,33 @@ public sealed class OrderingFinanceRepository(AppDbContext dbContext)
         var version = await connection.QuerySingleOrDefaultAsync<long>(new CommandDefinition(
             "SELECT VERSION FROM ORDERING_FINANCE_ACCOUNTS WHERE SESSION_ID = @SessionId;",
             new { SessionId = sessionId }, transaction, cancellationToken: ct));
-        var records = (await connection.QueryAsync<RecordRow>(new CommandDefinition(
+        var recordRows = (await connection.QueryAsync<RecordRow>(new CommandDefinition(
             RecordsSql + " ORDER BY CREATED_AT, ID;", new { SessionId = sessionId }, transaction, cancellationToken: ct)))
-            .Select(Map).ToArray();
-        if (records.Length > 0)
+            .ToArray();
+        var records = Array.Empty<OrderingFinanceRecordDto>();
+        if (recordRows.Length > 0)
         {
             var actors = (await connection.QueryAsync<RecordActorRow>(new CommandDefinition("""
                 SELECT u.ID AS Id, s.DISPLAY_NAME AS DisplayName
                 FROM ADMIN_USERS u JOIN STAFF_MEMBERS s ON s.ID = u.STAFF_MEMBER_ID
                 WHERE u.ID IN @Ids;
-                """, new { Ids = records.Select(record => record.CreatedBy).Distinct().ToArray() },
+                """, new { Ids = recordRows.SelectMany(record => new[] { record.CreatedBy, record.VoidedBy })
+                    .Where(id => id is not null).Distinct().ToArray() },
                 transaction, cancellationToken: ct))).ToDictionary(actor => actor.Id, actor => actor.DisplayName, StringComparer.OrdinalIgnoreCase);
-            records = records.Select(record => record with
+            var allocations = (await connection.QueryAsync<TipAllocationRow>(new CommandDefinition("""
+                SELECT RECORD_ID AS RecordId, STAFF_ID AS StaffId, STAFF_NAME_SNAPSHOT AS StaffName,
+                       PERCENTAGE AS Percentage, AMOUNT AS Amount
+                FROM ORDERING_FINANCE_TIP_ALLOCATIONS
+                WHERE RECORD_ID IN @RecordIds ORDER BY STAFF_NAME_SNAPSHOT, STAFF_ID;
+                """, new { RecordIds = recordRows.Select(record => record.Id).ToArray() },
+                transaction, cancellationToken: ct))).GroupBy(x => x.RecordId)
+                .ToDictionary(group => group.Key, group => (IReadOnlyList<OrderingFinanceTipAllocationDto>)group
+                    .Select(x => new OrderingFinanceTipAllocationDto(x.StaffId, x.StaffName, x.Percentage, x.Amount)).ToArray(),
+                    StringComparer.Ordinal);
+            records = recordRows.Select(record => Map(record, allocations.GetValueOrDefault(record.Id)) with
             {
-                CreatedByDisplayName = actors.GetValueOrDefault(record.CreatedBy)
+                CreatedByDisplayName = actors.GetValueOrDefault(record.CreatedBy),
+                VoidedByDisplayName = record.VoidedBy is null ? null : actors.GetValueOrDefault(record.VoidedBy)
             }).ToArray();
         }
         // Fulfillment cancellation adjusts these totals and returns meal credit once.
@@ -60,19 +75,20 @@ public sealed class OrderingFinanceRepository(AppDbContext dbContext)
             WHERE SESSION_ID = @SessionId AND ORDER_STATUS NOT IN ('cancelled', 'expired', 'rejected');
             """, new { SessionId = sessionId }, transaction, cancellationToken: ct));
         await transaction.CommitAsync(ct);
-        var additions = records.Where(x => x.Kind == "charge_add").Sum(x => x.Amount);
-        var reductions = records.Where(x => x.Kind == "charge_reduce").Sum(x => x.Amount);
-        var received = records.Where(x => x.Kind == "cash_receipt").Sum(x => x.Amount);
-        var refunded = records.Where(x => x.Kind == "cash_refund").Sum(x => x.Amount);
+        var activeRecords = records.Where(x => !x.IsVoided).ToArray();
+        var additions = activeRecords.Where(x => x.Kind == "charge_add").Sum(x => x.Amount);
+        var reductions = activeRecords.Where(x => x.Kind == "charge_reduce").Sum(x => x.Amount);
+        var received = activeRecords.Where(x => x.Kind == "cash_receipt").Sum(x => x.Amount);
+        var refunded = activeRecords.Where(x => x.Kind == "cash_refund").Sum(x => x.Amount);
         var receivable = orderAmount + additions - reductions;
         var net = received - refunded;
-        var pending = records.Count(x => x.AllocationStatus == "pending" ||
+        var pending = activeRecords.Count(x => x.AllocationStatus == "pending" ||
             x.Kind is "cash_receipt" or "cash_refund" && x.CashPeriodId is null);
         var refundDue = Math.Max(0, net - receivable);
-        var unassigned = records.Where(x => x.CashPeriodId is null)
+        var unassigned = activeRecords.Where(x => x.CashPeriodId is null)
             .Sum(x => x.Kind == "cash_receipt" ? x.Amount : x.Kind == "cash_refund" ? -x.Amount : 0);
-        var hasCash = records.Any(x => x.Kind is "cash_receipt" or "cash_refund");
-        var admissionRecorded = records.Any(x => x.SourceKind == "admission" && x.Kind == "charge_add") ||
+        var hasCash = activeRecords.Any(x => x.Kind is "cash_receipt" or "cash_refund");
+        var admissionRecorded = activeRecords.Any(x => x.SourceKind == "admission" && x.Kind == "charge_add") ||
             await connection.ExecuteScalarAsync<int>(new CommandDefinition(
                 "SELECT COUNT(*) FROM ORDERING_SESSION_ADMISSIONS WHERE SESSION_ID=@SessionId AND STATUS <> 'reissue';",
                 new { SessionId = sessionId }, cancellationToken: ct)) > 0;
@@ -81,7 +97,7 @@ public sealed class OrderingFinanceRepository(AppDbContext dbContext)
             session.FlowVersion >= 2 && session.SourcePeriodId is not null, hasCash, admissionRecorded,
             orderAmount, additions, reductions, receivable, received, refunded, net, receivable - net,
             refundDue, unassigned, pending, pending > 0 || !admissionRecorded || session.FlowVersion < 2,
-            pending > 0 || refundDue > 0 || receivable > net || records.Any(x => x.HoldScope != "none")
+            pending > 0 || refundDue > 0 || receivable > net || activeRecords.Any(x => x.HoldScope != "none")
                 ? "session" : "none", records);
     }
 
@@ -105,6 +121,36 @@ public sealed class OrderingFinanceRepository(AppDbContext dbContext)
             """, new { SessionId = sessionId }, cancellationToken: ct));
         return rows.Select(x => new OrderingFinancePeriodOptionDto(x.Id, x.BusinessDate.ToString("yyyy-MM-dd"))).ToArray();
     }
+
+    public async Task<IReadOnlyList<OrderingFinanceTipStaffOptionDto>> GetTipStaffOptionsAsync(string sessionId, CancellationToken ct)
+    {
+        await using var connection = await dbContext.CreateOpenConnectionAsync(ct);
+        await using var transaction = await connection.BeginTransactionAsync(System.Data.IsolationLevel.RepeatableRead, ct);
+        var session = await GetSessionAsync(connection, transaction, sessionId, false, ct);
+        if (session.SourcePeriodId is null)
+        {
+            await transaction.CommitAsync(ct);
+            return [];
+        }
+        var rows = await GetEligibleTipStaffAsync(connection, transaction, session.SourcePeriodId, ct);
+        await transaction.CommitAsync(ct);
+        return rows.GroupBy(x => x.StaffId, StringComparer.Ordinal)
+            .Select(group => new OrderingFinanceTipStaffOptionDto(group.Key, group.First().DisplayName,
+                group.Select(x => x.Role).Distinct(StringComparer.Ordinal).OrderBy(role => role, StringComparer.Ordinal).ToArray()))
+            .OrderBy(x => x.DisplayName, StringComparer.CurrentCulture).ToArray();
+    }
+
+    private static async Task<IReadOnlyList<TipStaffRow>> GetEligibleTipStaffAsync(MySqlConnection connection,
+        MySqlTransaction transaction, string sourcePeriodId, CancellationToken ct)
+        => (await connection.QueryAsync<TipStaffRow>(new CommandDefinition("""
+            SELECT I.STAFF_ID AS StaffId, M.DISPLAY_NAME AS DisplayName, I.ROLE AS Role
+            FROM BUSINESS_PERIODS BP
+            INNER JOIN SETTLEMENT_RUNS R ON R.BUSINESS_DATE = BP.BUSINESS_DATE
+            INNER JOIN SETTLEMENT_STAFF_INPUTS I ON I.SETTLEMENT_ID = R.ID
+            INNER JOIN STAFF_MEMBERS M ON M.ID = I.STAFF_ID
+            WHERE BP.ID = @SourcePeriodId AND I.ACTUAL_MINUTES > 0
+            ORDER BY M.DISPLAY_NAME, I.STAFF_ID, I.ROLE;
+            """, new { SourcePeriodId = sourcePeriodId }, transaction, cancellationToken: ct))).AsList();
 
     public async Task<IReadOnlyList<OrderingFinanceRevisionDto>> GetRevisionsAsync(string sessionId, string recordId, CancellationToken ct)
     {
@@ -153,14 +199,14 @@ public sealed class OrderingFinanceRepository(AppDbContext dbContext)
     {
         var account = await GetAccountAsync(sessionId, ct);
         var admission = await GetAdmissionAsync(sessionId, ct);
-        var records = account.Records.Select(x => new OrderingCustomerFinanceRecordDto(
+        var records = account.Records.Where(x => !x.IsVoided && x.Kind != "tip_supplement").Select(x => new OrderingCustomerFinanceRecordDto(
             x.Kind, x.Amount, x.SourceKind, x.OrderId, x.OrderItemId, x.OccurredAt,
             x.AllocationStatus, x.Reason, x.CaseId)).ToArray();
         return new OrderingCustomerBillDto(sessionId, admission?.Amount ?? 0, admission?.DiscountAmount ?? 0,
             admission?.CreditAmount ?? 0, admission?.Status ?? "unrecorded", account.OrderReceivable,
             account.ChargeAdditions, account.ChargeReductions, account.Receivable, account.CashReceived,
             account.CashRefunded, account.NetCash, account.Balance, account.RefundDue, account.PendingCount,
-            account.Records.Any(x => x.CaseId is not null && x.AllocationStatus == "pending"), records);
+            account.Records.Any(x => !x.IsVoided && x.CaseId is not null && x.AllocationStatus == "pending"), records);
     }
 
     public async Task<OrderingAdmissionOperationDto> SaveAdmissionAsync(string sessionId,
@@ -347,7 +393,7 @@ public sealed class OrderingFinanceRepository(AppDbContext dbContext)
         if (action is not ("depart" or "void" or "reopen" or "reissue"))
             throw new BusinessException("離店操作無效。", "SESSION_DEPARTURE_ACTION_INVALID");
         if (action == "void" && await connection.ExecuteScalarAsync<int>(new CommandDefinition(
-            "SELECT (SELECT COUNT(*) FROM ORDERS WHERE SESSION_ID=@SessionId) + (SELECT COUNT(*) FROM ORDERING_FINANCE_RECORDS WHERE SESSION_ID=@SessionId AND KIND IN ('cash_receipt','cash_refund'));",
+            "SELECT (SELECT COUNT(*) FROM ORDERS WHERE SESSION_ID=@SessionId) + (SELECT COUNT(*) FROM ORDERING_FINANCE_RECORDS WHERE SESSION_ID=@SessionId AND VOIDED_AT IS NULL AND KIND IN ('cash_receipt','cash_refund'));",
             new {SessionId=sessionId}, transaction, cancellationToken:ct)) > 0)
             throw new BusinessException("已有消費或款項的點餐碼不能作廢，請走正常離店與退款流程。", "SESSION_VOID_HAS_USAGE");
         var now = DateTimeOffset.UtcNow.ToOffset(TimeSpan.FromHours(8)).DateTime;
@@ -428,7 +474,8 @@ public sealed class OrderingFinanceRepository(AppDbContext dbContext)
             x.UpdatedBy, x.ResolvedAt is { } resolved ? Offset(resolved) : null, x.ResolvedBy, x.ResolutionNote);
 
     public async Task<OrderingFinanceOperationDto> SaveAsync(string sessionId, string? recordId,
-        SaveOrderingFinanceRecordRequest request, string payloadHash, string actorId, CancellationToken ct)
+        SaveOrderingFinanceRecordRequest request, IReadOnlyList<CalculatedOrderingFinanceTipAllocation> tipAllocations,
+        string payloadHash, string actorId, CancellationToken ct)
     {
         await using var connection = await dbContext.CreateOpenConnectionAsync(ct);
         await using var transaction = await connection.BeginTransactionAsync(ct);
@@ -462,6 +509,24 @@ public sealed class OrderingFinanceRepository(AppDbContext dbContext)
         if (version != request.ExpectedVersion)
             throw new BusinessException("帳款已被其他操作更新，請重新讀取後確認輸入。", "FINANCE_VERSION_CONFLICT");
         await ValidateSourceAsync(connection, transaction, sessionId, request, ct);
+        var eligibleTipStaff = request.Kind == "tip_supplement"
+            ? await GetEligibleTipStaffAsync(connection, transaction, session.SourcePeriodId!, ct)
+            : Array.Empty<TipStaffRow>();
+        var eligibleTipStaffById = eligibleTipStaff.GroupBy(x => x.StaffId, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+        if (request.Kind == "tip_supplement" &&
+            (tipAllocations.Count == 0 || tipAllocations.Any(x => !eligibleTipStaffById.ContainsKey(x.StaffId))))
+            throw new BusinessException("補登小費只能分配給本時段已有出勤計薪紀錄的店員。", "FINANCE_TIP_STAFF_NOT_WORKING");
+        if (request.LinkedCashRecordId is not null)
+        {
+            var linkedCashRecord = await connection.QuerySingleOrDefaultAsync<string>(new CommandDefinition("""
+                SELECT ID FROM ORDERING_FINANCE_RECORDS
+                WHERE ID=@RecordId AND SESSION_ID=@SessionId AND KIND='cash_receipt' AND VOIDED_AT IS NULL
+                FOR UPDATE;
+                """, new { RecordId = request.LinkedCashRecordId, SessionId = sessionId }, transaction, cancellationToken: ct));
+            if (request.Kind != "tip_supplement" || linkedCashRecord is null)
+                throw new BusinessException("關聯收款必須是同一顧客尚未作廢的實際收款紀錄。", "FINANCE_TIP_CASH_RECORD_INVALID");
+        }
         var cashPeriodId = request.CashPeriodId;
         if (cashPeriodId is not null)
         {
@@ -479,6 +544,8 @@ public sealed class OrderingFinanceRepository(AppDbContext dbContext)
                 transaction, cancellationToken: ct));
             if (original is null)
                 throw new BusinessException("找不到這筆費用紀錄。", "FINANCE_RECORD_NOT_FOUND");
+            if (original.VoidedAt is not null)
+                throw new BusinessException("已作廢的紀錄不能再更正。", "FINANCE_RECORD_ALREADY_VOIDED");
             if (original.Kind != request.Kind || original.ReversesRecordId != request.ReversesRecordId)
                 throw new BusinessException("更正保留原事件種類；真的收到或退回款項請另外登記。", "FINANCE_EVENT_KIND_IMMUTABLE");
         }
@@ -500,6 +567,8 @@ public sealed class OrderingFinanceRepository(AppDbContext dbContext)
             OccurredAt = request.OccurredAt.ToOffset(TimeSpan.FromHours(8)).DateTime,
             AllocationStatus = request.AllocationStatus, HoldScope = request.HoldScope, Reason = request.Reason,
             ReversesRecordId = request.ReversesRecordId,
+            TipDistributionMode = request.Kind == "tip_supplement" ? request.TipDistributionMode : null,
+            LinkedCashRecordId = request.Kind == "tip_supplement" ? request.LinkedCashRecordId : null,
             CaseId = original?.CaseId ?? (request.AllocationStatus == "pending" ||
                 (request.Kind is "cash_receipt" or "cash_refund" && cashPeriodId is null)
                 ? Guid.NewGuid().ToString("D") : null),
@@ -512,17 +581,41 @@ public sealed class OrderingFinanceRepository(AppDbContext dbContext)
             INSERT INTO ORDERING_FINANCE_RECORDS
                 (ID, SESSION_ID, VERSION, KIND, AMOUNT, SOURCE_KIND, ORDER_ID, ORDER_ITEM_ID,
                  SOURCE_PERIOD_ID, CASH_PERIOD_ID, OCCURRED_AT, ALLOCATION_STATUS, HOLD_SCOPE,
-                 REASON, REVERSES_RECORD_ID, CASE_ID, CREATED_AT, CREATED_BY, UPDATED_AT, UPDATED_BY, CONFIRMED_AT, CONFIRMED_BY)
+                 REASON, REVERSES_RECORD_ID, CASE_ID, TIP_DISTRIBUTION_MODE, LINKED_CASH_RECORD_ID,
+                 CREATED_AT, CREATED_BY, UPDATED_AT, UPDATED_BY, CONFIRMED_AT, CONFIRMED_BY)
             VALUES (@Id, @SessionId, @Version, @Kind, @Amount, @SourceKind, @OrderId, @OrderItemId,
                     @SourcePeriodId, @CashPeriodId, @OccurredAt, @AllocationStatus, @HoldScope,
-                    @Reason, @ReversesRecordId, @CaseId, @CreatedAt, @CreatedBy, @UpdatedAt, @UpdatedBy, @ConfirmedAt, @ConfirmedBy)
+                    @Reason, @ReversesRecordId, @CaseId, @TipDistributionMode, @LinkedCashRecordId,
+                    @CreatedAt, @CreatedBy, @UpdatedAt, @UpdatedBy, @ConfirmedAt, @ConfirmedBy)
             ON DUPLICATE KEY UPDATE VERSION = VALUES(VERSION), AMOUNT = VALUES(AMOUNT),
                 SOURCE_KIND = VALUES(SOURCE_KIND), ORDER_ID = VALUES(ORDER_ID), ORDER_ITEM_ID = VALUES(ORDER_ITEM_ID),
                 CASH_PERIOD_ID = VALUES(CASH_PERIOD_ID), OCCURRED_AT = VALUES(OCCURRED_AT),
                 ALLOCATION_STATUS = VALUES(ALLOCATION_STATUS), HOLD_SCOPE = VALUES(HOLD_SCOPE),
-                REASON = VALUES(REASON), CASE_ID = VALUES(CASE_ID), UPDATED_AT = VALUES(UPDATED_AT), UPDATED_BY = VALUES(UPDATED_BY),
+                REASON = VALUES(REASON), CASE_ID = VALUES(CASE_ID), TIP_DISTRIBUTION_MODE = VALUES(TIP_DISTRIBUTION_MODE),
+                LINKED_CASH_RECORD_ID = VALUES(LINKED_CASH_RECORD_ID),
+                UPDATED_AT = VALUES(UPDATED_AT), UPDATED_BY = VALUES(UPDATED_BY),
                 CONFIRMED_AT = VALUES(CONFIRMED_AT), CONFIRMED_BY = VALUES(CONFIRMED_BY);
             """, row, transaction, cancellationToken: ct));
+        var tipAllocationDtos = new List<OrderingFinanceTipAllocationDto>();
+        if (request.Kind == "tip_supplement")
+        {
+            await connection.ExecuteAsync(new CommandDefinition(
+                "DELETE FROM ORDERING_FINANCE_TIP_ALLOCATIONS WHERE RECORD_ID=@RecordId;",
+                new { RecordId = row.Id }, transaction, cancellationToken: ct));
+            foreach (var allocation in tipAllocations)
+            {
+                var staff = eligibleTipStaffById[allocation.StaffId];
+                await connection.ExecuteAsync(new CommandDefinition("""
+                    INSERT INTO ORDERING_FINANCE_TIP_ALLOCATIONS
+                        (ID, RECORD_ID, STAFF_ID, STAFF_NAME_SNAPSHOT, PERCENTAGE, AMOUNT, CREATED_AT)
+                    VALUES (@Id, @RecordId, @StaffId, @StaffName, @Percentage, @Amount, @Now);
+                    """, new { Id = Guid.NewGuid().ToString("D"), RecordId = row.Id, allocation.StaffId,
+                    StaffName = staff.DisplayName, allocation.Percentage, allocation.Amount, Now = now },
+                    transaction, cancellationToken: ct));
+                tipAllocationDtos.Add(new OrderingFinanceTipAllocationDto(allocation.StaffId,
+                    staff.DisplayName, allocation.Percentage, allocation.Amount));
+            }
+        }
         await connection.ExecuteAsync(new CommandDefinition("""
             INSERT INTO ORDERING_FINANCE_REVISIONS
                 (RECORD_ID, VERSION, OPERATION_ID, SNAPSHOT_JSON, RECORDED_AT, RECORDED_BY)
@@ -531,7 +624,7 @@ public sealed class OrderingFinanceRepository(AppDbContext dbContext)
             WHERE SESSION_ID = @SessionId;
             """, new
         {
-            row.Id, row.Version, request.OperationId, Snapshot = JsonSerializer.Serialize(Map(row)),
+            row.Id, row.Version, request.OperationId, Snapshot = JsonSerializer.Serialize(Map(row, tipAllocationDtos)),
             Now = now, ActorId = actorId, SessionId = sessionId
             }, transaction, cancellationToken: ct));
         if (row.CaseId is not null)
@@ -567,6 +660,76 @@ public sealed class OrderingFinanceRepository(AppDbContext dbContext)
         return result;
     }
 
+    public async Task<OrderingFinanceOperationDto> VoidAsync(string sessionId, string recordId,
+        VoidOrderingFinanceRecordRequest request, string payloadHash, string actorId, CancellationToken ct)
+    {
+        await using var connection = await dbContext.CreateOpenConnectionAsync(ct);
+        await using var transaction = await connection.BeginTransactionAsync(ct);
+        var session = await GetSessionAsync(connection, transaction, sessionId, true, ct);
+        var prior = await connection.QuerySingleOrDefaultAsync<OperationRow>(new CommandDefinition("""
+            SELECT SESSION_ID AS SessionId, PAYLOAD_HASH AS PayloadHash, RESULT_JSON AS ResultJson
+            FROM ORDERING_FINANCE_OPERATIONS WHERE OPERATION_ID=@OperationId;
+            """, new { request.OperationId }, transaction, cancellationToken: ct));
+        if (prior is not null)
+        {
+            if (prior.SessionId != sessionId || prior.PayloadHash != payloadHash)
+                throw new BusinessException("相同操作識別碼已用於不同內容，請先查回原操作。", "FINANCE_OPERATION_CONFLICT");
+            return JsonSerializer.Deserialize<OrderingFinanceOperationDto>(prior.ResultJson)
+                ?? throw new InvalidOperationException("Invalid finance operation snapshot.");
+        }
+        if (session.FlowVersion < 2 || session.SourcePeriodId is null)
+            throw new BusinessException("此顧客沿用原帳務，無法作廢新版收退款紀錄。", "FINANCE_LEGACY_READ_ONLY");
+        var accountVersion = await EnsureAccountAsync(connection, transaction, session, ct);
+        if (accountVersion != request.ExpectedAccountVersion)
+            throw new BusinessException("帳款已被其他操作更新，請重新讀取後再作廢。", "FINANCE_VERSION_CONFLICT");
+        var row = await connection.QuerySingleOrDefaultAsync<RecordRow>(new CommandDefinition(
+            RecordsSql + " AND ID=@RecordId FOR UPDATE;", new { SessionId = sessionId, RecordId = recordId },
+            transaction, cancellationToken: ct));
+        if (row is null)
+            throw new BusinessException("找不到這筆收退款紀錄。", "FINANCE_RECORD_NOT_FOUND");
+        if (row.Kind is not ("cash_receipt" or "cash_refund"))
+            throw new BusinessException("目前只有實際收款與實際退款可以作廢。", "FINANCE_VOID_KIND_NOT_ALLOWED");
+        if (row.VoidedAt is not null)
+            throw new BusinessException("這筆紀錄已作廢。", "FINANCE_RECORD_ALREADY_VOIDED");
+        if (row.Version != request.ExpectedRecordVersion)
+            throw new BusinessException("這筆紀錄已被其他操作更正，請重新讀取。", "FINANCE_RECORD_VERSION_CONFLICT");
+
+        var now = DateTimeOffset.UtcNow.ToOffset(TimeSpan.FromHours(8)).DateTime;
+        row.Version++;
+        row.VoidedAt = now;
+        row.VoidedBy = actorId;
+        row.VoidReason = request.Reason;
+        row.UpdatedAt = now;
+        row.UpdatedBy = actorId;
+        await connection.ExecuteAsync(new CommandDefinition("""
+            UPDATE ORDERING_FINANCE_RECORDS
+            SET VERSION=@Version, VOIDED_AT=@VoidedAt, VOIDED_BY=@VoidedBy, VOID_REASON=@VoidReason,
+                UPDATED_AT=@UpdatedAt, UPDATED_BY=@UpdatedBy
+            WHERE ID=@Id AND SESSION_ID=@SessionId;
+            UPDATE ORDERING_FINANCE_CASES
+            SET STATUS='resolved', RESOLVED_AT=@VoidedAt, RESOLVED_BY=@VoidedBy,
+                RESOLUTION_NOTE=@VoidReason, UPDATED_AT=@UpdatedAt, UPDATED_BY=@UpdatedBy
+            WHERE RECORD_ID=@Id AND STATUS='open';
+            UPDATE ORDERING_FINANCE_ACCOUNTS SET VERSION=VERSION+1, UPDATED_AT=@UpdatedAt
+            WHERE SESSION_ID=@SessionId;
+            INSERT INTO ORDERING_FINANCE_REVISIONS
+                (RECORD_ID, VERSION, OPERATION_ID, SNAPSHOT_JSON, RECORDED_AT, RECORDED_BY)
+            VALUES (@Id, @Version, @OperationId, @Snapshot, @UpdatedAt, @VoidedBy);
+            """, new { row.Id, row.Version, row.VoidedAt, row.VoidedBy, row.VoidReason, row.UpdatedAt,
+            row.UpdatedBy, SessionId = sessionId, request.OperationId,
+            Snapshot = JsonSerializer.Serialize(Map(row)) }, transaction, cancellationToken: ct));
+        var result = new OrderingFinanceOperationDto(request.OperationId, row.Id, accountVersion + 1);
+        await connection.ExecuteAsync(new CommandDefinition("""
+            INSERT INTO ORDERING_FINANCE_OPERATIONS
+                (OPERATION_ID, SESSION_ID, PAYLOAD_HASH, RESULT_JSON, CREATED_AT, CREATED_BY)
+            VALUES (@OperationId, @SessionId, @PayloadHash, @ResultJson, @Now, @ActorId);
+            """, new { request.OperationId, SessionId = sessionId, PayloadHash = payloadHash,
+            ResultJson = JsonSerializer.Serialize(result), Now = now, ActorId = actorId },
+            transaction, cancellationToken: ct));
+        await transaction.CommitAsync(ct);
+        return result;
+    }
+
     private static async Task<SessionRow> GetSessionAsync(MySqlConnection connection, MySqlTransaction transaction,
         string sessionId, bool forUpdate, CancellationToken ct)
         => await connection.QuerySingleOrDefaultAsync<SessionRow>(new CommandDefinition(
@@ -591,15 +754,41 @@ public sealed class OrderingFinanceRepository(AppDbContext dbContext)
     }
 
     private static DateTimeOffset Offset(DateTime value) => new(DateTime.SpecifyKind(value, DateTimeKind.Unspecified), TimeSpan.FromHours(8));
-    private static OrderingFinanceRecordDto Map(RecordRow x) => new(x.Id, x.Version, x.Kind, x.Amount,
+    private static OrderingFinanceRecordDto Map(RecordRow x,
+        IReadOnlyList<OrderingFinanceTipAllocationDto>? tipAllocations = null) => new(x.Id, x.Version, x.Kind, x.Amount,
         x.SourceKind, x.OrderId, x.OrderItemId, x.SourcePeriodId, x.CashPeriodId, Offset(x.OccurredAt),
         x.AllocationStatus, x.HoldScope, x.Reason, x.ReversesRecordId, x.CaseId, Offset(x.CreatedAt), x.CreatedBy,
-        Offset(x.UpdatedAt), x.UpdatedBy, x.ConfirmedAt is { } confirmed ? Offset(confirmed) : null, x.ConfirmedBy);
+        Offset(x.UpdatedAt), x.UpdatedBy, x.ConfirmedAt is { } confirmed ? Offset(confirmed) : null, x.ConfirmedBy)
+    {
+        IsVoided = x.VoidedAt is not null,
+        VoidedAt = x.VoidedAt is { } voided ? Offset(voided) : null,
+        VoidedBy = x.VoidedBy,
+        VoidReason = x.VoidReason,
+        TipDistributionMode = x.TipDistributionMode,
+        LinkedCashRecordId = x.LinkedCashRecordId,
+        TipAllocations = tipAllocations ?? []
+    };
 
     private sealed class RecordActorRow
     {
         public string Id { get; set; } = "";
         public string? DisplayName { get; set; }
+    }
+
+    private sealed class TipStaffRow
+    {
+        public string StaffId { get; set; } = "";
+        public string DisplayName { get; set; } = "";
+        public string Role { get; set; } = "";
+    }
+
+    private sealed class TipAllocationRow
+    {
+        public string RecordId { get; set; } = "";
+        public string StaffId { get; set; } = "";
+        public string StaffName { get; set; } = "";
+        public decimal? Percentage { get; set; }
+        public long Amount { get; set; }
     }
 
     private sealed class SessionRow
@@ -687,6 +876,11 @@ public sealed class OrderingFinanceRepository(AppDbContext dbContext)
         public string Reason { get; set; } = "";
         public string? ReversesRecordId { get; set; }
         public string? CaseId { get; set; }
+        public DateTime? VoidedAt { get; set; }
+        public string? VoidedBy { get; set; }
+        public string? VoidReason { get; set; }
+        public string? TipDistributionMode { get; set; }
+        public string? LinkedCashRecordId { get; set; }
         public DateTime CreatedAt { get; set; }
         public string CreatedBy { get; set; } = "";
         public DateTime UpdatedAt { get; set; }

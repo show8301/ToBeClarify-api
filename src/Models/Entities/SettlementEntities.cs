@@ -202,9 +202,13 @@ public sealed class SettlementTipRevenueRow
 {
     public string OrderId { get; set; } = string.Empty;
     public string? StaffId { get; set; }
-    public int StaffAmount { get; set; }
-    public int TipAmount { get; set; }
-    public int StoreAmount { get; set; }
+    public long StaffAmount { get; set; }
+    public long TipAmount { get; set; }
+    public long StoreAmount { get; set; }
+    public long BasisAmount { get; set; }
+    public decimal Percentage { get; set; }
+    public string SourceLabel { get; set; } = "指定小費";
+    public string SourceType { get; set; } = "order_tip";
 }
 
 public sealed class SettlementRoomRevenueRow
