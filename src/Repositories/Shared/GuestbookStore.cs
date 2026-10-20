@@ -4,11 +4,12 @@ using MySqlConnector;
 using ToBeClarify.Api.Exceptions;
 using ToBeClarify.Api.Infrastructure;
 using ToBeClarify.Api.Models.Dtos;
+using ToBeClarify.Api.Services.Media;
 
 namespace ToBeClarify.Api.Repositories.Shared;
 
 // Shared persistence boundary for public reads/writes and authenticated moderation.
-public sealed class GuestbookStore(AppDbContext db)
+public sealed class GuestbookStore(AppDbContext db, MediaDiskStorage disk)
 {
     private const string Columns = """
         ID AS Id, DISPLAY_NAME AS DisplayName, CONTENT AS Content, AUTHOR_TYPE AS AuthorType,
@@ -185,9 +186,10 @@ public sealed class GuestbookStore(AppDbContext db)
         var imageId = imageBytes is null ? null : Guid.NewGuid().ToString();
         if (imageBytes is not null)
         {
+            var stored = await disk.WritePrivate("guestbook", imageId!, imageBytes, ct);
             await c.ExecuteAsync(new CommandDefinition(
-                "INSERT INTO GUESTBOOK_IMAGES (ID,IMAGE_BYTES) VALUES (@Id,@Bytes);",
-                new { Id = imageId, Bytes = imageBytes }, tx, cancellationToken: ct));
+                "INSERT INTO GUESTBOOK_IMAGES (ID,IMAGE_BYTES,STORAGE_PATH,BYTE_SIZE,SHA256) VALUES (@Id,NULL,@StoragePath,@ByteSize,@Sha256);",
+                new { Id = imageId, stored.StoragePath, stored.ByteSize, stored.Sha256 }, tx, cancellationToken: ct));
         }
         await c.ExecuteAsync(new CommandDefinition($"""
             INSERT INTO {table} (ID,DISPLAY_NAME,CONTENT,AUTHOR_TYPE,AUTHOR_ADMIN_ID,AUTHOR_STAFF_ID,IS_VISIBLE,CREATED_AT,UPDATED_AT,CREATED_BY,UPDATED_BY,CUSTOMER_UID,IMAGE_ID,{(reply ? "COMMENT_ID" : "IS_PINNED,SORT_ORDER")})
@@ -202,14 +204,17 @@ public sealed class GuestbookStore(AppDbContext db)
     public async Task<byte[]> GetImage(string id, bool admin, CancellationToken ct)
     {
         await using var c = await db.CreateOpenConnectionAsync(ct);
-        var bytes = await c.ExecuteScalarAsync<byte[]>(new CommandDefinition("""
-            SELECT I.IMAGE_BYTES FROM GUESTBOOK_IMAGES I WHERE I.ID=@Id AND (
+        var image = await c.QuerySingleOrDefaultAsync<PrivateImageRow>(new CommandDefinition("""
+            SELECT I.STORAGE_PATH AS StoragePath,I.BYTE_SIZE AS ByteSize,I.SHA256 AS Sha256,
+                   CASE WHEN I.STORAGE_PATH IS NULL THEN I.IMAGE_BYTES ELSE NULL END AS LegacyBytes
+            FROM GUESTBOOK_IMAGES I WHERE I.ID=@Id AND (
               EXISTS (SELECT 1 FROM GUESTBOOK_COMMENTS C WHERE C.IMAGE_ID=I.ID AND (@Admin OR C.IS_VISIBLE=TRUE))
               OR EXISTS (SELECT 1 FROM GUESTBOOK_REPLIES R JOIN GUESTBOOK_COMMENTS C ON C.ID=R.COMMENT_ID
                          WHERE R.IMAGE_ID=I.ID AND (@Admin OR (R.IS_VISIBLE=TRUE AND C.IS_VISIBLE=TRUE)))
             );
             """, new { Id = id, Admin = admin }, cancellationToken: ct));
-        return bytes ?? throw new NotFoundException("找不到留言圖片。", "GUESTBOOK_IMAGE_NOT_FOUND");
+        if (image is null) throw new NotFoundException("找不到留言圖片。", "GUESTBOOK_IMAGE_NOT_FOUND");
+        return await image.Read(disk, ct);
     }
 
     public async Task<GuestbookMessage> Change(string threadId, string? replyId, string actor, GuestbookEdit? edit, GuestbookModerate? moderation, CancellationToken ct)
@@ -256,7 +261,8 @@ public sealed class GuestbookStore(AppDbContext db)
             new { Actor = actor, Id = id },
             tx,
             cancellationToken: ct));
-        await c.ExecuteAsync(new CommandDefinition("DELETE FROM GUESTBOOK_IMAGES WHERE ID=@Id;", new { Id = before.ImageId }, tx, cancellationToken: ct));
+        // Preserve detached metadata for explicit orphan reporting/retention. Never delete
+        // a file before commit (or after an ambiguous commit failure).
         var after = await Get(c, tx, id, replyId is not null, true, false, ct);
         await Audit(c, tx, threadId, id, actor, "image_remove", new { ImageId = before.ImageId }, new { ImageId = (string?)null }, ct);
         await tx.CommitAsync(ct);

@@ -29,19 +29,22 @@ public sealed class AdminMediaUploadService
     private readonly IWebHostEnvironment _environment;
     private readonly MediaUrlService _mediaUrls;
     private readonly ILogger<AdminMediaUploadService> _logger;
+    private readonly MediaDiskStorage _disk;
 
     public AdminMediaUploadService(
         AppDbContext dbContext,
         IOptions<MediaOptions> options,
         IWebHostEnvironment environment,
         MediaUrlService mediaUrls,
-        ILogger<AdminMediaUploadService> logger)
+        ILogger<AdminMediaUploadService> logger,
+        MediaDiskStorage disk)
     {
         _dbContext = dbContext;
         _options = options.Value;
         _environment = environment;
         _mediaUrls = mediaUrls;
         _logger = logger;
+        _disk = disk;
     }
 
     public async Task<AdminMediaUploadDto> UploadAsync(IFormFile file, string? category, ClaimsPrincipal actor, CancellationToken cancellationToken)
@@ -76,8 +79,8 @@ public sealed class AdminMediaUploadService
             height = imageInfo.Height;
         }
 
-        await using (var output = File.Create(fullPath))
-        await file.CopyToAsync(output, cancellationToken);
+        await using (var input = file.OpenReadStream())
+            await _disk.WritePublic(relativePath, input, cancellationToken);
 
         try
         {

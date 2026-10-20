@@ -3,10 +3,11 @@ using MySqlConnector;
 using ToBeClarify.Api.Exceptions;
 using ToBeClarify.Api.Infrastructure;
 using ToBeClarify.Api.Models.Dtos;
+using ToBeClarify.Api.Services.Media;
 
 namespace ToBeClarify.Api.Repositories.Customers;
 
-public sealed partial class CustomerDeliveryRepository(AppDbContext db)
+public sealed partial class CustomerDeliveryRepository(AppDbContext db, MediaDiskStorage disk)
 {
     private const string ProfileColumns = "UID AS Uid, DISPLAY_NAME AS DisplayName, CREATED_AT AS CreatedAt";
 

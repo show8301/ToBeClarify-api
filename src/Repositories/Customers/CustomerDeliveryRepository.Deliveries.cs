@@ -2,6 +2,7 @@ using Dapper;
 using MySqlConnector;
 using ToBeClarify.Api.Exceptions;
 using ToBeClarify.Api.Models.Dtos;
+using ToBeClarify.Api.Services.Media;
 
 namespace ToBeClarify.Api.Repositories.Customers;
 
@@ -117,11 +118,13 @@ public sealed partial class CustomerDeliveryRepository
         if (row.Status is "cancelled" or "delivered") throw new ConflictException("請先重新開啟委託再修改作品。", "DELIVERY_CLOSED");
         if (await c.ExecuteScalarAsync<int>(new CommandDefinition("SELECT COUNT(*) FROM ART_DELIVERY_ASSETS WHERE DELIVERY_ID=@Id AND IS_REMOVED=FALSE;", new { Id = id }, tx, cancellationToken: ct)) >= 20)
             throw new BusinessException("每筆委託最多 20 個作品檔案或連結。", "DELIVERY_ASSET_LIMIT");
+        var assetId = Guid.NewGuid().ToString();
+        var stored = bytes is null ? null : await disk.WritePrivate("delivery", assetId, bytes, ct);
         await c.ExecuteAsync(new CommandDefinition("""
-            INSERT INTO ART_DELIVERY_ASSETS (ID,DELIVERY_ID,KIND,LABEL,URL,CONTENT_TYPE,BYTE_SIZE,FILE_BYTES,CREATED_AT,CREATED_BY)
-            VALUES (@Id,@DeliveryId,@Kind,@Label,@Url,@ContentType,@Size,@Bytes,NOW(6),@ActorId);
+            INSERT INTO ART_DELIVERY_ASSETS (ID,DELIVERY_ID,KIND,LABEL,URL,CONTENT_TYPE,BYTE_SIZE,FILE_BYTES,STORAGE_PATH,SHA256,CREATED_AT,CREATED_BY)
+            VALUES (@Id,@DeliveryId,@Kind,@Label,@Url,@ContentType,@Size,NULL,@StoragePath,@Sha256,NOW(6),@ActorId);
             UPDATE ART_DELIVERIES SET STATUS='in_progress',VERSION=VERSION+1,UPDATED_AT=NOW(6),UPDATED_BY=@ActorId WHERE ID=@DeliveryId;
-            """, new { Id = Guid.NewGuid().ToString(), DeliveryId = id, Kind = bytes is null ? "link" : "image", Label = label, Url = url, ContentType = bytes is null ? null : "image/png", Size = bytes?.Length ?? 0, Bytes = bytes, ActorId = actorId }, tx, cancellationToken: ct));
+            """, new { Id = assetId, DeliveryId = id, Kind = bytes is null ? "link" : "image", Label = label, Url = url, ContentType = bytes is null ? null : "image/png", Size = bytes?.Length ?? 0, StoragePath = stored?.StoragePath, Sha256 = stored?.Sha256, ActorId = actorId }, tx, cancellationToken: ct));
         await ClearNotification(c, tx, id, ct);
         await Audit(c, tx, "delivery", id, "asset_added", actorId, ct);
         await tx.CommitAsync(ct);
@@ -144,13 +147,16 @@ public sealed partial class CustomerDeliveryRepository
     public async Task<byte[]> ImageBytes(string id, string assetId, string? uid, string? claimHash, bool client, CancellationToken ct)
     {
         await using var c = await db.CreateOpenConnectionAsync(ct);
-        return await c.QuerySingleOrDefaultAsync<byte[]>(new CommandDefinition("""
-            SELECT A.FILE_BYTES FROM ART_DELIVERY_ASSETS A JOIN ART_DELIVERIES D ON D.ID=A.DELIVERY_ID
+        var image = await c.QuerySingleOrDefaultAsync<PrivateImageRow>(new CommandDefinition("""
+            SELECT A.STORAGE_PATH AS StoragePath,A.BYTE_SIZE AS ByteSize,A.SHA256 AS Sha256,
+                   CASE WHEN A.STORAGE_PATH IS NULL THEN A.FILE_BYTES ELSE NULL END AS LegacyBytes
+            FROM ART_DELIVERY_ASSETS A JOIN ART_DELIVERIES D ON D.ID=A.DELIVERY_ID
             LEFT JOIN CUSTOMER_VISITS V ON V.SESSION_ID=D.SESSION_ID
             WHERE A.ID=@AssetId AND D.ID=@Id AND A.IS_REMOVED=FALSE AND A.KIND='image'
             AND (@Client=FALSE OR (D.STATUS IN ('ready','delivered') AND ((@Uid IS NOT NULL AND V.CUSTOMER_UID=@Uid) OR (@Hash IS NOT NULL AND D.CLAIM_CODE_HASH=@Hash))));
             """, new { Id = id, AssetId = assetId, Uid = uid, Hash = claimHash, Client = client }, cancellationToken: ct))
             ?? throw new NotFoundException("找不到作品或憑證已失效。", "DELIVERY_ASSET_NOT_FOUND");
+        return await image.Read(disk, ct);
     }
 
     public async Task Acknowledge(string id, string? uid, string? hash, CancellationToken ct)

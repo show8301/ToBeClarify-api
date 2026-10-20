@@ -74,6 +74,8 @@ builder.Services.Configure<OneTimeTokenOptions>(builder.Configuration.GetSection
 builder.Services.Configure<OrderingTokenOptions>(builder.Configuration.GetSection(OrderingTokenOptions.SectionName));
 builder.Services.Configure<ApiLoggingOptions>(builder.Configuration.GetSection(ApiLoggingOptions.SectionName));
 builder.Services.Configure<MediaOptions>(builder.Configuration.GetSection(MediaOptions.SectionName));
+builder.Services.AddSingleton<MediaDiskStorage>();
+builder.Services.AddScoped<PrivateImageMigration>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<AppDbContext>();
 builder.Services.AddScoped<ToBeClarify.Api.Repositories.Shared.GuestbookStore>();
@@ -350,6 +352,15 @@ builder.Services.AddAuthorization(options =>
 });
 
 var app = builder.Build();
+
+// Explicit offline maintenance mode: no HTTP listener or background workers start.
+var imageMigration = builder.Configuration["private-image-migration"];
+if (imageMigration is not null)
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    await scope.ServiceProvider.GetRequiredService<PrivateImageMigration>().Run(imageMigration, CancellationToken.None);
+    return;
+}
 
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 app.UseMiddleware<RequestInterceptorMiddleware>();
