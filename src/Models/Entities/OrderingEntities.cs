@@ -118,6 +118,7 @@ public sealed class StaffNominationRow
 
 public sealed class OrderRow
 {
+    public string? BackfillJson { get; set; }
     public int FlowVersion { get; set; } = 1;
     public string? BusinessPeriodId { get; set; }
 
@@ -287,6 +288,10 @@ public sealed record NewOrderAggregate(
     IReadOnlyList<NewOrderTip> Tips)
 {
     public string ActorType { get; init; } = "customer";
+    public string? ActorRole { get; init; }
+    public ToBeClarify.Api.Models.Dtos.OrderBackfillRequest? Backfill { get; init; }
+    public string? BackfillPayloadHash { get; init; }
+    public string? BackfillDuplicateHash { get; init; }
     public string? ActorId { get; init; }
     public string? CustomerLocation { get; init; }
     public string? MenuSnapshotJson { get; init; }

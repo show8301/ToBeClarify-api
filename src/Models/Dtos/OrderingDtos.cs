@@ -192,6 +192,7 @@ public sealed record OrderDto(
     IReadOnlyList<OrderRoomBookingDto> RoomBookings)
 {
     public string SessionId { get; init; } = "";
+    public OrderBackfillDto? Backfill { get; init; }
     public string? CustomerLocation { get; init; }
     public string? BusinessPeriodId { get; init; }
     public int FlowVersion { get; init; } = 1;
@@ -276,6 +277,7 @@ public sealed class RecoverOrderSessionRequest
 
 public sealed class MealOrderLineRequest
 {
+    [Range(0, 100000000)] public int? UnitPrice { get; init; }
     [StringLength(40)]
     public string? RecipientStaffId { get; init; }
 
@@ -291,6 +293,9 @@ public sealed class MealOrderLineRequest
 
 public sealed class NominationOrderLineRequest
 {
+    [Range(0, 100000000)] public int? BaseUnitPrice { get; init; }
+    [Range(0, 100000000)] public int? ServiceUnitPrice { get; init; }
+    public DateTimeOffset? ActualEndsAt { get; init; }
     [Required]
     public string StaffId { get; init; } = string.Empty;
 
@@ -310,6 +315,8 @@ public sealed class NominationOrderLineRequest
 
 public sealed class RoomOrderLineRequest
 {
+    [Range(0, 100000000)] public int? UnitPrice { get; init; }
+    public DateTimeOffset? ActualEndsAt { get; init; }
     [Required]
     public string RoomId { get; init; } = string.Empty;
 
@@ -332,6 +339,7 @@ public sealed class TipOrderLineRequest
 
 public sealed class SubmitOrderRequest
 {
+    public OrderBackfillRequest? Backfill { get; init; }
     public bool IsManagerTransfer { get; init; }
     [StringLength(40)]
     public string? QuoteToken { get; init; }
@@ -350,6 +358,19 @@ public sealed class SubmitOrderRequest
     [StringLength(200)]
     public string? CustomerLocation { get; init; }
 }
+
+public sealed record OrderBackfillRequest
+{
+    [Required, StringLength(36)] public string OperationId { get; init; } = "";
+    [Required] public DateTimeOffset OccurredAt { get; init; }
+    [Required, StringLength(500, MinimumLength = 1)] public string Reason { get; init; } = "";
+    [StringLength(36)] public string? LinkedCashRecordId { get; init; }
+    public long ExpectedFinanceVersion { get; init; }
+    public long? ExpectedCashRecordVersion { get; init; }
+}
+
+public sealed record OrderBackfillDto(DateTimeOffset OccurredAt, DateTimeOffset RecordedAt,
+    string Reason, string RecordedBy, string? LinkedCashRecordId);
 
 public sealed class UpdateOrderingSettingsRequest
 {

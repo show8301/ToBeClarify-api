@@ -23,6 +23,9 @@ publish/
 !db/migrations/
 !db/migrations/**/*.sql
 
+# Schema-only fixture for isolated order transaction tests; contains no row data.
+!tests/OrderBackfill/schema.sql
+
 # Runtime media files are deployed separately and must not be committed
 /media/
 

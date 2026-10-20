@@ -181,7 +181,10 @@ public sealed record SettlementOverviewDto(
     IReadOnlyList<SettlementAnomalyDto> Anomalies,
     IReadOnlyList<SettlementAttendanceBackfillDto> AttendanceBackfillRequests = null!,
     SettlementWorkflowDto? Workflow = null,
-    IReadOnlyList<SettlementPayrollAssignmentDto>? PayrollAssignments = null);
+    IReadOnlyList<SettlementPayrollAssignmentDto>? PayrollAssignments = null)
+{
+    public int PendingOrderBackfillCount { get; init; }
+}
 
 public sealed record SettlementPayrollAssignmentDto(string StaffId, string DisplayName, string? PayrollRole,
     int? PayrollSnapshotVersion, bool CanUseBackstage, DateTime? StartedAt);

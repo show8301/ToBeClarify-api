@@ -655,6 +655,7 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
             INSERT INTO SETTLEMENT_AUDIT_LOG (ID,SETTLEMENT_ID,ACTION_TYPE,AFTER_JSON,REASON,ACTOR_ID,CREATED_AT)
             VALUES (@AuditId,@SettlementId,'finalized','{}','正式結算與營業期鎖定',@ActorId,@Now);
             """, new { SettlementId = settlementId, Date = run.BusinessDate, ActorId = actorId, Now = now, AuditId = Guid.NewGuid().ToString("D") }, tx, cancellationToken: cancellationToken));
+        await MarkOrderBackfillsAppliedAsync(connection, tx, settlementId, run.BusinessDate, cancellationToken);
         await tx.CommitAsync(cancellationToken);
     }
 
