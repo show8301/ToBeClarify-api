@@ -228,7 +228,7 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
             LEFT JOIN (SELECT SESSION_ID,COUNT(*) AS RecordCount,
                 SUM(CASE WHEN KIND='charge_add' THEN AMOUNT WHEN KIND='charge_reduce' THEN -AMOUNT ELSE 0 END) AS Receivable
                 FROM ORDERING_FINANCE_RECORDS WHERE SOURCE_KIND='admission' AND VOIDED_AT IS NULL GROUP BY SESSION_ID) AF ON AF.SESSION_ID=S.ID
-            WHERE S.`BUSINESS_DATE` = @BusinessDate AND F.`VOIDED_AT` IS NULL;
+            WHERE S.`BUSINESS_DATE` = @BusinessDate;
 
             SELECT I.`ID` AS Id, I.`SETTLEMENT_ID` AS SettlementId, I.`STAFF_ID` AS StaffId,
                    I.`CREATED_AT` AS CreatedAt, I.`CREATED_BY` AS CreatedBy,
