@@ -77,6 +77,7 @@ public sealed partial class SettlementRepository
             return plan.Preview;
         }
         plan.ValidateConfirmation(confirmation);
+        await MarkOrderBackfillsAppliedAsync(connection, transaction, run.Id, run.BusinessDate, cancellationToken);
 
         var beforeJson = JsonSerializer.Serialize(new { Run = run, source.StaffInputs, source.Results, payments, corrections });
         foreach (var result in plan.Calculation.Results)

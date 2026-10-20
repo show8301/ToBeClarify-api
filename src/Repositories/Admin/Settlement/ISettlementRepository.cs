@@ -28,6 +28,7 @@ public sealed record SettlementSourceData
 
 public interface ISettlementRepository
 {
+    Task<int> GetPendingOrderBackfillCountAsync(string settlementId, CancellationToken ct);
     Task<SettlementRecalculationPreviewDto> RecalculateFinalizedAsync(DateOnly businessDate, int sessionNo,
         ConfirmSettlementRecalculationRequest? confirmation,
         Func<SettlementRunRow, SettlementSourceData, IReadOnlyList<SettlementPaymentEventRow>,

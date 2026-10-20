@@ -42,7 +42,10 @@ public sealed partial class SettlementService : ISettlementService
         {
             var financeAnomalies = new List<SettlementAnomalyDto>();
             _ = new SettlementRevenueAllocation(source, financeAnomalies);
-            return MapOverview(run, rule, source, source.Results, BuildFinalizedSummary(run, source.Results), financeAnomalies);
+            return MapOverview(run, rule, source, source.Results, BuildFinalizedSummary(run, source.Results), financeAnomalies) with
+            {
+                PendingOrderBackfillCount = await _repository.GetPendingOrderBackfillCountAsync(run.Id, cancellationToken)
+            };
         }
         var calculation = Calculate(run, rule, source);
         return MapOverview(run, rule, source, calculation.Results, calculation.Summary, calculation.Anomalies);

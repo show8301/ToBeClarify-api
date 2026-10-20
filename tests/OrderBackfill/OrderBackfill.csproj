@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>
+  <ItemGroup><FrameworkReference Include="Microsoft.AspNetCore.App" /><ProjectReference Include="../../ToBeClarify.Api.csproj" /></ItemGroup>
+  <ItemGroup><None Update="schema.sql" CopyToOutputDirectory="PreserveNewest" /><None Include="../../db/migrations/20261020_02_order_backfills.sql" Link="migration.sql" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
+</Project>

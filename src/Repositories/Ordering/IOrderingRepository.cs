@@ -4,6 +4,7 @@ namespace ToBeClarify.Api.Repositories.Ordering;
 
 public interface IOrderingRepository
 {
+    Task<string?> FindOrderBackfillAsync(string sessionId, string operationId, string payloadHash, CancellationToken ct);
     Task<IReadOnlyList<AdminOrderSessionRow>> GetServiceSessionsAsync(DateOnly day, CancellationToken ct);
     Task<OrderBundle> GetServiceOrdersAsync(DateOnly day, CancellationToken ct);
     Task<IReadOnlyList<ToBeClarify.Api.Models.Dtos.OrderFulfillmentDto>> GetServiceFulfillmentAsync(DateOnly day, CancellationToken ct);
