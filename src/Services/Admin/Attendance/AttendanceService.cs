@@ -32,7 +32,8 @@ public sealed class AttendanceService(AttendanceRepository repository, IAppClock
         {
             OperationId = op.ToString(), BusinessDate = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
             StaffId = staffId, Action = request.Action.Trim().ToLowerInvariant(), OccurredAt = request.OccurredAt,
-            PayrollRole = request.PayrollRole, EndedAt = request.EndedAt, Minutes = request.Minutes, Reason = reason
+            PayrollRole = request.PayrollRole, ExpectedPayrollSnapshotVersion = request.ExpectedPayrollSnapshotVersion,
+            EndedAt = request.EndedAt, Minutes = request.Minutes, Reason = reason
         };
         return await repository.ApplyAsync(staffId, normalized, clock.LocalDateTime, ActorId(actor), ct);
     }

@@ -71,7 +71,7 @@ public static class PayrollSnapshotStore
     }
 
     public static async Task ConfirmAsync(MySqlConnection connection, MySqlTransaction tx, string staffId,
-        DateTime date, string role, string reason, string actorId, DateTime now, CancellationToken ct)
+        DateTime date, string role, string reason, string actorId, DateTime now, CancellationToken ct, int? expectedVersion = null)
     {
         if (string.IsNullOrWhiteSpace(reason))
             throw new BusinessException("確認或更正計薪職位必須填寫原因。", "PAYROLL_REASON_REQUIRED");
@@ -88,14 +88,19 @@ public static class PayrollSnapshotStore
         await connection.ExecuteScalarAsync<string>(new CommandDefinition(
             "SELECT ID FROM ORDERING_RUNTIME_LOCKS WHERE ID='operating_period' FOR UPDATE;",
             transaction: tx, cancellationToken: ct));
-        var finalized = await connection.QueryAsync<string>(new CommandDefinition("""
+        var statuses = await connection.QueryAsync<string>(new CommandDefinition("""
             SELECT STATUS FROM SETTLEMENT_RUNS WHERE BUSINESS_DATE=@Date ORDER BY ID FOR UPDATE;
             """, new { Date = date.Date }, tx, cancellationToken: ct));
         var current = await ReadAsync(connection, tx, staffId, date, ct);
         if (current is null)
             throw new BusinessException("尚無上班職位紀錄；請先確認班表並開始上班。", "PAYROLL_NOT_STARTED");
-        if (finalized.Any(status => status == "finalized") && current.PayrollRole is not null)
-            throw new ConflictException("本營業日已有正式結算；請使用結算更正流程，不能改寫上班職位。", "SETTLEMENT_LOCKED");
+        // Older clients may still confirm unfinalized/legacy unresolved shifts.
+        // Changing an existing finalized role always requires an explicit version.
+        if (expectedVersion is null && current.PayrollRole is not null && statuses.Any(status => status == "finalized"))
+            throw new ConflictException("更正已結算職位需要重新讀取目前職位版本。", "PAYROLL_SNAPSHOT_CHANGED");
+        if (expectedVersion is not null && expectedVersion != current.Version)
+            throw new ConflictException("計薪職位已被更新，請重新讀取後再確認。", "PAYROLL_SNAPSHOT_CHANGED");
+        if (current.PayrollRole == role) return;
         await connection.ExecuteAsync(new CommandDefinition("""
             UPDATE STAFF_PAYROLL_SNAPSHOTS SET PAYROLL_ROLE=@Role, CAN_USE_BACKSTAGE=@CanUseBackstage,
               VERSION=VERSION+1,CONFIRMED_AT=@Now,CONFIRMED_BY=@ActorId

@@ -131,7 +131,9 @@ public sealed partial class SettlementService
         var beforePayroll = source.Results.Sum(x => (decimal)x.AfterRounding);
         var afterPayroll = calculation.Results.Sum(x => (decimal)x.AfterRounding);
         var token = RecalculationToken(new { run, source, payments, corrections, adjustments });
-        var hasChanges = changes.Count > 0 || run.NetCash != calculation.Run.NetCash
+        var roleInputsChanged = !source.StaffInputs.OrderBy(x => x.Id).Select(x => (x.Id, x.Role, x.PayrollSnapshotVersion))
+            .SequenceEqual(refreshed.StaffInputs.OrderBy(x => x.Id).Select(x => (x.Id, x.Role, x.PayrollSnapshotVersion)));
+        var hasChanges = changes.Count > 0 || roleInputsChanged || run.NetCash != calculation.Run.NetCash
             || run.CompanyIncome != calculation.Run.CompanyIncome || run.GrossRevenue != calculation.Run.GrossRevenue
             || run.RetainedAmount != calculation.Run.RetainedAmount
             || run.PendingFinanceCount != calculation.Run.PendingFinanceCount || changedAdjustmentInputs;

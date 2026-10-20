@@ -127,7 +127,76 @@ run.RuleSnapshotJson = "{broken}";
 try { Prepare(source); throw new Exception("Invalid snapshot was accepted."); }
 catch (TargetInvocationException ex) when (ex.InnerException is BusinessException) { checks++; }
 run.RuleSnapshotJson = originalJson;
+var approvedInput = new SettlementStaffInputRow
+{
+    Id = "approved-input", StaffId = "xiaomi", DisplayName = "小米", Role = "service", PayrollSnapshotVersion = 1,
+    ActualMinutes = 90, AttendanceSource = "backfill_approved", AttendanceRequestId = "approved-request",
+    AttendanceApprovedBy = "reviewer", AttendanceApprovedAt = new(2026, 10, 19), ActivityHours = 2, Note = "approved minutes"
+};
+var correctedRole = new SettlementAttendanceCandidateRow
+{
+    StaffId = "xiaomi", DisplayName = "小米", PayrollRole = "designated", PayrollSnapshotVersion = 2, ActualMinutes = 117
+};
+var roleSource = source with { StaffInputs = [approvedInput], PayrollAssignments = [correctedRole] };
+var rolePlan = Prepare(roleSource);
+var migratedInput = rolePlan.Calculation.StaffInputs.Single();
+Check(migratedInput.Role == "designated" && migratedInput.PayrollSnapshotVersion == 2 && migratedInput.Id == "approved-input",
+    "Role correction migrates the existing primary input instead of adding a second wage input.");
+Check(migratedInput.ActualMinutes == 90 && migratedInput.ActivityHours == 2 && migratedInput.Note == "approved minutes"
+    && migratedInput.AttendanceSource == "backfill_approved" && migratedInput.AttendanceRequestId == "approved-request"
+    && migratedInput.AttendanceApprovedBy == "reviewer" && migratedInput.AttendanceApprovedAt == approvedInput.AttendanceApprovedAt,
+    "Changing only the role preserves reviewed minutes and approval provenance despite unrelated clock events.");
+Check(approvedInput.Role == "service" && approvedInput.PayrollSnapshotVersion == 1 && approvedInput.ActualMinutes == 90,
+    "Preview leaves the finalized input snapshot untouched.");
+Check(rolePlan.Preview.HasChanges && rolePlan.Preview.Anomalies.Count == 0,
+    "A reviewed role correction can create a new settlement version without another attendance approval.");
+Check(rolePlan.Preview.SourceToken != Prepare(roleSource with { PayrollAssignments = [new() {
+    StaffId = "xiaomi", PayrollRole = "manager", PayrollSnapshotVersion = 3 }] }).Preview.SourceToken,
+    "A later role correction invalidates a previously displayed recalculation preview.");
+var sameRoleSource = roleSource with { AttendanceEvents = [], StaffInputs = [new() { Id = "same", StaffId = "xiaomi", Role = "designated",
+    PayrollSnapshotVersion = 1, ActualMinutes = 90, AttendanceSource = "backfill_approved" }] };
+var sameRoleCalculation = calculate.Invoke(service, [run, rule, sameRoleSource])!;
+sameRoleSource = sameRoleSource with { Results = (IReadOnlyList<SettlementResultLineRow>)sameRoleCalculation.GetType().GetProperty("Results")!.GetValue(sameRoleCalculation)! };
+var equalMoney = Prepare(sameRoleSource);
+Check(equalMoney.Preview.HasChanges && equalMoney.Preview.PayrollDelta == 0,
+    "A corrected snapshot version is auditable even when the final role has changed back with no monetary delta.");
+var roleSettled = roleSource with { StaffInputs = rolePlan.Calculation.StaffInputs, Results = rolePlan.Calculation.Results };
+Check(!Prepare(roleSettled).Preview.HasChanges, "Confirmed role input versions stop being pending on a subsequent preview.");
+foreach (var nextRole in new[] { "service", "manager", "designated", "backstage" })
+{
+    var front = new SettlementStaffInputRow { Id = "front", StaffId = "dual", Role = "service", PayrollSnapshotVersion = 1,
+        ActualMinutes = 90, AttendanceSource = "backfill_approved", AttendanceRequestId = "original" };
+    var secondary = new SettlementStaffInputRow { Id = "backstage", StaffId = "dual", Role = "backstage",
+        PayrollSnapshotVersion = 1, IsBackstageParticipant = true };
+    var rows = new List<SettlementStaffInputRow> { front, secondary };
+    var assignment = new SettlementAttendanceCandidateRow { StaffId = "dual", PayrollRole = nextRole,
+        PayrollSnapshotVersion = 2, CanUseBackstage = true, BackstageParticipant = true };
+    SettlementAttendanceSync.ReconcilePayrollRoles(rows, [assignment]);
+    Check(rows.Count(x => x.Role == nextRole) == 1 && rows.Select(x => x.Role).Distinct().Count() == rows.Count
+        && rows.All(x => x.PayrollSnapshotVersion == 2) && rows.Single(x => x.Role == nextRole).AttendanceRequestId == "original",
+        $"Migration to {nextRole} retains one primary wage and cannot duplicate backstage participation.");
+    SettlementAttendanceSync.ReconcilePayrollRoles(rows, [assignment]);
+    Check(rows.Count == (nextRole == "backstage" ? 1 : 2), "Repeated reconciliation is idempotent.");
+}
+var poolSource = new SettlementSourceData
+{
+    Period = new() { PeriodStatus = "settled" },
+    Orders = [new() { OrderId = "meal", Subtotal = 1000, TotalAmount = 1000 }],
+    Items = [new() { ItemId = "item", OrderId = "meal", ItemType = "menu_item", LineTotal = 1000 }],
+    StaffInputs = [new() { Id = "a", StaffId = "a", Role = "service", ActualMinutes = 60, AttendanceSource = "clock", PayrollSnapshotVersion = 1 },
+        new() { Id = "b", StaffId = "b", Role = "service", ActualMinutes = 60, AttendanceSource = "clock", PayrollSnapshotVersion = 1 }],
+    PayrollAssignments = [new() { StaffId = "a", PayrollRole = "service", ActualMinutes = 60, PayrollSnapshotVersion = 1 },
+        new() { StaffId = "b", PayrollRole = "service", ActualMinutes = 60, PayrollSnapshotVersion = 1 }]
+};
+var poolCalculation = calculate.Invoke(service, [run, rule, poolSource])!;
+poolSource = poolSource with { Results = (IReadOnlyList<SettlementResultLineRow>)poolCalculation.GetType().GetProperty("Results")!.GetValue(poolCalculation)! };
+var poolCorrected = Prepare(poolSource with { PayrollAssignments = [new() { StaffId = "a", PayrollRole = "designated", PayrollSnapshotVersion = 2, ActualMinutes = 60 }, poolSource.PayrollAssignments[1]] });
+Check(poolSource.Results.Single(x => x.StaffId == "b").RevenueShare == 125
+    && poolCorrected.Calculation.Results.Single(x => x.StaffId == "b").RevenueShare == 250
+    && poolCorrected.Preview.Changes.Any(x => x.StaffId == "b"),
+    "Correcting a role recalculates and previews affected coworkers' shared-pool wages.");
 Console.WriteLine($"Passed {checks} settlement recalculation memory checks; no database connections were used.");
+if (args.Contains("--payroll-integration")) await PayrollRoleIntegration.Run();
 
 SettlementRecalculationPlan Prepare(SettlementSourceData value)
     => PrepareWithAdjustments(value, null);

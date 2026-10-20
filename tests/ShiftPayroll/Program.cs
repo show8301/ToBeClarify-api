@@ -266,8 +266,12 @@ Check(SettlementAttendanceSync.MergeMissingInputs("run", [], [fixedRole]).Any(x 
     "Missing historic role is unresolved instead of inferred from support.");
 fixedRole.PayrollRole = "service";
 rows[0].PayrollSnapshotVersion = 0;
+Check(SettlementAttendanceSync.MergeMissingInputs("run", rows, [fixedRole]).Count == 0
+    && rows[0].PayrollSnapshotVersion == fixedRole.PayrollSnapshotVersion,
+    "A detached input with an older version follows the confirmed payroll snapshot.");
+rows[0].PayrollSnapshotVersion = 99;
 Check(SettlementAttendanceSync.MergeMissingInputs("run", rows, [fixedRole]).Any(x => x.Code == "PAYROLL_SNAPSHOT_CHANGED"),
-    "An old input version is visibly stale.");
+    "An input ahead of the confirmed snapshot remains a visible conflict.");
 Check(!StaffWorkRoles.AllowedSupportRoles(true).Contains("backstage"), "Ordinary staff cannot select backstage support.");
 Check(StaffWorkRoles.AllowedSupportRoles(true, true).Contains("backstage"), "Developers can select backstage support.");
 

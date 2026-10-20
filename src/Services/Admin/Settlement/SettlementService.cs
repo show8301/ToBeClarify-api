@@ -42,9 +42,18 @@ public sealed partial class SettlementService : ISettlementService
         {
             var financeAnomalies = new List<SettlementAnomalyDto>();
             _ = new SettlementRevenueAllocation(source, financeAnomalies);
-            return MapOverview(run, rule, source, source.Results, BuildFinalizedSummary(run, source.Results), financeAnomalies) with
+            var refreshed = SettlementAttendanceSync.RefreshFinalizedSource(run.Id, source);
+            var roleCorrections = source.StaffInputs.Where(input => source.PayrollAssignments.Any(assignment =>
+                    assignment.StaffId == input.StaffId && assignment.PayrollRole is not null
+                    && (input.PayrollSnapshotVersion ?? 0) < assignment.PayrollSnapshotVersion))
+                .GroupBy(x => x.StaffId).Select(group => new SettlementPayrollRoleCorrectionDto(group.Key,
+                    group.First().DisplayName, group.FirstOrDefault(x => x.Role != "backstage")?.Role ?? group.First().Role,
+                    source.PayrollAssignments.Single(x => x.StaffId == group.Key).PayrollRole!)).ToArray();
+            // Display corrected inputs for review, while summary/results remain the finalized version.
+            return MapOverview(run, rule, source with { StaffInputs = roleCorrections.Length > 0 ? refreshed.StaffInputs : source.StaffInputs }, source.Results, BuildFinalizedSummary(run, source.Results), financeAnomalies) with
             {
-                PendingOrderBackfillCount = await _repository.GetPendingOrderBackfillCountAsync(run.Id, cancellationToken)
+                PendingOrderBackfillCount = await _repository.GetPendingOrderBackfillCountAsync(run.Id, cancellationToken),
+                PendingPayrollRoleCorrections = roleCorrections
             };
         }
         var calculation = Calculate(run, rule, source);
@@ -807,8 +816,9 @@ public sealed partial class SettlementService : ISettlementService
                 var payableHours = run.DayType != "event" && x.Role == "backstage"
                     ? 0 : PayableHours(x.ActualMinutes, rule.TimeRoundMinutes);
                 var backfill = source.AttendanceBackfillRequests
-                    .Where(r => r.StaffId == x.StaffId && r.Role == x.Role)
-                    .OrderByDescending(r => r.RequestedAt).FirstOrDefault();
+                    .Where(r => r.Id == x.AttendanceRequestId || r.StaffId == x.StaffId && r.Role == x.Role)
+                    .OrderByDescending(r => r.Id == x.AttendanceRequestId)
+                    .ThenByDescending(r => r.RequestedAt).FirstOrDefault();
                 return new SettlementStaffInputDto(x.StaffId, x.DisplayName, x.RoleTitle, x.Role,
                     x.IsWorking, x.ActualMinutes, x.ActivityHours, payableHours,
                     IsPublicTipEligible(x, payableHours), x.IsBackstageParticipant, x.Note,
