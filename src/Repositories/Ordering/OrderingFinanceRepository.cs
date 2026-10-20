@@ -7,7 +7,7 @@ using ToBeClarify.Api.Models.Dtos;
 
 namespace ToBeClarify.Api.Repositories.Ordering;
 
-public sealed class OrderingFinanceRepository(AppDbContext dbContext)
+public sealed partial class OrderingFinanceRepository(AppDbContext dbContext)
 {
     private const string SessionSql = """
         SELECT s.ID AS SessionId, s.BUSINESS_DATE AS BusinessDate,

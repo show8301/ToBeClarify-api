@@ -558,7 +558,22 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await connection.ExecuteScalarAsync<string>(new CommandDefinition("SELECT ID FROM ORDERING_RUNTIME_LOCKS WHERE ID='operating_period' FOR UPDATE",transaction:transaction,cancellationToken:cancellationToken));
         var currentPeriod = await connection.QuerySingleOrDefaultAsync<BusinessPeriodRow>(new CommandDefinition("SELECT P.PERIOD_STATUS PeriodStatus,P.INTAKE_MODE IntakeMode,P.FLOW_VERSION FlowVersion FROM CUSTOMER_ORDER_SESSIONS S JOIN BUSINESS_PERIODS P ON P.ID=S.BUSINESS_PERIOD_ID WHERE S.ID=@SessionId",new{order.SessionId},transaction,cancellationToken:cancellationToken));
-        if (currentPeriod?.FlowVersion >= 2)
+        if (order.Backfill is not null)
+        {
+            if (order.ActorType != "staff" || string.IsNullOrWhiteSpace(order.ActorId))
+                throw new ForbiddenException("補登須由後台店員執行。", "ORDER_BACKFILL_ADMIN_REQUIRED");
+            var prior = await FindOrderBackfillCoreAsync(connection, transaction, order.SessionId,
+                order.Backfill.OperationId, order.BackfillPayloadHash!, cancellationToken);
+            if (prior is not null) { await transaction.CommitAsync(cancellationToken); return prior; }
+            if (currentPeriod?.PeriodStatus is not ("open" or "closed" or "settled"))
+                throw new ConflictException("營業期已變更，請重新讀取。", "ORDER_BACKFILL_PERIOD_INVALID");
+            var duplicate = await connection.QuerySingleOrDefaultAsync<string>(new CommandDefinition(
+                "SELECT O.ORDER_NUMBER FROM ORDER_BACKFILLS B JOIN ORDERS O ON O.ID=B.ORDER_ID WHERE B.SESSION_ID=@SessionId AND B.DUPLICATE_HASH=@Hash;",
+                new { order.SessionId, Hash = order.BackfillDuplicateHash }, transaction, cancellationToken:cancellationToken));
+            if (duplicate is not null)
+                throw new ConflictException($"同時間與內容已有補登訂單 {duplicate}，請先核對原單。", "ORDER_BACKFILL_DUPLICATE");
+        }
+        else if (currentPeriod?.FlowVersion >= 2)
         {
             // Staff-assisted orders can be entered while a period is closed so
             // missed orders can be reconciled before settlement.  A settled
@@ -576,12 +591,14 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
         {
             var existing = await MenuQuoteService.ConsumeAsync(connection, transaction, order, cancellationToken);
             if (existing is not null) { await transaction.CommitAsync(cancellationToken); return existing; }
-            await MenuQuoteService.ValidateInventoryAsync(connection, transaction, order, cancellationToken);
+            if (order.Backfill is null)
+                await MenuQuoteService.ValidateInventoryAsync(connection, transaction, order, cancellationToken);
             var remaining = await connection.ExecuteScalarAsync<int?>(new CommandDefinition(
-                "SELECT `REMAINING_MEAL_CREDIT` FROM `CUSTOMER_ORDER_SESSIONS` WHERE `ID` = @SessionId AND `SESSION_STATUS` = 'active' FOR UPDATE;",
-                new { order.SessionId }, transaction, cancellationToken: cancellationToken));
+                "SELECT `REMAINING_MEAL_CREDIT` FROM `CUSTOMER_ORDER_SESSIONS` WHERE `ID` = @SessionId AND (`SESSION_STATUS` = 'active' OR (@Backfill=TRUE AND `SESSION_STATUS`='readonly')) FOR UPDATE;",
+                new { order.SessionId, Backfill = order.Backfill is not null }, transaction, cancellationToken: cancellationToken));
             if (!remaining.HasValue) throw new BusinessException("點餐碼已失效。", "ORDER_SESSION_INACTIVE");
-            await ValidateNewNominationEligibilityAsync(connection, transaction, order, cancellationToken);
+            if (order.Backfill is null)
+                await ValidateNewNominationEligibilityAsync(connection, transaction, order, cancellationToken);
             if (order.MealCreditApplied > remaining.Value)
                 throw new BusinessException("信物折抵餘額已變更，請重新確認訂單。", "MEAL_CREDIT_CHANGED");
             if (order.QuoteId is not null && order.MenuSnapshotJson is not null &&
@@ -621,7 +638,7 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
                     item.RecipientStaffId, item.RecipientStaffName, Now = order.SubmittedAt }),
                 transaction, cancellationToken: cancellationToken));
 
-            foreach (var room in order.Rooms)
+            foreach (var room in order.Backfill is null ? order.Rooms : [])
             {
                 var activeRoom = await connection.ExecuteScalarAsync<string?>(new CommandDefinition("""
                     SELECT `ID` FROM `ROOMS`
@@ -717,10 +734,13 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
             }
 
             await InsertHistoryAsync(connection, transaction, order.Id, null, order.Status,
-                order.ActorType == "manager_transfer" ? "經理建立指名承接請求" : order.ActorType == "staff" ? "店員代客送出訂單" : "顧客送出訂單",
+                order.Backfill is not null ? $"店員補登已成交訂單：{order.Backfill.Reason.Trim()}" : order.ActorType == "manager_transfer" ? "經理建立指名承接請求" : order.ActorType == "staff" ? "店員代客送出訂單" : "顧客送出訂單",
                 order.ActorType, order.ActorId, order.SubmittedAt, cancellationToken);
-            await MenuNotifications.EnqueueAsync(connection, transaction, order, cancellationToken);
+            if (order.Backfill is null)
+                await MenuNotifications.EnqueueAsync(connection, transaction, order, cancellationToken);
             await InitializeFulfillmentAsync(connection, transaction, order.Id, order.SessionId, order.SubmittedAt, cancellationToken);
+            if (order.Backfill is not null)
+                await CompleteBackfillAsync(connection, transaction, order, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return order.Id;
         }
@@ -751,8 +771,8 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
                    O.`CANCELLED_AT` AS CancelledAt, O.`SUBTOTAL` AS Subtotal,
                    O.`MEAL_CREDIT_APPLIED` AS MealCreditApplied, O.`TOTAL_AMOUNT` AS TotalAmount,
                    O.`CUSTOMER_NOTE` AS CustomerNote, O.`CUSTOMER_LOCATION` AS CustomerLocation,
-                   O.`INTERNAL_NOTE` AS InternalNote
-            FROM `ORDERS` O WHERE {where} ORDER BY O.`SUBMITTED_AT` DESC;
+                   O.`INTERNAL_NOTE` AS InternalNote, B.SNAPSHOT_JSON AS BackfillJson
+            FROM `ORDERS` O LEFT JOIN ORDER_BACKFILLS B ON B.ORDER_ID=O.ID WHERE {where} ORDER BY O.`SUBMITTED_AT` DESC;
             SELECT I.`ID` AS Id, I.`ORDER_ID` AS OrderId, I.`ITEM_TYPE` AS ItemType,
                    I.`REFERENCE_ID` AS ReferenceId, I.`PARENT_ITEM_ID` AS ParentItemId,
                    I.`NAME_SNAPSHOT` AS NameSnapshot, I.`UNIT_PRICE` AS UnitPrice,

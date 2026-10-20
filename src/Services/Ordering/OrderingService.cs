@@ -190,6 +190,7 @@ public sealed partial class OrderingService : IOrderingService
 
     public async Task<MenuQuoteDto> QuoteOrderAsync(string token, SubmitOrderRequest request, CancellationToken cancellationToken)
     {
+        if (request.Backfill is not null) throw new ForbiddenException("補登須由後台店員執行。", "ORDER_BACKFILL_ADMIN_REQUIRED");
         if (request.IsManagerTransfer) throw new ForbiddenException("轉單須由經理建立。", "MANAGER_TRANSFER_REQUIRED");
         var session = await ValidateTokenAsync(token, cancellationToken);
         var order = await BuildOrderAsync(session, request, cancellationToken);
@@ -198,6 +199,7 @@ public sealed partial class OrderingService : IOrderingService
 
     public async Task<OrderDto> SubmitOrderAsync(string token, SubmitOrderRequest request, CancellationToken cancellationToken)
     {
+        if (request.Backfill is not null) throw new ForbiddenException("補登須由後台店員執行。", "ORDER_BACKFILL_ADMIN_REQUIRED");
         if (request.IsManagerTransfer) throw new ForbiddenException("轉單須由經理建立。", "MANAGER_TRANSFER_REQUIRED");
         var session = await ValidateTokenAsync(token, cancellationToken);
         var existing = await _quotes.ExistingOrderAsync(session.Id, request.QuoteToken, cancellationToken);
@@ -226,8 +228,18 @@ public sealed partial class OrderingService : IOrderingService
         ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
         ValidateManagerTransfer(request, actor);
+        if (request.Backfill is not null && string.IsNullOrWhiteSpace(request.QuoteToken))
+            throw new ConflictException("補登請先預覽原成交金額與帳款，再確認送出。", "MENU_QUOTE_REQUIRED");
         var session = await GetSessionByIdAsync(sessionId, cancellationToken);
-        var existing = await _quotes.ExistingOrderAsync(session.Id, request.QuoteToken, cancellationToken);
+        if (request.Backfill is not null)
+        {
+            var prior = await _repository.FindOrderBackfillAsync(session.Id, request.Backfill.OperationId,
+                OrderBackfillPolicy.PayloadHash(request), cancellationToken);
+            if (prior is not null)
+                return (await MapOrdersAsync(await _repository.GetOrderAsync(prior, cancellationToken), cancellationToken)).Single();
+        }
+        var existing = request.Backfill is null
+            ? await _quotes.ExistingOrderAsync(session.Id, request.QuoteToken, cancellationToken) : null;
         if (existing is not null)
             return (await MapOrdersAsync(await _repository.GetOrderAsync(existing, cancellationToken), cancellationToken)).Single();
         if (_configuration.GetValue<bool>("Menu:RequireQuote") && request.Meals.Count > 0 &&
@@ -239,7 +251,11 @@ public sealed partial class OrderingService : IOrderingService
             QuoteId = request.QuoteToken,
             QuoteFingerprint = MenuQuoteService.Fingerprint(order),
             ActorType = request.IsManagerTransfer ? "manager_transfer" : "staff",
-            ActorId = ActorId(actor)
+            ActorId = ActorId(actor),
+            ActorRole = ActorRole(actor),
+            Backfill = request.Backfill,
+            BackfillPayloadHash = request.Backfill is null ? null : OrderBackfillPolicy.PayloadHash(request),
+            BackfillDuplicateHash = request.Backfill is null ? null : OrderBackfillPolicy.DuplicateHash(request)
         }, cancellationToken);
         return (await MapOrdersAsync(await _repository.GetOrderAsync(id, cancellationToken), cancellationToken)).Single();
     }
@@ -256,7 +272,19 @@ public sealed partial class OrderingService : IOrderingService
     private async Task<NewOrderAggregate> BuildAdminOrderAsync(OrderSessionRow session, SubmitOrderRequest request,
         CancellationToken cancellationToken)
     {
-        var order = await BuildOrderAsync(session, request, cancellationToken, allowStaffAssist: true);
+        if (request.Backfill is not null)
+        {
+            if (request.IsManagerTransfer)
+                throw new BusinessException("轉單不可與已成交補登混用。", "ORDER_BACKFILL_TRANSFER_INVALID");
+            var period = await _repository.GetBusinessPeriodByDateAsync(DateOnly.FromDateTime(session.BusinessDate), cancellationToken);
+            OrderBackfillPolicy.Validate(request.Backfill, session, period, _clock.LocalDateTime);
+        }
+        NewOrderAggregate order;
+        try { order = await BuildOrderAsync(session, request, cancellationToken, allowStaffAssist: true); }
+        catch (OverflowException)
+        {
+            throw new BusinessException("訂單總額超過可處理範圍，請核對金額與數量。", "ORDER_AMOUNT_OUT_OF_RANGE");
+        }
         // The manager has already agreed to take this request; the designated person still responds normally.
         return request.IsManagerTransfer ? order with { StoreConfirmationStatus = "approved" } : order;
     }
@@ -266,19 +294,24 @@ public sealed partial class OrderingService : IOrderingService
     {
         if (request.Meals.Count + request.Nominations.Count + request.Rooms.Count + request.Tips.Count == 0)
             throw new BusinessException("本次點餐尚未加入任何項目。", "ORDER_EMPTY");
-        if (request.Nominations.Select(item => item.StaffId).Distinct(StringComparer.Ordinal).Count() > session.MaxNominatedStaff)
+        if (request.Backfill is null && request.Nominations.Select(item => item.StaffId).Distinct(StringComparer.Ordinal).Count() > session.MaxNominatedStaff)
             throw new BusinessException($"本次最多可同時指名 {session.MaxNominatedStaff} 位店員。", "NOMINATION_LIMIT_EXCEEDED");
         if (request.Nominations.GroupBy(item => item.StaffId, StringComparer.Ordinal).Any(group => group.Count() > 1))
             throw new BusinessException("同一張訂單每位店員只能選擇一項服務；追加時數請另開新訂單。", "NOMINATION_STAFF_DUPLICATED");
 
         var settings = await _repository.GetSettingsAsync(cancellationToken);
         var now = _clock.LocalDateTime;
-        var submission = await ResolveSubmissionAsync(session, cancellationToken, allowStaffAssist);
+        var backfill = request.Backfill;
+        var submission = backfill is null
+            ? await ResolveSubmissionAsync(session, cancellationToken, allowStaffAssist)
+            : new SubmissionContext(await ResolveSessionBusinessContextAsync(session, cancellationToken), "staff_only", false);
+        var backfillPeriod = backfill is null ? null : await _repository.GetBusinessPeriodByDateAsync(
+            DateOnly.FromDateTime(session.BusinessDate), cancellationToken);
         var businessContext = submission.Context;
         var businessDate = DateOnly.FromDateTime(session.BusinessDate);
         var intakeMode = submission.IntakeMode;
         var requiresStoreConfirmation = submission.RequiresStoreConfirmation;
-        if (request.Nominations.Count > 0 && settings.NominationPausedUntil is { } pausedUntil && pausedUntil > now)
+        if (backfill is null && request.Nominations.Count > 0 && settings.NominationPausedUntil is { } pausedUntil && pausedUntil > now)
             throw new BusinessException("目前暫停受理指名服務，請稍後再試。", "NOMINATION_PAUSED");
 
         var orderId = NewId();
@@ -294,6 +327,8 @@ public sealed partial class OrderingService : IOrderingService
         foreach (var line in request.Meals)
         {
             var snapshot = MenuQuoteService.ResolveLine(menu, line);
+            if (backfill is not null && line.UnitPrice.HasValue)
+                snapshot = snapshot with { UnitPrice = line.UnitPrice.Value };
             var isChampagne = snapshot.EventCategories.Contains("champagne_tower");
             var recipientId = string.IsNullOrWhiteSpace(line.RecipientStaffId) ? null : line.RecipientStaffId.Trim();
             if (!isChampagne && recipientId is not null)
@@ -317,18 +352,19 @@ public sealed partial class OrderingService : IOrderingService
             var staffId = Required(line.StaffId, "STAFF_ID_REQUIRED");
             var mode = line.Mode == "companionship" ? "companionship" : "service";
             var startsAt = ToTaiwanDateTime(line.RequestedStartsAt);
-            if (startsAt < now)
+            if (backfill is null && startsAt < now)
                 throw new BusinessException("指名開始時間不可早於目前時間。", "NOMINATION_START_IN_PAST");
             var staff = await _repository.GetStaffNominationAsync(staffId, businessDate,
                 startsAt, cancellationToken);
-            if (staff is null || !staff.IsWorkingToday || !staff.StaffIsNominatable)
+            if (staff is null || (backfill is null && (!staff.IsWorkingToday || !staff.StaffIsNominatable)))
                 throw new BusinessException("此店員目前無法指名。", "NOMINATION_UNAVAILABLE");
             StaffOfferRow? offer = null;
             if (mode == "service")
             {
                 offer = await _repository.GetStaffOfferAsync(staffId,
                     Required(line.ServiceId, "SERVICE_ID_REQUIRED"), businessDate, cancellationToken);
-                if (offer is null || !offer.ServiceIsNominatable || !offer.ServiceIsEnabled || !offer.Price.HasValue)
+                if (offer is null || (backfill is null && (!offer.ServiceIsNominatable || !offer.ServiceIsEnabled))
+                    || (!offer.Price.HasValue && !(backfill is not null && line.ServiceUnitPrice.HasValue)))
                     throw new BusinessException("此服務目前無法指名。", "NOMINATION_UNAVAILABLE");
             }
             var coveredMinutes = checked(line.SegmentCount * settings.SegmentMinutes);
@@ -339,26 +375,29 @@ public sealed partial class OrderingService : IOrderingService
                     "NOMINATION_SEGMENTS_INSUFFICIENT");
             // Slots are sold in whole segments. A 30-minute service therefore reserves
             // the staff for the full 40-minute two-segment window before their buffer.
-            var serviceEnds = startsAt.AddMinutes(coveredMinutes);
-            var busyUntil = serviceEnds.AddMinutes(Math.Max(0, staff.BufferMinutes));
+            var serviceEnds = backfill is null ? startsAt.AddMinutes(coveredMinutes)
+                : BackfillServiceEnd(startsAt, line.ActualEndsAt, backfillPeriod!, now);
+            var busyUntil = backfill is null ? serviceEnds.AddMinutes(Math.Max(0, staff.BufferMinutes)) : serviceEnds;
             if (businessContext.ActualOpenedAt is { } actualOpenedAt &&
                 busyUntil > actualOpenedAt.AddHours(48).DateTime)
                 throw new BusinessException("指名時段不可超出本營業期最長 48 小時範圍。",
                     "NOMINATION_OUTSIDE_BUSINESS_PERIOD_LIMIT");
-            if (businessContext.ProjectedCloseAt is { } projectedClose && busyUntil > projectedClose.DateTime)
+            if (backfill is null && businessContext.ProjectedCloseAt is { } projectedClose && busyUntil > projectedClose.DateTime)
                 requiresStoreConfirmation = true;
-            if (await _repository.IsStaffBusyAsync(staff.StaffId, startsAt, busyUntil, cancellationToken))
+            if (backfill is null && await _repository.IsStaffBusyAsync(staff.StaffId, startsAt, busyUntil, cancellationToken))
                 throw new BusinessException($"{staff.StaffName} 在所選時段已忙碌，請改選時段。", "STAFF_TIME_CONFLICT");
 
             var baseItemId = NewId();
-            var baseTotal = checked(settings.BaseNominationFee * line.SegmentCount);
+            var basePrice = backfill is not null ? line.BaseUnitPrice ?? settings.BaseNominationFee : settings.BaseNominationFee;
+            var baseTotal = checked(basePrice * line.SegmentCount);
             items.Add(new NewOrderItem(baseItemId, "nomination_base", staff.StaffId, null,
-                $"{staff.StaffName}｜基礎指名費", settings.BaseNominationFee, line.SegmentCount,
+                $"{staff.StaffName}｜基礎指名費", basePrice, line.SegmentCount,
                 line.SegmentCount, coveredMinutes, baseTotal, "per_segment", sort++));
 
             if (offer is not null)
             {
-                var perService = checked(offer.Price!.Value + Math.Max(0, line.ParticipantCount - 1) * (offer.AdditionalPersonPrice ?? 0));
+                var perService = backfill is not null && line.ServiceUnitPrice.HasValue ? line.ServiceUnitPrice.Value
+                    : checked(offer.Price!.Value + Math.Max(0, line.ParticipantCount - 1) * (offer.AdditionalPersonPrice ?? 0));
                 var serviceTotal = offer.DurationMinutes is > 0 ? perService : checked(perService * line.SegmentCount);
                 items.Add(new NewOrderItem(NewId(), "staff_service", offer.ServiceId, baseItemId,
                     $"{offer.StaffName}｜{offer.ServiceName}", perService,
@@ -374,23 +413,25 @@ public sealed partial class OrderingService : IOrderingService
         {
             var roomId = Required(line.RoomId, "ROOM_ID_REQUIRED");
             var room = await _repository.GetActiveRoomAsync(roomId, cancellationToken);
-            if (room is null || room.SegmentPrice <= 0)
+            if (room is null || (room.SegmentPrice <= 0 && !(backfill is not null && line.UnitPrice.HasValue)))
                 throw new BusinessException("此包廂目前無法訂購。", "ROOM_UNAVAILABLE");
 
             var startsAt = ToTaiwanDateTime(line.RequestedStartsAt);
-            if (startsAt < now)
+            if (backfill is null && startsAt < now)
                 throw new BusinessException("包廂開始時間不可早於目前時間。", "ROOM_START_IN_PAST");
             var coveredMinutes = checked(line.SegmentCount * settings.SegmentMinutes);
-            var endsAt = startsAt.AddMinutes(coveredMinutes);
+            var endsAt = backfill is null ? startsAt.AddMinutes(coveredMinutes)
+                : BackfillServiceEnd(startsAt, line.ActualEndsAt, backfillPeriod!, now);
 
             var itemId = NewId();
-            var total = checked(room.SegmentPrice * line.SegmentCount);
+            var roomPrice = backfill is not null ? line.UnitPrice ?? room.SegmentPrice : room.SegmentPrice;
+            var total = checked(roomPrice * line.SegmentCount);
             items.Add(new NewOrderItem(itemId, "room_service", room.Id, null,
-                $"{room.RoomName}｜包廂", room.SegmentPrice, 1, line.SegmentCount,
+                $"{room.RoomName}｜包廂", roomPrice, 1, line.SegmentCount,
                 coveredMinutes, total, "per_segment", sort++));
             rooms.Add(new NewOrderRoom(NewId(), itemId, room.Id, room.RoomName,
                 session.BusinessDate.Date, startsAt, endsAt, line.SegmentCount,
-                settings.SegmentMinutes, room.SegmentPrice, total, "scheduled"));
+                settings.SegmentMinutes, roomPrice, total, backfill is null ? "scheduled" : "completed"));
         }
 
         foreach (var line in request.Tips)
@@ -415,7 +456,7 @@ public sealed partial class OrderingService : IOrderingService
         var subtotal = items.Sum(item => item.LineTotal);
         var creditApplied = Math.Min(session.RemainingMealCredit, mealSubtotal);
         var hasNomination = nominees.Count > 0;
-        var initialStatus = requiresStoreConfirmation || hasNomination ? "submitted" : "confirmed";
+        var initialStatus = backfill is not null ? "completed" : requiresStoreConfirmation || hasNomination ? "submitted" : "confirmed";
         var storeConfirmationStatus = requiresStoreConfirmation ? "pending" : "not_required";
         if (requiresStoreConfirmation) intakeMode = "coordination";
         var aggregate = new NewOrderAggregate(orderId, session.Id, CreateOrderNumber(now), "standard", null,
@@ -424,10 +465,24 @@ public sealed partial class OrderingService : IOrderingService
             subtotal, creditApplied, subtotal - creditApplied,
             string.IsNullOrWhiteSpace(request.CustomerNote) ? null : request.CustomerNote.Trim(), items, nominees, rooms, tips);
         return aggregate with {
+            Backfill = backfill,
             CustomerLocation = string.IsNullOrWhiteSpace(request.CustomerLocation) ? null : request.CustomerLocation.Trim(),
             MenuSnapshotJson = JsonSerializer.Serialize(new MenuOrderSnapshot(menuLines,
             menu.PricingRules.Where(x => x.Policy.ShowOnOrder).Select(x => new MenuRuleSnapshot(x.Id, x.Title, x.Description, x.PriceText, x.Policy)).ToArray(),
             session.PrepaidMealCredit, settings.BaseNominationFee, settings.SegmentMinutes, session.RemainingMealCredit), MenuPolicies.Json) };
+    }
+
+    private static DateTime BackfillServiceEnd(DateTime startsAt, DateTimeOffset? endsAt,
+        BusinessPeriodRow period, DateTime now)
+    {
+        if (endsAt is null)
+            throw new BusinessException("補登已完成服務請填寫實際結束時間。", "ORDER_BACKFILL_END_REQUIRED");
+        var end = endsAt.Value.ToOffset(TimeSpan.FromHours(8)).DateTime;
+        OrderBackfillPolicy.ValidateTime(startsAt, period, now);
+        OrderBackfillPolicy.ValidateTime(end, period, now);
+        if (end <= startsAt)
+            throw new BusinessException("實際結束時間必須晚於開始時間。", "ORDER_BACKFILL_END_INVALID");
+        return end;
     }
 
     public async Task<OrderDto> SubmitAddonAsync(string token, SubmitAddonRequest request,
@@ -903,6 +958,7 @@ public sealed partial class OrderingService : IOrderingService
                         item.SegmentCount, item.SegmentMinutesSnapshot, item.UnitPrice, item.TotalAmount,
                         ToOffset(item.StartsAt)!.Value, ToOffset(item.EndsAt)!.Value, item.OrderStatus)).ToArray()) {
                             SessionId = order.SessionId, CustomerLocation = order.CustomerLocation,
+                            Backfill = order.BackfillJson is null ? null : JsonSerializer.Deserialize<OrderBackfillDto>(order.BackfillJson),
                             BusinessPeriodId = order.BusinessPeriodId, FlowVersion = order.FlowVersion,
                             Fulfillment = fulfillment.GetValueOrDefault(order.Id) ?? [],
                             MenuSnapshot = order.MenuSnapshotJson is null ? null : JsonSerializer.Deserialize<JsonElement>(order.MenuSnapshotJson)
@@ -1085,6 +1141,8 @@ public sealed partial class OrderingService : IOrderingService
             return new SubmissionContext(context, "normal", false);
         if (context.PeriodStatus != "open")
         {
+            if (allowStaffAssist && context.PeriodStatus == "settled")
+                throw new BusinessException("本時段已正式結算；請使用「補登已成交訂單」登記遺漏內容。", "ORDER_BACKFILL_REQUIRED");
             // A closed but not yet settled period still needs a staff-only path
             // for missed orders found after the doors are closed.  Customers
             // and already settled periods remain read-only.
