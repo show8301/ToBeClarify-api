@@ -32,6 +32,7 @@ public sealed class StaffAttendanceActionRequest
     [StringLength(36)] public string? StaffId { get; init; }
     [Required, RegularExpression("^(clock_in|clock_out|add_minutes|subtract_minutes|set_times|confirm_payroll_role|stop_orders|resume_orders)$")]
     public string Action { get; init; } = "clock_in";
+    [Range(1, int.MaxValue)] public int? ExpectedPayrollSnapshotVersion { get; init; }
     [RegularExpression("^(service|designated|manager|backstage)$")] public string? PayrollRole { get; init; }
     public DateTimeOffset? OccurredAt { get; init; }
     public DateTimeOffset? EndedAt { get; init; }

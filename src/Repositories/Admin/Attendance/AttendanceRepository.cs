@@ -17,7 +17,7 @@ public sealed class AttendanceRepository(AppDbContext dbContext)
         await SyncScheduledAsync(businessDate, now, ct);
         await using var connection = await dbContext.CreateOpenConnectionAsync(ct);
         var plans = (await connection.QueryAsync<PlanRow>(new CommandDefinition("""
-            SELECT COALESCE(P.ID,'') AS Id, M.ID AS StaffId, M.DISPLAY_NAME AS DisplayName,
+            SELECT COALESCE(P.ID,'') AS Id, CAST(M.ID AS CHAR(36)) AS StaffId, M.DISPLAY_NAME AS DisplayName,
                    COALESCE(P.BUSINESS_DATE,X.BUSINESS_DATE) AS BusinessDate, P.START_TIME AS StartTime, P.END_TIME AS EndTime,
                    P.IS_WORKING AS IsWorking, P.APPROVAL_STATUS AS ApprovalStatus,
                    EXISTS(SELECT 1 FROM ADMIN_USERS U WHERE U.STAFF_MEMBER_ID=M.ID AND U.IS_ACTIVE=TRUE AND U.ROLE_LEVEL='developer') AS CanUseBackstage,
@@ -86,6 +86,12 @@ public sealed class AttendanceRepository(AppDbContext dbContext)
         var now = nowOffset.ToOffset(TimeSpan.FromHours(8)).DateTime;
         await using var connection = await dbContext.CreateOpenConnectionAsync(ct);
         await using var tx = await connection.BeginTransactionAsync(ct);
+        // Recalculation holds the period lock before reading staff/snapshot rows.
+        // Take the same lock first so correction and recalculation cannot deadlock.
+        if (request.Action == "confirm_payroll_role")
+            await connection.ExecuteScalarAsync<string>(new CommandDefinition(
+                "SELECT ID FROM ORDERING_RUNTIME_LOCKS WHERE ID='operating_period' FOR UPDATE;",
+                transaction: tx, cancellationToken: ct));
         var prior = await connection.QuerySingleOrDefaultAsync<EventRow>(new CommandDefinition("""
             SELECT ID AS Id, STAFF_MEMBER_ID AS StaffId, BUSINESS_DATE AS BusinessDate, DUTY_PLAN_ID AS DutyPlanId,
                    EVENT_TYPE AS EventType, EVENT_AT AS EventAt, EVENT_END_AT AS EventEndAt, SOURCE AS Source,
@@ -95,7 +101,7 @@ public sealed class AttendanceRepository(AppDbContext dbContext)
             """, new { request.OperationId }, tx, cancellationToken:ct));
         if (prior is not null) return MapEvent(prior);
         var activeStaffId = await connection.QuerySingleOrDefaultAsync<string>(new CommandDefinition(
-            "SELECT ID FROM STAFF_MEMBERS WHERE ID=@StaffId AND IS_ACTIVE=TRUE FOR UPDATE;",
+            "SELECT CAST(ID AS CHAR(36)) FROM STAFF_MEMBERS WHERE ID=@StaffId AND IS_ACTIVE=TRUE FOR UPDATE;",
             new { StaffId = staffId }, tx, cancellationToken:ct));
         if (activeStaffId is null)
             throw new BusinessException("找不到可出勤的店員。", "ATTENDANCE_STAFF_NOT_FOUND");
@@ -117,7 +123,7 @@ public sealed class AttendanceRepository(AppDbContext dbContext)
         if (action == "confirm_payroll_role")
         {
             await PayrollSnapshotStore.ConfirmAsync(connection, tx, staffId, businessDate.ToDateTime(TimeOnly.MinValue),
-                request.PayrollRole ?? "", request.Reason ?? "", actorId, now, ct);
+                request.PayrollRole ?? "", request.Reason ?? "", actorId, now, ct, request.ExpectedPayrollSnapshotVersion);
         }
         if (action is "clock_in" or "set_times")
             await PayrollSnapshotStore.CaptureAsync(connection, tx, staffId, businessDate.ToDateTime(TimeOnly.MinValue), eventAt, actorId, now, true, ct);

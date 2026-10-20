@@ -391,9 +391,9 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
         foreach (var input in finalized ? Enumerable.Empty<SettlementStaffInputRow>() : staffInputs)
         {
             var events = eventsByStaff.GetValueOrDefault(input.StaffId, []);
-            if (events.Any(x => x.EventType is "clock_out" or "scheduled_end" or "manual_interval" or "adjustment"))
+            if (input.AttendanceSource != "backfill_approved" && events.Any(x => x.EventType is "clock_out" or "scheduled_end" or "manual_interval" or "adjustment"))
                 input.ActualMinutes = AttendanceMinutes.Effective(events);
-            if (events.Any(x => x.Source is "scheduled" or "manual")) input.AttendanceSource = "clock";
+            if (input.AttendanceSource != "backfill_approved" && events.Any(x => x.Source is "scheduled" or "manual")) input.AttendanceSource = "clock";
         }
         var attendanceAnomalies = (finalized ? [] : SettlementAttendanceSync.MergeMissingInputs(settlementId, staffInputs, attendanceCandidates)).ToList();
         if (!finalized && await connection.ExecuteScalarAsync<bool>(new CommandDefinition(
@@ -420,9 +420,13 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
             throw new ConflictException("結算輸入已更新，請重新載入後核對。", "SETTLEMENT_INPUTS_CHANGED");
         await SettlementPayrollValidation.ValidateAsync(connection, transaction, run.BusinessDate,
             inputs.StaffInputs.Select(x => (x.StaffId, x.Role, x.PayrollSnapshotVersion)), cancellationToken);
-        var before = await connection.QueryAsync<SettlementStaffInputRow>(new CommandDefinition(
+        var before = (await connection.QueryAsync<SettlementStaffInputRow>(new CommandDefinition(
             "SELECT ID AS Id, CREATED_AT AS CreatedAt, CREATED_BY AS CreatedBy, STAFF_ID AS StaffId, ROLE, ACTUAL_MINUTES AS ActualMinutes, ACTIVITY_HOURS AS ActivityHours, NOTE, ATTENDANCE_SOURCE AS AttendanceSource, ATTENDANCE_REQUEST_ID AS AttendanceRequestId, ATTENDANCE_APPROVED_BY AS AttendanceApprovedBy, ATTENDANCE_APPROVED_AT AS AttendanceApprovedAt, PAYROLL_SNAPSHOT_VERSION AS PayrollSnapshotVersion FROM SETTLEMENT_STAFF_INPUTS WHERE SETTLEMENT_ID=@SettlementId;",
-            new { SettlementId = settlementId }, transaction, cancellationToken: cancellationToken));
+            new { SettlementId = settlementId }, transaction, cancellationToken: cancellationToken))).AsList();
+        var beforeJson = JsonSerializer.Serialize(before);
+        var source = await GetSourceDataCoreAsync(connection, transaction, settlementId,
+            DateOnly.FromDateTime(run.BusinessDate), cancellationToken);
+        SettlementAttendanceSync.ReconcilePayrollRoles(before, source.PayrollAssignments);
         await connection.ExecuteAsync(new CommandDefinition("""
             DELETE FROM SETTLEMENT_STAFF_INPUTS WHERE SETTLEMENT_ID=@SettlementId;
             UPDATE SETTLEMENT_RUNS SET DAY_TYPE=COALESCE(@DayType,DAY_TYPE), PUBLIC_TIP_AMOUNT=@PublicTipAmount,
@@ -441,7 +445,7 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
             var approved = previous?.AttendanceSource == "backfill_approved" && previous.ActualMinutes == input.ActualMinutes
                 && previous.PayrollSnapshotVersion == input.PayrollSnapshotVersion;
             var staffEvents = events.GetValueOrDefault(input.StaffId, []);
-            var source = approved ? "backfill_approved" : staffEvents.Length > 0 && AttendanceMinutes.Effective(staffEvents) == input.ActualMinutes ? "clock" : "manual";
+            var attendanceSource = approved ? "backfill_approved" : staffEvents.Length > 0 && AttendanceMinutes.Effective(staffEvents) == input.ActualMinutes ? "clock" : "manual";
             await connection.ExecuteAsync(new CommandDefinition("""
                 INSERT INTO SETTLEMENT_STAFF_INPUTS
                   (ID,SETTLEMENT_ID,STAFF_ID,ROLE,ACTUAL_MINUTES,ACTIVITY_HOURS,ATTENDANCE_SOURCE,
@@ -449,7 +453,7 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
                 VALUES (@Id,@SettlementId,@StaffId,@Role,@ActualMinutes,@ActivityHours,@AttendanceSource,
                         @PayrollSnapshotVersion,@AttendanceRequestId,@AttendanceApprovedBy,@AttendanceApprovedAt,@PublicTipEligible,@IsBackstageParticipant,@Note,@CreatedAt,@CreatedBy,@Now,@ActorId);
                 """, new { Id = previous?.Id ?? Guid.NewGuid().ToString("D"), CreatedAt = previous?.CreatedAt ?? now, CreatedBy = previous?.CreatedBy ?? actorId, SettlementId = settlementId, input.StaffId, input.Role,
-                    input.ActualMinutes, input.ActivityHours, AttendanceSource = source, input.PayrollSnapshotVersion,
+                    input.ActualMinutes, input.ActivityHours, AttendanceSource = attendanceSource, input.PayrollSnapshotVersion,
                     AttendanceRequestId = approved ? previous?.AttendanceRequestId : null, AttendanceApprovedBy = approved ? previous?.AttendanceApprovedBy : null,
                     AttendanceApprovedAt = approved ? previous?.AttendanceApprovedAt : null,
                     input.PublicTipEligible, input.IsBackstageParticipant, input.Note, Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
@@ -457,7 +461,7 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
         await connection.ExecuteAsync(new CommandDefinition("""
             INSERT INTO SETTLEMENT_AUDIT_LOG (ID,SETTLEMENT_ID,ACTION_TYPE,BEFORE_JSON,AFTER_JSON,REASON,ACTOR_ID,CREATED_AT)
             VALUES (@Id,@SettlementId,'payroll_inputs_saved',@BeforeJson,@AfterJson,'核對上班職位與結算輸入',@ActorId,@Now);
-            """, new { Id = Guid.NewGuid().ToString("D"), SettlementId = settlementId, BeforeJson = JsonSerializer.Serialize(before),
+            """, new { Id = Guid.NewGuid().ToString("D"), SettlementId = settlementId, BeforeJson = beforeJson,
                 AfterJson = JsonSerializer.Serialize(inputs.StaffInputs), ActorId = actorId, Now = now }, transaction, cancellationToken: cancellationToken));
         await transaction.CommitAsync(cancellationToken);
     }
@@ -487,19 +491,32 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
             throw new ConflictException("結算輸入已更新，請重新計算。", "SETTLEMENT_INPUTS_CHANGED");
         await SettlementPayrollValidation.ValidateAsync(connection, transaction, calculation.Run.BusinessDate,
             calculation.StaffInputs.Select(x => (x.StaffId, x.Role, x.PayrollSnapshotVersion)), cancellationToken);
+        // A role correction may merge the primary and an existing backstage input.
+        // Remove superseded input IDs before changing a retained row's unique role key.
+        var retainedIds = calculation.StaffInputs.Where(x => !string.IsNullOrEmpty(x.Id)).Select(x => x.Id).ToArray();
+        if (retainedIds.Length > 0)
+            await connection.ExecuteAsync(new CommandDefinition(
+                "DELETE FROM SETTLEMENT_STAFF_INPUTS WHERE SETTLEMENT_ID=@SettlementId AND ID NOT IN @RetainedIds;",
+                new { SettlementId = settlementId, RetainedIds = retainedIds }, transaction, cancellationToken: cancellationToken));
         foreach (var input in calculation.StaffInputs)
         {
             if (!string.IsNullOrEmpty(input.Id))
             {
                 await connection.ExecuteAsync(new CommandDefinition("""
                     UPDATE `SETTLEMENT_STAFF_INPUTS`
-                    SET `ACTUAL_MINUTES` = @ActualMinutes, `ACTIVITY_HOURS` = @ActivityHours,
+                    SET `ROLE` = @Role, `PAYROLL_SNAPSHOT_VERSION` = @PayrollSnapshotVersion,
+                        `PUBLIC_TIP_ELIGIBLE` = @PublicTipEligible,
+                        `ACTUAL_MINUTES` = @ActualMinutes, `ACTIVITY_HOURS` = @ActivityHours,
                         `IS_BACKSTAGE_PARTICIPANT` = @IsBackstageParticipant, `NOTE` = @Note,
                         `ATTENDANCE_SOURCE` = @AttendanceSource,
+                        `ATTENDANCE_REQUEST_ID` = @AttendanceRequestId,
+                        `ATTENDANCE_APPROVED_BY` = @AttendanceApprovedBy, `ATTENDANCE_APPROVED_AT` = @AttendanceApprovedAt,
                         `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId
                     WHERE `ID` = @Id AND `SETTLEMENT_ID` = @SettlementId;
-                    """, new { input.Id, SettlementId = settlementId, input.ActualMinutes,
+                    """, new { input.Id, SettlementId = settlementId, input.Role, input.PayrollSnapshotVersion,
+                        input.PublicTipEligible, input.ActualMinutes,
                         input.ActivityHours, input.IsBackstageParticipant, input.Note, input.AttendanceSource,
+                        input.AttendanceRequestId, input.AttendanceApprovedBy, input.AttendanceApprovedAt,
                         Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
                 continue;
             }

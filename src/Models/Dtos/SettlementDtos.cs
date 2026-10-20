@@ -184,7 +184,11 @@ public sealed record SettlementOverviewDto(
     IReadOnlyList<SettlementPayrollAssignmentDto>? PayrollAssignments = null)
 {
     public int PendingOrderBackfillCount { get; init; }
+    public IReadOnlyList<SettlementPayrollRoleCorrectionDto> PendingPayrollRoleCorrections { get; init; } = [];
 }
+
+public sealed record SettlementPayrollRoleCorrectionDto(string StaffId, string DisplayName,
+    string BeforeRole, string AfterRole);
 
 public sealed record SettlementPayrollAssignmentDto(string StaffId, string DisplayName, string? PayrollRole,
     int? PayrollSnapshotVersion, bool CanUseBackstage, DateTime? StartedAt);

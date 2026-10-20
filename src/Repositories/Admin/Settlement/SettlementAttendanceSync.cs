@@ -25,9 +25,9 @@ public static class SettlementAttendanceSync
         foreach (var input in inputs)
         {
             var events = eventsByStaff.GetValueOrDefault(input.StaffId, []);
-            if (events.Any(x => x.EventType is "clock_out" or "scheduled_end" or "manual_interval" or "adjustment"))
+            if (input.AttendanceSource != "backfill_approved" && events.Any(x => x.EventType is "clock_out" or "scheduled_end" or "manual_interval" or "adjustment"))
                 input.ActualMinutes = AttendanceMinutes.Effective(events);
-            if (events.Any(x => x.Source is "scheduled" or "manual")) input.AttendanceSource = "clock";
+            if (input.AttendanceSource != "backfill_approved" && events.Any(x => x.Source is "scheduled" or "manual")) input.AttendanceSource = "clock";
         }
         var anomalies = MergeMissingInputs(settlementId, inputs, source.PayrollAssignments);
         return source with { StaffInputs = inputs, AttendanceAnomalies = anomalies };
@@ -38,6 +38,7 @@ public static class SettlementAttendanceSync
     {
         var anomalies = new List<SettlementAnomalyDto>();
         var assignments = candidates.ToDictionary(x => x.StaffId, StringComparer.Ordinal);
+        ReconcilePayrollRoles(inputs, assignments.Values);
         foreach (var input in inputs)
         {
             if (!assignments.TryGetValue(input.StaffId, out var assignment) || assignment.PayrollRole is null)
@@ -80,5 +81,33 @@ public static class SettlementAttendanceSync
 
         void Add(string id, string name, string code, string message)
             => anomalies.Add(new SettlementAnomalyDto(code, message, id, name));
+    }
+
+    // Called only on detached calculation/input copies. Stored finalized inputs and
+    // results stay intact until the manager confirms a versioned recalculation.
+    public static void ReconcilePayrollRoles(IList<SettlementStaffInputRow> inputs,
+        IEnumerable<SettlementAttendanceCandidateRow> candidates)
+    {
+        foreach (var assignment in candidates)
+        {
+            if (assignment.PayrollRole is null || assignment.PayrollSnapshotVersion is null) continue;
+            var rows = inputs.Where(x => x.StaffId == assignment.StaffId).ToArray();
+            if (rows.Length == 0 || rows.Any(x => x.PayrollSnapshotVersion >= assignment.PayrollSnapshotVersion)) continue;
+            var primary = rows.Where(x => x.Role != "backstage").ToArray();
+            // Ambiguous legacy inputs still require review; never silently discard wages.
+            if (primary.Length > 1 || rows.Count(x => x.Role == "backstage") > 1) continue;
+            var main = primary.SingleOrDefault() ?? rows.SingleOrDefault();
+            if (main is null) continue;
+            if (assignment.PayrollRole == "backstage")
+            {
+                foreach (var secondary in rows.Where(x => x != main)) inputs.Remove(secondary);
+                main.IsBackstageParticipant = true;
+            }
+            else main.IsBackstageParticipant = false;
+            main.Role = assignment.PayrollRole;
+            main.PublicTipEligible = main.Role != "backstage";
+            foreach (var row in inputs.Where(x => x.StaffId == assignment.StaffId))
+                row.PayrollSnapshotVersion = assignment.PayrollSnapshotVersion;
+        }
     }
 }
