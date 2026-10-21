@@ -106,9 +106,10 @@ public sealed partial class SettlementService : ISettlementService
             request.StaffInputs.Select(input => input.StaffId.Trim()).Distinct(StringComparer.Ordinal).ToArray(), cancellationToken))
             throw new BusinessException("結算人員不存在，請重新載入員工清單。", "SETTLEMENT_STAFF_NOT_FOUND");
         var run = await _repository.GetRunAsync(request.BusinessDate, request.SessionNo, cancellationToken);
-        var rule = run is null
-            ? await _repository.GetEffectiveRuleAsync(dayType, request.BusinessDate, cancellationToken)
-            : await GetRuleForRunAsync(run, request.BusinessDate, cancellationToken);
+        var rule = await GetSelectedRuleAsync(request.RuleVersionId, dayType, cancellationToken)
+            ?? (run is null || run.DayType != dayType
+                ? await _repository.GetEffectiveRuleAsync(dayType, request.BusinessDate, cancellationToken)
+                : await GetRuleForRunAsync(run, request.BusinessDate, cancellationToken));
         if (rule is null)
             throw new BusinessException("找不到該營業日生效的結算規則。", "SETTLEMENT_RULE_NOT_FOUND");
         run ??= await _repository.GetOrCreateRunAsync(request.BusinessDate, request.SessionNo, dayType, rule.Id,
@@ -119,7 +120,8 @@ public sealed partial class SettlementService : ISettlementService
             ExpectedInputVersion = request.ExpectedInputVersion,
             PublicTipAmount = request.PublicTipAmount,
             DayType = dayType,
-            RuleVersionId = run.RuleVersionId ?? rule.Id,
+            RuleVersionId = rule.Id,
+            RuleSnapshotJson = JsonSerializer.Serialize(rule),
             AdmissionFeeOverride = request.AdmissionFeeOverride,
             ActivityExpense = request.ActivityExpense,
             CompanyShareHours = request.CompanyShareHours,
@@ -254,6 +256,9 @@ public sealed partial class SettlementService : ISettlementService
             }
             catch (JsonException) { /* A malformed snapshot is surfaced below as a manual anomaly. */ }
         }
+        if (run.RuleVersionId is not null)
+            return await GetSelectedRuleAsync(run.RuleVersionId, run.DayType, cancellationToken)
+                ?? throw new BusinessException("找不到已選用的規則。", "SETTLEMENT_RULE_NOT_FOUND");
         return await _repository.GetEffectiveRuleAsync(run.DayType, businessDate, cancellationToken)
             ?? throw new BusinessException("找不到該營業日生效的結算規則。", "SETTLEMENT_RULE_NOT_FOUND");
     }

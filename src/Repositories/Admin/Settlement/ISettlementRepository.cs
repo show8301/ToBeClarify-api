@@ -6,6 +6,8 @@ namespace ToBeClarify.Api.Repositories.Admin.Settlement;
 
 public sealed record SettlementSourceData
 {
+    // Only supplied by the service after resolving a persisted rule; never deserialized from requests.
+    public SettlementRuleRow? SelectedRule { get; init; }
     public IReadOnlyList<AttendanceMinuteEvent> AttendanceEvents { get; init; } = [];
     public IReadOnlyList<SettlementAttendanceCandidateRow> PayrollAssignments { get; init; } = [];
     public IReadOnlyList<SettlementOrderRevenueRow> Orders { get; init; } = [];
@@ -68,6 +70,7 @@ public interface ISettlementRepository
 
 public sealed class SaveInputsData
 {
+    public string? RuleSnapshotJson { get; init; }
     public int? ExpectedInputVersion { get; init; }
     public string? DayType { get; init; }
     public string? RuleVersionId { get; init; }

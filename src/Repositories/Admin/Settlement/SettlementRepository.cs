@@ -432,11 +432,13 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
         await connection.ExecuteAsync(new CommandDefinition("""
             DELETE FROM SETTLEMENT_STAFF_INPUTS WHERE SETTLEMENT_ID=@SettlementId;
             UPDATE SETTLEMENT_RUNS SET DAY_TYPE=COALESCE(@DayType,DAY_TYPE), PUBLIC_TIP_AMOUNT=@PublicTipAmount,
+              RULE_VERSION_ID=COALESCE(@RuleVersionId,RULE_VERSION_ID),
+              RULE_SNAPSHOT_JSON=COALESCE(@RuleSnapshotJson,RULE_SNAPSHOT_JSON),
               ADMISSION_FEE_OVERRIDE=@AdmissionFeeOverride, ACTIVITY_EXPENSE=@ActivityExpense, COMPANY_SHARE_HOURS=@CompanyShareHours,
               ACTIVITY_HOURS_CONFIRMED=@ActivityHoursConfirmed, INPUT_VERSION=INPUT_VERSION+1, STATUS='draft',
               UPDATED_AT=@Now,UPDATED_BY=@ActorId WHERE ID=@SettlementId;
             UPDATE SETTLEMENT_RESULT_LINES SET ANOMALY_STATUS='stale',ANOMALY_NOTE='結算輸入已更新，請重新計算。' WHERE SETTLEMENT_ID=@SettlementId;
-            """, new { SettlementId = settlementId, inputs.DayType, inputs.PublicTipAmount, inputs.AdmissionFeeOverride,
+            """, new { SettlementId = settlementId, inputs.DayType, inputs.RuleVersionId, inputs.RuleSnapshotJson, inputs.PublicTipAmount, inputs.AdmissionFeeOverride,
                 inputs.ActivityExpense, inputs.CompanyShareHours, inputs.ActivityHoursConfirmed, Now = now, ActorId = actorId }, transaction, cancellationToken: cancellationToken));
         var events = (await connection.QueryAsync<AttendanceMinuteEvent>(new CommandDefinition(
             "SELECT STAFF_MEMBER_ID AS StaffId,EVENT_TYPE AS EventType,EVENT_AT AS EventAt,EVENT_END_AT AS EventEndAt,BASE_EVENT_ID AS BaseEventId,ID AS Id,MINUTES_DELTA AS MinutesDelta FROM STAFF_ATTENDANCE_EVENTS WHERE BUSINESS_DATE=@Date;",
@@ -465,6 +467,12 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
             VALUES (@Id,@SettlementId,'payroll_inputs_saved',@BeforeJson,@AfterJson,'核對上班職位與結算輸入',@ActorId,@Now);
             """, new { Id = Guid.NewGuid().ToString("D"), SettlementId = settlementId, BeforeJson = beforeJson,
                 AfterJson = JsonSerializer.Serialize(inputs.StaffInputs), ActorId = actorId, Now = now }, transaction, cancellationToken: cancellationToken));
+        if (inputs.RuleVersionId is not null && inputs.RuleVersionId != run.RuleVersionId)
+            await connection.ExecuteAsync(new CommandDefinition("""
+                INSERT INTO SETTLEMENT_AUDIT_LOG (ID,SETTLEMENT_ID,ACTION_TYPE,BEFORE_JSON,AFTER_JSON,REASON,ACTOR_ID,CREATED_AT)
+                VALUES (UUID(),@SettlementId,'settlement_rule_selected',@Before,@After,'選用結算規則版本',@ActorId,@Now);
+                """, new { SettlementId = settlementId, Before = JsonSerializer.Serialize(new { run.RuleVersionId, run.RuleSnapshotJson }),
+                After = JsonSerializer.Serialize(new { inputs.RuleVersionId, inputs.RuleSnapshotJson }), ActorId = actorId, Now = now }, transaction, cancellationToken: cancellationToken));
         await transaction.CommitAsync(cancellationToken);
     }
 

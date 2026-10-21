@@ -11,12 +11,13 @@ namespace ToBeClarify.Api.Services.Admin.Settlement;
 
 public sealed partial class SettlementService
 {
-    public Task<SettlementRecalculationPreviewDto> PreviewRecalculationAsync(PreviewSettlementRecalculationRequest request,
+    public async Task<SettlementRecalculationPreviewDto> PreviewRecalculationAsync(PreviewSettlementRecalculationRequest request,
         ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
         ValidateDate(request.BusinessDate);
-        return _repository.RecalculateFinalizedAsync(request.BusinessDate, request.SessionNo, null,
-            (run, source, payments, corrections) => PrepareRecalculation(run, source, payments, corrections, request.Adjustments),
+        var selected = await GetSelectedRuleAsync(request.Adjustments?.RuleVersionId, request.Adjustments?.DayType, cancellationToken);
+        return await _repository.RecalculateFinalizedAsync(request.BusinessDate, request.SessionNo, null,
+            (run, source, payments, corrections) => PrepareRecalculation(run, source with { SelectedRule = selected }, payments, corrections, request.Adjustments),
             ActorId(actor), _clock.LocalDateTime, cancellationToken);
     }
 
@@ -27,8 +28,9 @@ public sealed partial class SettlementService
         if (!Guid.TryParseExact(request.OperationId, "D", out _) || string.IsNullOrWhiteSpace(request.Reason)
             || request.Reason.Trim().Length > 500)
             throw new BusinessException("重新結算需要有效操作編號與 500 字以內的補正原因。", "SETTLEMENT_RECALCULATION_INVALID");
+        var selected = await GetSelectedRuleAsync(request.Adjustments?.RuleVersionId, request.Adjustments?.DayType, cancellationToken);
         await _repository.RecalculateFinalizedAsync(request.BusinessDate, request.SessionNo, request,
-            (run, source, payments, corrections) => PrepareRecalculation(run, source, payments, corrections, request.Adjustments),
+            (run, source, payments, corrections) => PrepareRecalculation(run, source with { SelectedRule = selected }, payments, corrections, request.Adjustments),
             ActorId(actor), _clock.LocalDateTime, cancellationToken);
         return await GetOverviewAsync(request.BusinessDate, request.SessionNo, cancellationToken);
     }
@@ -45,13 +47,21 @@ public sealed partial class SettlementService
         IReadOnlyList<SettlementPaymentEventRow> payments, IReadOnlyList<SettlementCorrectionEventRow> corrections,
         SettlementRecalculationAdjustmentsRequest? adjustments)
     {
-        // Use the finalized rule, even when newer rules have since been published.
+        // Keep the finalized snapshot unless an explicitly selected persisted rule is supplied.
         SettlementRuleRow? rule = null;
         try { rule = JsonSerializer.Deserialize<SettlementRuleRow>(run.RuleSnapshotJson ?? "null"); }
         catch (JsonException) { }
         if (rule is null || string.IsNullOrWhiteSpace(rule.Id) || rule.Id != run.RuleVersionId)
             throw new BusinessException("缺少有效的原結算規則快照，請先核對原始結算資料。", "SETTLEMENT_RULE_SNAPSHOT_REQUIRED");
 
+        var previousRule = rule;
+        if (adjustments?.RuleVersionId is not null)
+        {
+            if (source.SelectedRule?.Id != adjustments.RuleVersionId)
+                throw new BusinessException("指定規則未通過版本核對，請重新預覽。", "SETTLEMENT_RULE_INVALID");
+            rule = source.SelectedRule;
+        }
+        ValidateSelectedRule(rule, adjustments?.DayType ?? run.DayType);
         var calculationRun = CopyRun(run);
         var refreshed = SettlementAttendanceSync.RefreshFinalizedSource(run.Id, source);
         if (refreshed.Admissions.FirstOrDefault()?.UseAdmissionLedger != true && calculationRun.AdmissionFeeOverride is null)
@@ -136,13 +146,14 @@ public sealed partial class SettlementService
         var hasChanges = changes.Count > 0 || roleInputsChanged || run.NetCash != calculation.Run.NetCash
             || run.CompanyIncome != calculation.Run.CompanyIncome || run.GrossRevenue != calculation.Run.GrossRevenue
             || run.RetainedAmount != calculation.Run.RetainedAmount
-            || run.PendingFinanceCount != calculation.Run.PendingFinanceCount || changedAdjustmentInputs;
+            || run.PendingFinanceCount != calculation.Run.PendingFinanceCount || changedAdjustmentInputs || rule.Id != run.RuleVersionId;
         var preview = new SettlementRecalculationPreviewDto(DateOnly.FromDateTime(run.BusinessDate),
             run.SessionNo, token, run.CorrectionVersion, hasChanges, beforePayroll, afterPayroll,
             afterPayroll - beforePayroll, run.NetCash, calculation.Run.NetCash,
             run.CompanyIncome, calculation.Run.CompanyIncome, changes, balances,
             anomalies.Select(item => EnrichAnomaly(source, item)).ToArray(),
-            activeCorrections.Select(x => new SettlementRecalculationExistingCorrectionDto(x.StaffId, x.AmountDelta, x.Reason)).ToArray());
+            activeCorrections.Select(x => new SettlementRecalculationExistingCorrectionDto(x.StaffId, x.AmountDelta, x.Reason)).ToArray(),
+            previousRule.Id, rule.Id, DateOnly.FromDateTime(previousRule.EffectiveFrom), DateOnly.FromDateTime(rule.EffectiveFrom));
         return new SettlementRecalculationPlan(calculation.ToSave(rule, refreshed.StaffInputs), preview);
     }
 

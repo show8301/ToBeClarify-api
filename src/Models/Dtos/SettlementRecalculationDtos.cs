@@ -19,6 +19,7 @@ public sealed class ConfirmSettlementRecalculationRequest : SettlementCalculateR
 
 public sealed class SettlementRecalculationAdjustmentsRequest
 {
+    [StringLength(36)] public string? RuleVersionId { get; init; }
     [Required, RegularExpression("^(normal|event)$")] public string DayType { get; init; } = "normal";
     [Range(0, int.MaxValue)] public int PublicTipAmount { get; init; }
     [Range(0, int.MaxValue)] public int? AdmissionFeeOverride { get; init; }
@@ -64,7 +65,9 @@ public sealed record SettlementRecalculationPreviewDto(DateOnly BusinessDate, in
     IReadOnlyList<SettlementRecalculationChangeDto> Changes,
     IReadOnlyList<SettlementRecalculationBalanceDto> Balances,
     IReadOnlyList<SettlementAnomalyDto> Anomalies,
-    IReadOnlyList<SettlementRecalculationExistingCorrectionDto> ExistingCorrections);
+    IReadOnlyList<SettlementRecalculationExistingCorrectionDto> ExistingCorrections,
+    string? PreviousRuleVersionId = null, string? CorrectedRuleVersionId = null,
+    DateOnly? PreviousRuleEffectiveFrom = null, DateOnly? CorrectedRuleEffectiveFrom = null);
 
 public sealed record SettlementRecalculationExistingCorrectionDto(string? StaffId, long AmountDelta,
     string Reason);
