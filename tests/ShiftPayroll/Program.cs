@@ -7,6 +7,7 @@ using ToBeClarify.Api.Repositories.Shared;
 using ToBeClarify.Api.Services.Admin.Settlement;
 
 // Monetary and authorization regressions, entirely in memory.
+MealCreditChecks.Run();
 var method = typeof(SettlementService).GetMethod("Calculate", BindingFlags.NonPublic | BindingFlags.Instance)!;
 var service = new SettlementService(null!, null!, null!, null!);
 var rule = new SettlementRuleRow
@@ -220,8 +221,9 @@ var eventSource = new SettlementSourceData
 {
     PayrollAssignments = [developer],
     StaffInputs = [Input("service"), Input("backstage")],
-    Tips = [new() { StaffId = "staff", StaffAmount = 13 }],
-    Orders = [new() { OrderId = "event", Subtotal = 900, TotalAmount = 900 }],
+    Tips = [new() { OrderId = "event-tip", StaffId = "staff", StaffAmount = 13 }],
+    Orders = [new() { OrderId = "event", Subtotal = 900, TotalAmount = 900 },
+        new() { OrderId = "event-tip", Subtotal = 13, TotalAmount = 13, TipAmount = 13 }],
     Items = [new() { OrderId = "event", ItemId = "food", ItemType = "menu_item", LineTotal = 900 }]
 };
 var eventResults = Calculate(eventSource, new() { DayType = "event", ActivityHoursConfirmed = true, CompanyShareHours = 1, PublicTipAmount = 20 });
@@ -287,6 +289,21 @@ Console.WriteLine("Shift payroll regressions passed.");
 
 IReadOnlyList<SettlementResultLineRow> Calculate(SettlementSourceData source, SettlementRunRow run)
 {
+    // These payroll scenarios predate order-based public tips. Preserve their
+    // amounts using an actually paid tip order rather than obsolete manual input.
+    run.CalculationVersion = 5;
+    if (run.PublicTipAmount > 0)
+    {
+        var amount = run.PublicTipAmount;
+        var priorCash = source.Cash.HasCashRecords ? source.CashAllocations
+            : source.Orders.Select(order => Cash(order.OrderId, order.TotalAmount)).ToArray();
+        source = source with {
+            Orders = [..source.Orders, new() { OrderId = "public-fixture", TotalAmount = amount, TipAmount = amount }],
+            Tips = [..source.Tips, new() { OrderId = "public-fixture", TipAmount = amount, SourceType = "public_tip" }],
+            Cash = new() { HasCashRecords = true }, CashAllocations = [..priorCash, Cash("public-fixture", amount)]
+        };
+        run.PublicTipAmount = 0;
+    }
     var result = method.Invoke(service, [run, rule, source])!;
     return (IReadOnlyList<SettlementResultLineRow>)result.GetType().GetProperty("Results")!.GetValue(result)!;
 }

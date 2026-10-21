@@ -160,6 +160,11 @@ public sealed class SettlementResultSourceRow
     public decimal? OriginalAmount { get; set; }
     public decimal? OrderPayableAmount { get; set; }
     public decimal? OrderCollectedAmount { get; set; }
+    public decimal? CancelledAmount { get; set; }
+    public decimal? MealCreditAmount { get; set; }
+    public decimal? AfterCreditAmount { get; set; }
+    public decimal? OrderRevenueAmount { get; set; }
+    public decimal? AdjustedRevenueAmount { get; set; }
     public decimal BasisAmount { get; set; }
     public decimal Percentage { get; set; }
     public decimal Amount { get; set; }
@@ -178,6 +183,7 @@ public sealed class SettlementOrderRevenueRow
 
 public sealed class SettlementOrderItemRevenueRow
 {
+    public decimal? MealCreditAmount { get; set; }
     public string ItemName { get; set; } = string.Empty;
     public int? OriginalLineTotal { get; set; }
     public bool IsChampagneTower { get; set; }
@@ -225,6 +231,8 @@ public sealed class SettlementRoomRevenueRow
 
 public sealed class SettlementAddonRevenueRow
 {
+    public string? OrderItemId { get; set; }
+    public string? ItemName { get; set; }
     public string OrderId { get; set; } = string.Empty;
     public string StaffId { get; set; } = string.Empty;
     public int LineTotal { get; set; }

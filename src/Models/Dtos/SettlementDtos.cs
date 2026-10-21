@@ -159,7 +159,12 @@ public sealed record SettlementResultSourceDto(
     string? ItemName = null,
     decimal? OriginalAmount = null,
     decimal? OrderPayableAmount = null,
-    decimal? OrderCollectedAmount = null);
+    decimal? OrderCollectedAmount = null,
+    decimal? CancelledAmount = null,
+    decimal? MealCreditAmount = null,
+    decimal? AfterCreditAmount = null,
+    decimal? OrderRevenueAmount = null,
+    decimal? AdjustedRevenueAmount = null);
 
 public sealed record SettlementAnomalyOrderDto(string OrderId, string OrderNumber);
 

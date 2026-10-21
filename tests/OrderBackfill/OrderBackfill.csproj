@@ -7,5 +7,6 @@
     <None Include="../../db/migrations/20260907_01_settlement_payroll.sql" Link="settlement-base.sql" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../db/migrations/20261019_01_settlement_result_sources.sql" Link="settlement-sources.sql" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../db/migrations/20261019_02_settlement_source_item_details.sql" Link="settlement-source-items.sql" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../db/migrations/20261021_02_settlement_meal_credit_sources.sql" Link="settlement-meal-credit.sql" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

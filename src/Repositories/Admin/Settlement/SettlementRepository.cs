@@ -143,11 +143,12 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
             SELECT O.`ID` AS OrderId, I.`ID` AS ItemId, I.`ITEM_TYPE` AS ItemType,
                    I.`NAME_SNAPSHOT` AS ItemName, I.`LINE_TOTAL` AS OriginalLineTotal,
                    I.`REFERENCE_ID` AS ReferenceId, I.`PARENT_ITEM_ID` AS ParentItemId,
-                   CASE WHEN EXISTS (SELECT 1 FROM `ORDER_ITEMS` C WHERE C.`ORDER_ID` = O.`ID` AND C.`IS_CHAMPAGNE_TOWER`)
-                     THEN GREATEST(0, I.`LINE_TOTAL` - COALESCE(
+                   GREATEST(0, I.`LINE_TOTAL` - COALESCE(
                        FLOOR(U.`CANCELLED_AMOUNT` * I.`LINE_TOTAL` / NULLIF(U.`ORIGINAL_AMOUNT`, 0)),
-                       FLOOR(PU.`CANCELLED_AMOUNT` * I.`LINE_TOTAL` / NULLIF(PU.`ORIGINAL_AMOUNT`, 0)), 0))
-                     ELSE I.`LINE_TOTAL` END AS LineTotal,
+                       FLOOR(PU.`CANCELLED_AMOUNT` * I.`LINE_TOTAL` / NULLIF(PU.`ORIGINAL_AMOUNT`, 0)), 0)) AS LineTotal,
+                   CASE WHEN I.`ITEM_TYPE` IN ('menu_item','menu_set') AND NOT I.`IS_CHAMPAGNE_TOWER`
+                     AND U.`ID` IS NOT NULL THEN U.`ORIGINAL_CREDIT`-U.`RETURNED_CREDIT`
+                     ELSE NULL END AS MealCreditAmount,
                    I.`IS_CHAMPAGNE_TOWER` AS IsChampagneTower, I.`RECIPIENT_STAFF_ID` AS RecipientStaffId,
                    I.`RECIPIENT_STAFF_NAME_SNAPSHOT` AS RecipientStaffName
             FROM `ORDERS` O
@@ -206,7 +207,8 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
               AND R.`ORDER_STATUS` <> 'cancelled'
               AND (R.`ORDER_ID` IS NULL OR O.`ORDER_STATUS` NOT IN ('cancelled', 'expired', 'rejected'));
 
-            SELECT A.`ORDER_ID` AS OrderId, A.`STAFF_ID` AS StaffId,
+            SELECT A.`ORDER_ID` AS OrderId, A.`STAFF_ID` AS StaffId, I.`ID` AS OrderItemId,
+                   I.`NAME_SNAPSHOT` AS ItemName,
                    COALESCE(SUM(I.`LINE_TOTAL`), 0) AS LineTotal
             FROM `ORDER_SERVICE_ADDONS` A
             INNER JOIN `ORDERS` O ON O.`ID` = A.`ORDER_ID`
@@ -214,7 +216,7 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
             LEFT JOIN `ORDER_ITEMS` I ON I.`ORDER_ID` = A.`ORDER_ID` AND I.`ITEM_TYPE` = 'staff_service_addon'
             WHERE S.`BUSINESS_DATE` = @BusinessDate
               AND O.`ORDER_STATUS` NOT IN ('cancelled', 'expired', 'rejected')
-            GROUP BY A.`ORDER_ID`, A.`STAFF_ID`;
+            GROUP BY A.`ORDER_ID`, A.`STAFF_ID`, I.`ID`, I.`NAME_SNAPSHOT`;
 
             SELECT COUNT(*) AS SessionCount,
                    COALESCE(MAX(BP.FLOW_VERSION),1)>=2 AS UseAdmissionLedger,
@@ -283,7 +285,10 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
                    S.`ORDER_ID` AS OrderId, S.`ORDER_NUMBER` AS OrderNumber, S.`SOURCE_LABEL` AS Label,
                    S.`ORDER_ITEM_ID` AS OrderItemId, S.`ITEM_NAME` AS ItemName, S.`ORIGINAL_AMOUNT` AS OriginalAmount,
                    S.`ORDER_PAYABLE_AMOUNT` AS OrderPayableAmount, S.`ORDER_COLLECTED_AMOUNT` AS OrderCollectedAmount,
-                   S.`BASIS_AMOUNT` AS BasisAmount, S.`PERCENTAGE` AS Percentage, S.`AMOUNT` AS Amount
+                   S.`BASIS_AMOUNT` AS BasisAmount, S.`PERCENTAGE` AS Percentage, S.`AMOUNT` AS Amount,
+                   S.`CANCELLED_AMOUNT` AS CancelledAmount, S.`MEAL_CREDIT_AMOUNT` AS MealCreditAmount,
+                   S.`AFTER_CREDIT_AMOUNT` AS AfterCreditAmount, S.`ORDER_REVENUE_AMOUNT` AS OrderRevenueAmount,
+                   S.`ADJUSTED_REVENUE_AMOUNT` AS AdjustedRevenueAmount
             FROM `SETTLEMENT_RESULT_SOURCES` S
             INNER JOIN `SETTLEMENT_RESULT_LINES` R ON R.`ID`=S.`RESULT_LINE_ID` AND R.`SOURCE_SNAPSHOT_ID`=S.`SOURCE_SNAPSHOT_ID`
             WHERE R.`SETTLEMENT_ID`=@SettlementId AND R.`ANOMALY_STATUS`<>'stale'
@@ -639,14 +644,18 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
                     INSERT INTO `SETTLEMENT_RESULT_SOURCES`
                       (`ID`,`RESULT_LINE_ID`,`SOURCE_SNAPSHOT_ID`,`SOURCE_KIND`,`ORDER_ID`,`ORDER_NUMBER`,`SOURCE_LABEL`,
                        `BASIS_AMOUNT`,`PERCENTAGE`,`AMOUNT`,`CREATED_AT`,`ORDER_ITEM_ID`,`ITEM_NAME`,`ORIGINAL_AMOUNT`,
-                       `ORDER_PAYABLE_AMOUNT`,`ORDER_COLLECTED_AMOUNT`)
+                       `ORDER_PAYABLE_AMOUNT`,`ORDER_COLLECTED_AMOUNT`,`CANCELLED_AMOUNT`,`MEAL_CREDIT_AMOUNT`,
+                       `AFTER_CREDIT_AMOUNT`,`ORDER_REVENUE_AMOUNT`,`ADJUSTED_REVENUE_AMOUNT`)
                     VALUES (@Id,@ResultLineId,@SnapshotId,@Kind,@OrderId,@OrderNumber,@Label,
                             @BasisAmount,@Percentage,@Amount,@Now,@OrderItemId,@ItemName,@OriginalAmount,
-                            @OrderPayableAmount,@OrderCollectedAmount);
+                            @OrderPayableAmount,@OrderCollectedAmount,@CancelledAmount,@MealCreditAmount,
+                            @AfterCreditAmount,@OrderRevenueAmount,@AdjustedRevenueAmount);
                     """, new { Id = Guid.NewGuid().ToString("D"), ResultLineId = resultLineId, SnapshotId = sourceSnapshotId,
                     source.Kind, source.OrderId, source.OrderNumber, source.Label, source.BasisAmount,
                     source.Percentage, source.Amount, source.OrderItemId, source.ItemName, source.OriginalAmount,
                     source.OrderPayableAmount, source.OrderCollectedAmount,
+                    source.CancelledAmount, source.MealCreditAmount, source.AfterCreditAmount,
+                    source.OrderRevenueAmount, source.AdjustedRevenueAmount,
                     Now = now }, transaction, cancellationToken: cancellationToken));
             }
         }
