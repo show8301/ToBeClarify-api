@@ -24,7 +24,7 @@ var run = new SettlementRunRow
 {
     Id = "settlement", BusinessDate = new(2026, 10, 18), SessionNo = 1, Status = "finalized",
     RuleVersionId = rule.Id, RuleSnapshotJson = JsonSerializer.Serialize(rule), InputVersion = 3,
-    FinalizedAt = new(2026, 10, 19, 2, 0, 0), FinalizedBy = "manager", CalculationVersion = 4
+    FinalizedAt = new(2026, 10, 19, 2, 0, 0), FinalizedBy = "manager", CalculationVersion = 5
 };
 var source = new SettlementSourceData
 {
@@ -72,6 +72,12 @@ Check(Prepare(source with { AttendanceEvents = [] }).Calculation.StaffInputs.Sin
     "Missing attendance events never erase existing payroll input.");
 var settled = source with { StaffInputs = plan.Calculation.StaffInputs, Results = plan.Calculation.Results };
 Check(!Prepare(settled).Preview.HasChanges, "Repeated recalculation of the same corrected source produces no new revision.");
+run.CalculationVersion = 4;
+var formulaUpgrade = Prepare(settled);
+Check(formulaUpgrade.Preview.HasChanges && formulaUpgrade.Calculation.Run.CalculationVersion == 5
+    && run.CalculationVersion == 4,
+    "Upgrading formula 4 to 5 requires an explicit new revision and never mutates the finalized version during preview.");
+run.CalculationVersion = 5;
 var reordered = token.Invoke(null, [new { rows = new[] { new { id = "a", amount = 1 }, new { id = "b", amount = 2 } } }]);
 var same = token.Invoke(null, [new { rows = new[] { new { id = "b", amount = 2 }, new { id = "a", amount = 1 } } }]);
 Check(Equals(reordered, same), "SQL row order does not invalidate a preview.");
