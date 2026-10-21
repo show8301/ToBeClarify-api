@@ -115,7 +115,8 @@ public sealed partial class SettlementRepository
         plan.Calculation.Run.CorrectionVersion = run.CorrectionVersion + 1;
         var after = new RecalculationAuditPayload(confirmation.OperationId, confirmation.SourceToken,
             run.CorrectionVersion + 1, confirmation.Reason.Trim(), actorId, plan.Preview,
-            plan.Calculation.Run, plan.Calculation.StaffInputs, plan.Calculation.Results);
+            plan.Calculation.Run, plan.Calculation.StaffInputs, plan.Calculation.Results)
+        { PublicTipReconciliationReason = confirmation.Adjustments?.PublicTipReconciliationReason?.Trim() };
         await connection.ExecuteAsync(new CommandDefinition("""
             INSERT INTO SETTLEMENT_AUDIT_LOG
                 (ID, SETTLEMENT_ID, ACTION_TYPE, BEFORE_JSON, AFTER_JSON, REASON, ACTOR_ID, CREATED_AT)
@@ -166,5 +167,8 @@ public sealed partial class SettlementRepository
 
     private sealed record RecalculationAuditPayload(string OperationId, string SourceToken, int Version,
         string Reason, string ActorId, SettlementRecalculationPreviewDto Preview, SettlementRunRow Run,
-        IReadOnlyList<SettlementStaffInputRow> StaffInputs, IReadOnlyList<SettlementResultLineRow> Results);
+        IReadOnlyList<SettlementStaffInputRow> StaffInputs, IReadOnlyList<SettlementResultLineRow> Results)
+    {
+        public string? PublicTipReconciliationReason { get; init; }
+    }
 }

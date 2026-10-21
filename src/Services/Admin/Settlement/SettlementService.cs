@@ -42,6 +42,7 @@ public sealed partial class SettlementService : ISettlementService
         {
             var financeAnomalies = new List<SettlementAnomalyDto>();
             _ = new SettlementRevenueAllocation(source, financeAnomalies);
+            AddPublicTipReconciliationAnomalies(run, source, financeAnomalies);
             var refreshed = SettlementAttendanceSync.RefreshFinalizedSource(run.Id, source);
             var roleCorrections = source.StaffInputs.Where(input => source.PayrollAssignments.Any(assignment =>
                     assignment.StaffId == input.StaffId && assignment.PayrollRole is not null
@@ -115,10 +116,12 @@ public sealed partial class SettlementService : ISettlementService
         run ??= await _repository.GetOrCreateRunAsync(request.BusinessDate, request.SessionNo, dayType, rule.Id,
             ActorId(actor), _clock.LocalDateTime, cancellationToken);
         EnsureEditable(run);
+        ValidatePublicTipInput(run, request.PublicTipAmount, request.PublicTipReconciliationReason);
         await _repository.SaveInputsAsync(run.Id, new SaveInputsData
         {
             ExpectedInputVersion = request.ExpectedInputVersion,
-            PublicTipAmount = request.PublicTipAmount,
+            PublicTipAmount = 0,
+            PublicTipReconciliationReason = request.PublicTipReconciliationReason?.Trim(),
             DayType = dayType,
             RuleVersionId = rule.Id,
             RuleSnapshotJson = JsonSerializer.Serialize(rule),
@@ -447,7 +450,8 @@ public sealed partial class SettlementService : ISettlementService
         var companyIncome = companyRevenue * rule.CompanyPercentage / 100m;
         var grossRevenue = designatedRevenueBase + dedicatedGross + publicRoomUnassigned + admissionRevenue + mealRevenue + unknownRevenue;
         var runCopy = CopyRun(run);
-        runCopy.CalculationVersion = 3;
+        runCopy.CalculationVersion = 4;
+        runCopy.PublicTipAmount = 0;
         runCopy.RuleVersionId = rule.Id;
         runCopy.RuleSnapshotJson = JsonSerializer.Serialize(rule);
         runCopy.AdmissionFeeSnapshot = admissionFee;
@@ -507,6 +511,7 @@ public sealed partial class SettlementService : ISettlementService
             else if (assigned > tip.Value)
                 anomalies.Add(new SettlementAnomalyDto("DESIGNATED_TIP_DUPLICATED", "指定小費分配超過來源金額，請核對收入列。", tip.Key));
         }
+        ApplyPublicTips(run, runCopy, rule, source, results, anomalies);
         foreach (var result in results.Where(x => (x.Role is "designated" or "designated_tip") && x.StaffId is not null))
         {
             var sources = new List<SettlementResultSourceRow>();
@@ -532,7 +537,7 @@ public sealed partial class SettlementService : ISettlementService
                             : allocation.Recognize(x.OrderId, x.StaffAmount))
                     };
                 }));
-            result.Sources = sources;
+            result.Sources = result.Sources.Concat(sources).ToArray();
             foreach (var detail in sources)
             {
                 if (!orderMap.TryGetValue(detail.OrderId, out var order)) continue;
@@ -845,7 +850,7 @@ public sealed partial class SettlementService : ISettlementService
                  source.PendingFinanceItems.Select(x => new SettlementPendingFinanceItemDto(x.SessionId,
                      x.CustomerName, x.OrderId, x.OrderNumber, x.PendingRecordCount)).ToArray()),
              source.PayrollAssignments.Select(x => new SettlementPayrollAssignmentDto(x.StaffId, x.DisplayName, x.PayrollRole,
-                 x.PayrollSnapshotVersion, x.CanUseBackstage, x.StartedAt)).ToArray());
+                 x.PayrollSnapshotVersion, x.CanUseBackstage, x.StartedAt)).ToArray()) { PublicTipPool = PublicTipPool(source) };
 
     private static SettlementAnomalyDto EnrichAnomaly(SettlementSourceData source, SettlementAnomalyDto anomaly)
     {

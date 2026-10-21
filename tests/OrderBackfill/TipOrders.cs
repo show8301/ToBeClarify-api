@@ -17,8 +17,15 @@ static class TipOrders
     public static void PolicyChecks()
     {
         OrderingFinanceTipStaffOptionDto[] staff = [new("a", "A", ["service"]), new("b", "B", ["designated"])];
-        var equal = OrderTipDistributionPolicy.Calculate(101, "equal", [new("b", null), new("a", null)], staff);
-        Check(equal.Allocations.Sum(x => x.Amount) == 101 && equal.Allocations[0].Amount == 51, "equal allocation preserves integer total");
+        var publicTip = OrderTipDistributionPolicy.Calculate(101, "public", [], []);
+        Check(publicTip.Allocations.Count == 0 && publicTip.PublicAmount == 101, "public pool is resolved at settlement, not at order time");
+        var split = OrderTipDistributionPolicy.FromStandard(101, "a", "A", 30);
+        Check(split.PublicAmount == 71 && split.Allocations.Single().Amount == 30,
+            "standard customer tip preserves designated share and puts remainder in the public pool");
+        Check(OrderTipDistributionPolicy.FromStandard(101, null, null, 100).Mode == "public"
+            && OrderTipDistributionPolicy.FromStandard(101, "a", "A", 0).PublicAmount == 101,
+            "unassigned and zero-designated standard tips are entirely public");
+        RejectSync(() => OrderTipDistributionPolicy.Calculate(100, "public", [new("a", null)], staff));
         var custom = OrderTipDistributionPolicy.Calculate(101, "custom", [new("a", 30), new("b", 70)], staff);
         Check(custom.Allocations.Sum(x => x.Amount) == 101 && custom.Allocations[0].Amount == 30, "custom allocation preserves integer total");
         RejectSync(() => OrderTipDistributionPolicy.Calculate(100, "equal", [new("a", null)], staff));
@@ -61,7 +68,7 @@ static class TipOrders
         var finance = new OrderingFinanceRepository(context);
         var before = await finance.GetAccountAsync(template.SessionId, default);
         var staff = await finance.GetTipStaffOptionsAsync(template.SessionId, default);
-        var distribution = OrderTipDistributionPolicy.Calculate(101, "equal", staff.Select(x => new SaveOrderingFinanceTipAllocationRequest(x.StaffId, null)).ToArray(), staff);
+        var distribution = OrderTipDistributionPolicy.Calculate(101, "public", [], staff);
         var itemId = Guid.NewGuid().ToString("D");
         var order = template with { Id = Guid.NewGuid().ToString("D"), OrderNumber = "fixture-distributed-tip", Subtotal = 101, TotalAmount = 101,
             Items = [new(itemId, "tip", null, null, "employee tip", 101, 1, null, null, 101, "tip_allocation", 0)],
@@ -76,7 +83,12 @@ static class TipOrders
         var after = await finance.GetAccountAsync(order.SessionId, default);
         Check(after.Receivable == before.Receivable + 101 && after.CashReceived == before.CashReceived, "new tip creates receivable once and no receipt");
         var tips = await finance.GetOrderTipDistributionsAsync(order.SessionId, default);
-        Check(tips.Single(x => x.ItemId == itemId).Distribution!.Allocations.Sum(x => x.Amount) == 101, "distribution readback preserves total");
+        Check(tips.Single(x => x.ItemId == itemId).Distribution!.PublicAmount == 101, "distribution readback preserves total");
+        var publicSources = new List<SettlementTipRevenueRow>();
+        var publicLoader = typeof(SettlementRepository).GetMethod("AddDistributedOrderTipsAsync", BindingFlags.NonPublic | BindingFlags.Static)!;
+        await (Task)publicLoader.Invoke(null, [db, null, new DateOnly(2026, 10, 18), publicSources, CancellationToken.None])!;
+        Check(publicSources.Single().SourceType == "public_tip" && publicSources.Single().TipAmount == 101
+            && publicSources.Single().StaffId is null, "public order loader emits one pool source without per-head wage rows");
         var received = new SaveOrderingFinanceRecordRequest { OperationId = Guid.NewGuid().ToString("D"), ExpectedVersion = after.Version,
             Kind = "cash_receipt", Amount = 101, SourceKind = "order", OrderId = order.Id, SourcePeriodId = periodId, CashPeriodId = periodId,
             OccurredAt = order.Backfill.OccurredAt, Reason = "actual receipt" };
@@ -110,6 +122,7 @@ static class TipOrders
         var reconciled = await finance.GetAccountAsync(order.SessionId, default);
         Check(reconciled.Receivable == corrected.Receivable && reconciled.CashReceived == corrected.CashReceived, "void legacy allocation preserves money");
         Check(reconciled.Records.Single(x => x.Id == legacy).IsVoided, "legacy record retained as voided");
+        await PublicTipPersistence.Run(db, context, runId, order.Id);
         Console.WriteLine("Tip order database integration checks passed.");
     }
 

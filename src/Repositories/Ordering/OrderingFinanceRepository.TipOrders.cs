@@ -60,8 +60,13 @@ public sealed partial class OrderingFinanceRepository
                 "SELECT CAST(BUSINESS_PERIOD_ID AS CHAR(36)) FROM CUSTOMER_ORDER_SESSIONS WHERE ID=@SessionId;",
                 new { order.SessionId }, tx, cancellationToken: ct));
             var expected = tip.Distribution!;
-            var distribution = await ResolveTipDistributionAsync(connection, tx, periodId, tip.Amount, expected.Mode,
-                expected.Allocations.Select(x => new SaveOrderingFinanceTipAllocationRequest(x.StaffId, expected.Mode == "equal" ? null : x.Percentage)).ToArray(), ct);
+            // Standard customer tips already resolve the named staff server-side. Their remainder is public.
+            // This aggregate is internal; correction requests still pass the attendance/percentage policy.
+            var distribution = order.Backfill is null && expected.Mode == "custom"
+                ? expected : await ResolveTipDistributionAsync(connection, tx, periodId, tip.Amount, expected.Mode,
+                    expected.Allocations.Select(x => new SaveOrderingFinanceTipAllocationRequest(x.StaffId, x.Percentage)).ToArray(), ct);
+            if (distribution.Mode != "public" && distribution.Allocations.Sum(x => x.Amount) + distribution.PublicAmount != tip.Amount)
+                throw new BusinessException("小費分配總額與訂單不符。", "TIP_DISTRIBUTION_INVALID");
             if (JsonSerializer.Serialize(distribution) != JsonSerializer.Serialize(expected))
                 throw new ConflictException("小費分配已變更，請重新取得報價。", "TIP_DISTRIBUTION_CHANGED");
             await connection.ExecuteAsync(new CommandDefinition("""
@@ -119,7 +124,7 @@ public sealed partial class OrderingFinanceRepository
             INSERT INTO ORDERING_FINANCE_OPERATIONS (OPERATION_ID,SESSION_ID,PAYLOAD_HASH,RESULT_JSON,CREATED_AT,CREATED_BY)
             VALUES (@OperationId,@SessionId,@Hash,@Result,@Now,@ActorId);
             """, new { ItemId = itemId, Version = row.Version + 1, Snapshot = JsonSerializer.Serialize(distribution),
-            Label = distribution.Mode == "equal" ? "小費｜上班員工均分" : distribution.Mode == "custom" ? "小費｜自訂比例" : "小費｜指定店員",
+            Label = distribution.Mode == "public" ? "公共小費（按工時分配）" : distribution.Mode == "custom" ? "小費｜自訂比例" : "小費｜指定店員",
             Now = now, ActorId = actorId, SessionId = sessionId, row.OrderId, Before = JsonSerializer.Serialize(row),
             After = JsonSerializer.Serialize(new { distribution, request.Reason }), request.OperationId, Hash = hash,
             Result = JsonSerializer.Serialize(result) }, tx, cancellationToken: ct));

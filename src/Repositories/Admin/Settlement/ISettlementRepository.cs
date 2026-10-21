@@ -70,6 +70,7 @@ public interface ISettlementRepository
 
 public sealed class SaveInputsData
 {
+    public string? PublicTipReconciliationReason { get; init; }
     public string? RuleSnapshotJson { get; init; }
     public int? ExpectedInputVersion { get; init; }
     public string? DayType { get; init; }

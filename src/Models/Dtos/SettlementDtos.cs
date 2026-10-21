@@ -183,9 +183,16 @@ public sealed record SettlementOverviewDto(
     SettlementWorkflowDto? Workflow = null,
     IReadOnlyList<SettlementPayrollAssignmentDto>? PayrollAssignments = null)
 {
+    public SettlementPublicTipPoolDto? PublicTipPool { get; init; }
     public int PendingOrderBackfillCount { get; init; }
     public IReadOnlyList<SettlementPayrollRoleCorrectionDto> PendingPayrollRoleCorrections { get; init; } = [];
 }
+
+public sealed record SettlementPublicTipSourceDto(string OrderId, string OrderNumber, decimal OriginalAmount,
+    decimal OrderPayableAmount, decimal OrderCollectedAmount, decimal RecognizedAmount, string Status);
+public sealed record SettlementPublicTipPoolDto(decimal RecognizedAmount, decimal DistributableAmount,
+    IReadOnlyList<SettlementPublicTipSourceDto> Sources,
+    IReadOnlyList<SettlementPublicTipSourceDto>? LegacyStoreSources = null);
 
 public sealed record SettlementPayrollRoleCorrectionDto(string StaffId, string DisplayName,
     string BeforeRole, string AfterRole);
@@ -220,6 +227,7 @@ public sealed class SaveSettlementInputsRequest
     [Required] public DateOnly BusinessDate { get; init; }
     [Range(1, int.MaxValue)] public int SessionNo { get; init; } = 1;
     [RegularExpression("^(normal|event)$")] public string? DayType { get; init; }
+    [StringLength(500)] public string? PublicTipReconciliationReason { get; init; }
     [Range(0, int.MaxValue)] public int PublicTipAmount { get; init; }
     [Range(0, int.MaxValue)] public int? AdmissionFeeOverride { get; init; }
     [Range(0, int.MaxValue)] public int ActivityExpense { get; init; }
