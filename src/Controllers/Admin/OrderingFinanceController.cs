@@ -30,6 +30,15 @@ public sealed class OrderingFinanceController(OrderingFinanceService service) : 
         string sessionId, CancellationToken ct)
         => Ok(ApiResponse<IReadOnlyList<OrderingFinanceTipStaffOptionDto>>.Ok(await service.GetTipStaffOptionsAsync(sessionId, ct)));
 
+    [HttpGet("order-tips")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<OrderTipDistributionDto>>>> OrderTips(string sessionId, CancellationToken ct)
+        => Ok(ApiResponse<IReadOnlyList<OrderTipDistributionDto>>.Ok(await service.GetOrderTipDistributionsAsync(sessionId, ct)));
+
+    [HttpPut("order-tips/{itemId}")]
+    public async Task<ActionResult<ApiResponse<OrderingFinanceOperationDto>>> CorrectOrderTip(string sessionId, string itemId,
+        CorrectOrderTipDistributionRequest request, CancellationToken ct)
+        => Ok(ApiResponse<OrderingFinanceOperationDto>.Ok(await service.CorrectOrderTipAsync(sessionId, itemId, request, User, ct)));
+
     [HttpGet("admission")]
     public async Task<ActionResult<ApiResponse<OrderingAdmissionDto?>>> Admission(string sessionId, CancellationToken ct)
         => Ok(ApiResponse<OrderingAdmissionDto?>.Ok(await service.GetAdmissionAsync(sessionId, ct)));

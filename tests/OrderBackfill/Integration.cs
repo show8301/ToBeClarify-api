@@ -32,6 +32,8 @@ static class Integration
         await db.ExecuteAsync(await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "migration.sql")));
         // The new migration is additive and rerunnable.
         await db.ExecuteAsync(await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "migration.sql")));
+        await db.ExecuteAsync(await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "tip-migration.sql")));
+        await db.ExecuteAsync(await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "tip-migration.sql")));
         var now = new DateTime(2026, 10, 20, 20, 0, 0);
         var actual = new DateTime(2026, 10, 18, 22, 0, 0);
         var periodId = Guid.NewGuid().ToString("D");
@@ -157,7 +159,7 @@ static class Integration
             BackfillDuplicateHash = "tip-content", Backfill = failed.Backfill! with { OperationId = Guid.NewGuid().ToString("D"),
                 ExpectedFinanceVersion = 1, LinkedCashRecordId = otherCashId, ExpectedCashRecordVersion = 1 } };
         duplicateTip = await Quote(db, duplicateTip, now);
-        await Reject(() => repository.CreateOrderAsync(duplicateTip, default), "ORDER_BACKFILL_TIP_DUPLICATE");
+        await Reject(() => repository.CreateOrderAsync(duplicateTip, default), "TIP_LEGACY_RECONCILIATION_REQUIRED");
         await db.ExecuteAsync("UPDATE ORDERING_FINANCE_RECORDS SET VOIDED_AT=@Now WHERE ID IN @Ids;",
             new { Now = now, Ids = new[] { otherCashId, existingTipId } });
         var chargeId = Guid.NewGuid().ToString("D");
@@ -178,6 +180,7 @@ static class Integration
         Assert(await db.ExecuteScalarAsync<string>("SELECT STATUS FROM SETTLEMENT_RUNS") == "draft", "closed-period backfill invalidates an unfinalized calculation");
         Assert(await db.ExecuteScalarAsync<int>("SELECT INPUT_VERSION FROM SETTLEMENT_RUNS") == 4, "old calculated input version cannot finalize");
         Assert(await db.ExecuteScalarAsync<long>("SELECT SUM(AMOUNT) FROM ORDERING_FINANCE_RECORDS WHERE KIND='cash_receipt' AND VOIDED_AT IS NULL") == 100000, "unlinked backfill never invents cash");
+        await TipOrders.Integration(db, context, failed, periodId, runId);
         Console.WriteLine("Local MariaDB transaction checks passed (concurrency, cash totals, rollback, completed service, settlement retention).");
     }
     static void Assert(bool value, string label) { if (!value) throw new Exception(label); }

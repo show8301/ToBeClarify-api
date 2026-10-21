@@ -143,7 +143,7 @@ public sealed partial class OrderingFinanceRepository(AppDbContext dbContext)
     private static async Task<IReadOnlyList<TipStaffRow>> GetEligibleTipStaffAsync(MySqlConnection connection,
         MySqlTransaction transaction, string sourcePeriodId, CancellationToken ct)
         => (await connection.QueryAsync<TipStaffRow>(new CommandDefinition("""
-            SELECT I.STAFF_ID AS StaffId, M.DISPLAY_NAME AS DisplayName, I.ROLE AS Role
+            SELECT CAST(I.STAFF_ID AS CHAR(36)) AS StaffId, M.DISPLAY_NAME AS DisplayName, I.ROLE AS Role
             FROM BUSINESS_PERIODS BP
             INNER JOIN SETTLEMENT_RUNS R ON R.BUSINESS_DATE = BP.BUSINESS_DATE
             INNER JOIN SETTLEMENT_STAFF_INPUTS I ON I.SETTLEMENT_ID = R.ID
@@ -665,6 +665,7 @@ public sealed partial class OrderingFinanceRepository(AppDbContext dbContext)
     {
         await using var connection = await dbContext.CreateOpenConnectionAsync(ct);
         await using var transaction = await connection.BeginTransactionAsync(ct);
+        await LockTipSettlementAsync(connection, transaction, ct);
         var session = await GetSessionAsync(connection, transaction, sessionId, true, ct);
         var prior = await connection.QuerySingleOrDefaultAsync<OperationRow>(new CommandDefinition("""
             SELECT SESSION_ID AS SessionId, PAYLOAD_HASH AS PayloadHash, RESULT_JSON AS ResultJson
@@ -687,8 +688,8 @@ public sealed partial class OrderingFinanceRepository(AppDbContext dbContext)
             transaction, cancellationToken: ct));
         if (row is null)
             throw new BusinessException("找不到這筆收退款紀錄。", "FINANCE_RECORD_NOT_FOUND");
-        if (row.Kind is not ("cash_receipt" or "cash_refund"))
-            throw new BusinessException("目前只有實際收款與實際退款可以作廢。", "FINANCE_VOID_KIND_NOT_ALLOWED");
+        if (row.Kind is not ("cash_receipt" or "cash_refund" or "tip_supplement"))
+            throw new BusinessException("只有實際收退款與舊版補登小費可以作廢。", "FINANCE_VOID_KIND_NOT_ALLOWED");
         if (row.VoidedAt is not null)
             throw new BusinessException("這筆紀錄已作廢。", "FINANCE_RECORD_ALREADY_VOIDED");
         if (row.Version != request.ExpectedRecordVersion)
@@ -726,6 +727,7 @@ public sealed partial class OrderingFinanceRepository(AppDbContext dbContext)
             """, new { request.OperationId, SessionId = sessionId, PayloadHash = payloadHash,
             ResultJson = JsonSerializer.Serialize(result), Now = now, ActorId = actorId },
             transaction, cancellationToken: ct));
+        await InvalidateTipDraftAsync(connection, transaction, sessionId, ct);
         await transaction.CommitAsync(ct);
         return result;
     }

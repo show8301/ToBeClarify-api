@@ -436,6 +436,22 @@ public sealed partial class OrderingService : IOrderingService
 
         foreach (var line in request.Tips)
         {
+            if (line.DistributionMode is not null)
+            {
+                if (backfill is null)
+                    throw new BusinessException("員工小費分配請由後台補登已成交訂單建立。", "TIP_BACKFILL_REQUIRED");
+                var distribution = OrderTipDistributionPolicy.Calculate(line.Amount, line.DistributionMode,
+                    line.Allocations, await _finance.GetTipStaffOptionsAsync(session.Id, cancellationToken));
+                var tipItemId = NewId();
+                var label = distribution.Mode == "equal" ? "小費｜上班員工均分" : distribution.Mode == "custom" ? "小費｜自訂比例" : "小費｜指定店員";
+                items.Add(new NewOrderItem(tipItemId, "tip", null, null, label, line.Amount, 1, null, null,
+                    line.Amount, "tip_allocation", sort++));
+                tips.Add(new NewOrderTip(NewId(), tipItemId, null, label, line.Amount, 100, 0, line.Amount, 0)
+                    { Distribution = distribution });
+                continue;
+            }
+            if (line.Allocations.Count > 0)
+                throw new BusinessException("請指定小費分配方式。", "TIP_DISTRIBUTION_INVALID");
             string? staffName = null;
             var staffPercentage = line.StaffPercentage;
             if (string.IsNullOrWhiteSpace(line.StaffId))

@@ -175,6 +175,7 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
             INNER JOIN `CUSTOMER_ORDER_SESSIONS` S ON S.`ID` = O.`SESSION_ID`
             WHERE S.`BUSINESS_DATE` = @BusinessDate
               AND O.`ORDER_STATUS` NOT IN ('cancelled', 'expired', 'rejected')
+              AND NOT EXISTS (SELECT 1 FROM ORDER_TIP_DISTRIBUTIONS D WHERE D.ORDER_ITEM_ID=T.ORDER_ITEM_ID)
             UNION ALL
             SELECT R.`ORDER_ID` AS OrderId, A.`STAFF_ID` AS StaffId,
                    A.`AMOUNT` AS StaffAmount, R.`AMOUNT` AS TipAmount, 0 AS StoreAmount,
@@ -377,6 +378,7 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
         var pendingFinanceItems = (await multi.ReadAsync<SettlementPendingFinanceItemRow>()).AsList();
         var period = await multi.ReadFirstOrDefaultAsync<SettlementPeriodSummaryRow>() ?? new SettlementPeriodSummaryRow();
         var cashAllocations = (await multi.ReadAsync<SettlementCashAllocationRow>()).AsList();
+        await AddDistributedOrderTipsAsync(connection, transaction, businessDate, tips, cancellationToken);
         var finalized = await connection.ExecuteScalarAsync<bool>(new CommandDefinition(
             "SELECT COUNT(*) > 0 FROM `SETTLEMENT_RUNS` WHERE `ID` = @SettlementId AND `STATUS` = 'finalized';",
             new { SettlementId = settlementId }, transaction, cancellationToken: cancellationToken));

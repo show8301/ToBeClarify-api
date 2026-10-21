@@ -733,6 +733,11 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
                     cancellationToken: cancellationToken));
             }
 
+            if (order.Tips.Count > 0 && await connection.ExecuteScalarAsync<bool>(new CommandDefinition(
+                "SELECT COUNT(*)>0 FROM ORDERING_FINANCE_RECORDS WHERE SESSION_ID=@SessionId AND KIND='tip_supplement' AND VOIDED_AT IS NULL;",
+                new { order.SessionId }, transaction, cancellationToken: cancellationToken)))
+                throw new ConflictException("此顧客仍有舊版補登小費，請核對並作廢已由訂單取代的分配後再建立小費訂單。", "TIP_LEGACY_RECONCILIATION_REQUIRED");
+            await OrderingFinanceRepository.SaveNewTipDistributionsAsync(connection, transaction, order, cancellationToken);
             await InsertHistoryAsync(connection, transaction, order.Id, null, order.Status,
                 order.Backfill is not null ? $"店員補登已成交訂單：{order.Backfill.Reason.Trim()}" : order.ActorType == "manager_transfer" ? "經理建立指名承接請求" : order.ActorType == "staff" ? "店員代客送出訂單" : "顧客送出訂單",
                 order.ActorType, order.ActorId, order.SubmittedAt, cancellationToken);
