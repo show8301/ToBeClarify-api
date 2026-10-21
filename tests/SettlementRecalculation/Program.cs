@@ -195,6 +195,30 @@ Check(poolSource.Results.Single(x => x.StaffId == "b").RevenueShare == 125
     && poolCorrected.Calculation.Results.Single(x => x.StaffId == "b").RevenueShare == 250
     && poolCorrected.Preview.Changes.Any(x => x.StaffId == "b"),
     "Correcting a role recalculates and previews affected coworkers' shared-pool wages.");
+var chosenRule = JsonSerializer.Deserialize<SettlementRuleRow>(JsonSerializer.Serialize(rule))!;
+chosenRule.Id = "selected-rule"; chosenRule.EffectiveFrom = new(2026, 10, 21); chosenRule.ServiceManagerHourlyRate = 60000;
+var ruleAdjustment = new SettlementRecalculationAdjustmentsRequest { DayType = "normal", RuleVersionId = chosenRule.Id };
+var chosenPlan = PrepareWithAdjustments(source with { SelectedRule = chosenRule }, ruleAdjustment);
+Check(chosenPlan.Calculation.Run.RuleVersionId == chosenRule.Id && chosenPlan.Preview.CorrectedPayroll == 120000,
+    "Explicit historical recalculation uses the selected persisted rule, including a later effective date.");
+Check(run.RuleVersionId == rule.Id && run.RuleSnapshotJson == originalJson && source.Results.Single().AfterRounding == 50000,
+    "Selecting a new rule during preview preserves the finalized rule and amounts.");
+Check(chosenPlan.Preview.PreviousRuleVersionId == rule.Id && chosenPlan.Preview.CorrectedRuleVersionId == chosenRule.Id,
+    "Preview discloses previous and proposed rule identities.");
+Check(chosenPlan.Preview.SourceToken != plan.Preview.SourceToken,
+    "Changing rule versions invalidates previous preview tokens.");
+var sameMoneyRule = JsonSerializer.Deserialize<SettlementRuleRow>(JsonSerializer.Serialize(rule))!;
+sameMoneyRule.Id = "same-money-new-version";
+var ruleOnlyPlan = PrepareWithAdjustments(settled with { SelectedRule = sameMoneyRule }, new() { DayType = "normal", RuleVersionId = sameMoneyRule.Id });
+Check(ruleOnlyPlan.Preview.HasChanges && ruleOnlyPlan.Preview.PayrollDelta == 0,
+    "A rule version change is auditable even without a monetary difference.");
+try { PrepareWithAdjustments(source, ruleAdjustment); throw new Exception("An unvalidated rule was accepted."); }
+catch (TargetInvocationException ex) when (ex.InnerException is BusinessException) { checks++; }
+var wrongType = JsonSerializer.Deserialize<SettlementRuleRow>(JsonSerializer.Serialize(chosenRule))!;
+wrongType.DayType = "event";
+try { PrepareWithAdjustments(source with { SelectedRule = wrongType }, ruleAdjustment); throw new Exception("Wrong day type accepted."); }
+catch (TargetInvocationException ex) when (ex.InnerException is BusinessException) { checks++; }
+await RuleSelectionChecks.Run();
 Console.WriteLine($"Passed {checks} settlement recalculation memory checks; no database connections were used.");
 if (args.Contains("--payroll-integration")) await PayrollRoleIntegration.Run();
 

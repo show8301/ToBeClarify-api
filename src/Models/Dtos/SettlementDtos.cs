@@ -215,6 +215,7 @@ public sealed record SettlementWorkflowDto(
 
 public sealed class SaveSettlementInputsRequest
 {
+    [StringLength(36)] public string? RuleVersionId { get; init; }
     public int? ExpectedInputVersion { get; init; }
     [Required] public DateOnly BusinessDate { get; init; }
     [Range(1, int.MaxValue)] public int SessionNo { get; init; } = 1;
