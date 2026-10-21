@@ -2,6 +2,13 @@
 
 ## Scope and security
 
+For the delivery-specific `STORAGE_KEY` layout, verified deployment-parent evidence,
+1 MiB database transfer, IIS/ACL preflight and executable rollback procedure, follow
+[the art-delivery release procedure](art-delivery-files-release.md). Apply additive
+`20261020_04_art_delivery_storage_key.sql` after the `20261020_03` prerequisite below.
+Delivery files now use `art-deliveries/{deliveryId}/{assetId}.png`; retained
+`STORAGE_PATH` values remain readable during the compatibility window.
+
 New guestbook images and delivery attachments use `MediaDiskStorage`, the same
 atomic disk-writing implementation used by ordinary admin media uploads. Ordinary
 media retains its existing public root and metadata. Protected images use a
@@ -60,7 +67,8 @@ blobs remain. `verify` performs no file/DB writes and checks each file's length/
 against metadata and any retained blob. Both include **all** guestbook image rows
 (including hidden/detached images) and delivery image rows (including soft removed).
 They use keyset batches and one-row transactions; at most one image row is locked
-at a time. Failures exit nonzero; fix the cause and rerun. Deterministic hash paths
+at a time. BLOBs are read in 1 MiB chunks and compared with DB-side SHA2, including
+retained BLOBs during verification. Failures exit nonzero; fix the cause and rerun. Deterministic paths
 and verification make copy resumable. Do not run multiple maintenance instances
 concurrently. For an exact final count/backup, use a short upload/moderation pause;
 otherwise concurrent changes can make totals differ. Do not publish private paths
@@ -108,7 +116,8 @@ does not delete files. There is intentionally no automatic private-file deletion
 
 Before blob cleanup, original blobs remain for pre-existing images, but **new images
 have only files**. Do not roll back to the old API binary without restoring file-only
-rows to their legacy blob columns first via an approved recovery procedure. Retain
+rows to their legacy blob columns first using the approved `restore-legacy` mode
+described in the delivery release procedure. Retain
 the new compatible reader or use a forward fix. After cleanup, recovery requires
 the private files or paired backups; a DB-only restore is insufficient. Never remove
 the private directory or old columns just to roll back code.
