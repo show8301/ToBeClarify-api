@@ -9,7 +9,7 @@ using ToBeClarify.Api.Repositories.Ordering;
 
 namespace ToBeClarify.Api.Services.Ordering;
 
-public sealed class OrderingFinanceService(OrderingFinanceRepository repository)
+public sealed partial class OrderingFinanceService(OrderingFinanceRepository repository)
 {
     public Task<OrderingFinanceAccountDto> GetAccountAsync(string sessionId, CancellationToken ct)
         => repository.GetAccountAsync(sessionId, ct);
@@ -81,6 +81,8 @@ public sealed class OrderingFinanceService(OrderingFinanceRepository repository)
     public async Task<OrderingFinanceOperationDto> SaveAsync(string sessionId, string? recordId,
         SaveOrderingFinanceRecordRequest request, ClaimsPrincipal actor, CancellationToken ct)
     {
+        if (request.Kind == "tip_supplement")
+            throw new BusinessException("小費請改由補登已成交訂單建立；舊補登請核對後作廢。", "FINANCE_TIP_USE_ORDER");
         var actorId = actor.FindFirstValue(AdminAuthConstants.UserIdClaimType)
             ?? actor.FindFirstValue(ClaimTypes.NameIdentifier) ?? throw new UnauthorizedException();
         if (!Guid.TryParse(request.OperationId, out var operationId) || request.ExpectedVersion < 0)

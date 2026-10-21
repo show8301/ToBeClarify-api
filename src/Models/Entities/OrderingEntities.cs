@@ -1,3 +1,5 @@
+using ToBeClarify.Api.Models.Dtos;
+
 namespace ToBeClarify.Api.Models.Entities;
 
 public sealed class OrderingSettingsRow
@@ -277,7 +279,10 @@ public sealed record NewOrderRoom(
 
 public sealed record NewOrderTip(
     string Id, string OrderItemId, string? StaffId, string? StaffName,
-    int Amount, int StaffPercentage, int StorePercentage, int StaffAmount, int StoreAmount);
+    int Amount, int StaffPercentage, int StorePercentage, int StaffAmount, int StoreAmount)
+{
+    public OrderTipDistributionSnapshot? Distribution { get; init; }
+}
 
 public sealed record NewOrderAggregate(
     string Id, string SessionId, string OrderNumber, string OrderKind, string? ParentNomineeId,

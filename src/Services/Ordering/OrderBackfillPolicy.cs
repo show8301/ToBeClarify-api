@@ -46,7 +46,8 @@ public static class OrderBackfillPolicy
             x.SegmentCount, StartsAt = x.RequestedStartsAt.ToUniversalTime(), EndsAt = x.ActualEndsAt?.ToUniversalTime() })).Order(StringComparer.Ordinal),
         Rooms = request.Rooms.Select(x => JsonSerializer.Serialize(new { RoomId = Canonical(x.RoomId), x.SegmentCount,
             StartsAt = x.RequestedStartsAt.ToUniversalTime(), EndsAt = x.ActualEndsAt?.ToUniversalTime() })).Order(StringComparer.Ordinal),
-        Tips = request.Tips.Select(x => JsonSerializer.Serialize(new { StaffId = Canonical(x.StaffId), x.Amount, x.StaffPercentage })).Order(StringComparer.Ordinal)
+        Tips = request.Tips.Select(x => JsonSerializer.Serialize(new { StaffId = Canonical(x.StaffId), x.Amount, x.StaffPercentage, x.DistributionMode,
+            Allocations = x.Allocations.Select(a => new { StaffId = Canonical(a.StaffId), a.Percentage }).OrderBy(a => a.StaffId, StringComparer.Ordinal) })).Order(StringComparer.Ordinal)
     });
 
     private static string? Canonical(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim().ToLowerInvariant();

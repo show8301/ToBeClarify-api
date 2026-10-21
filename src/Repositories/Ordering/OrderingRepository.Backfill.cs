@@ -72,7 +72,7 @@ public sealed partial class OrderingRepository
             order.ActorId, End = end }, tx, cancellationToken: ct));
         await OrderingFinanceRepository.LinkBackfillCashAsync(connection, tx, order, ct);
         await InsertAuditAsync(connection, tx, order.Id, order.SessionId, "order.backfill_created", null,
-            JsonSerializer.Serialize(new { snapshot, order.Items, order.Nominees, order.Rooms }), order.ActorId!,
+            JsonSerializer.Serialize(new { snapshot, order.Items, order.Nominees, order.Rooms, order.Tips }), order.ActorId!,
             order.ActorRole ?? "staff", order.SubmittedAt, ct);
     }
 

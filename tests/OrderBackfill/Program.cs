@@ -27,6 +27,7 @@ Equal(OrderBackfillPolicy.DuplicateHash(first), OrderBackfillPolicy.DuplicateHas
 Check(OrderBackfillPolicy.PayloadHash(first) != OrderBackfillPolicy.PayloadHash(reordered), "different payload must conflict on a reused operation ID");
 Check(OrderBackfillPolicy.DuplicateHash(first) != OrderBackfillPolicy.DuplicateHash(new SubmitOrderRequest {
     Backfill = backfill, Meals = [new() { ReferenceId = "different-meal", Quantity = 2 }] }), "different products are not duplicates");
+TipOrders.PolicyChecks();
 if (args.Contains("--integration")) await Integration.Run();
 Console.WriteLine("Order backfill checks passed.");
 

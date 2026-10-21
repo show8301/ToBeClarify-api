@@ -34,7 +34,7 @@ public sealed class MenuQuoteService(AppDbContext db, IAppClock clock)
         Items = order.Items.Select(x => new { x.ItemType, x.ReferenceId, x.Name, x.UnitPrice, x.Quantity, x.SegmentCount, x.DurationMinutes, x.LineTotal, x.PriceRule, x.IsChampagneTower, x.RecipientStaffId, x.RecipientStaffName }),
         Nominees = order.Nominees.Select(x => new { x.StaffId, x.ServiceId, x.StartsAt, x.ServiceEndsAt, x.BusyUntil }),
         Rooms = order.Rooms.Select(x => new { x.RoomId, x.StartsAt, x.EndsAt, x.UnitPrice }),
-        Tips = order.Tips.Select(x => new { x.StaffId, x.Amount, x.StaffPercentage, x.StorePercentage }),
+        Tips = order.Tips.Select(x => new { x.StaffId, x.Amount, x.StaffPercentage, x.StorePercentage, x.Distribution }),
         order.Subtotal, order.MealCreditApplied, order.TotalAmount, order.StoreConfirmationStatus,
         order.CustomerLocation, order.MenuSnapshotJson
     });

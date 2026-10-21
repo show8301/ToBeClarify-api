@@ -328,6 +328,8 @@ public sealed class RoomOrderLineRequest
 
 public sealed class TipOrderLineRequest
 {
+    public string? DistributionMode { get; init; }
+    [Required, MaxLength(200)] public IReadOnlyList<SaveOrderingFinanceTipAllocationRequest> Allocations { get; init; } = [];
     public string? StaffId { get; init; }
 
     [Range(1, 1000000)]
