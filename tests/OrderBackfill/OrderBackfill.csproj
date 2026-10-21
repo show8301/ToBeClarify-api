@@ -3,4 +3,9 @@
   <ItemGroup><FrameworkReference Include="Microsoft.AspNetCore.App" /><ProjectReference Include="../../ToBeClarify.Api.csproj" /></ItemGroup>
   <ItemGroup><None Update="schema.sql" CopyToOutputDirectory="PreserveNewest" /><None Include="../../db/migrations/20261020_02_order_backfills.sql" Link="migration.sql" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
   <ItemGroup><None Include="../../db/migrations/20261021_01_order_tip_distributions.sql" Link="tip-migration.sql" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
+  <ItemGroup>
+    <None Include="../../db/migrations/20260907_01_settlement_payroll.sql" Link="settlement-base.sql" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../db/migrations/20261019_01_settlement_result_sources.sql" Link="settlement-sources.sql" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../db/migrations/20261019_02_settlement_source_item_details.sql" Link="settlement-source-items.sql" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

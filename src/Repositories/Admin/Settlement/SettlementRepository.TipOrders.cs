@@ -20,10 +20,19 @@ public sealed partial class SettlementRepository
         foreach (var row in rows)
         {
             var snapshot = JsonSerializer.Deserialize<OrderTipDistributionSnapshot>(row.SnapshotJson)!;
+            if (snapshot.Mode == "public")
+            {
+                tips.Add(new SettlementTipRevenueRow { OrderId = row.OrderId, TipAmount = row.Amount,
+                    SourceType = "public_tip", SourceLabel = "公共小費（按工時分配）" });
+                continue;
+            }
+            if (snapshot.PublicAmount > 0)
+                tips.Add(new SettlementTipRevenueRow { OrderId = row.OrderId, TipAmount = snapshot.PublicAmount,
+                    SourceType = "public_tip", SourceLabel = "公共小費（按工時分配）" });
             foreach (var share in snapshot.Allocations)
                 tips.Add(new SettlementTipRevenueRow { OrderId = row.OrderId, StaffId = share.StaffId,
                     StaffAmount = share.Amount, TipAmount = share.Amount, StoreAmount = 0, BasisAmount = row.Amount,
-                    Percentage = share.Percentage ?? 0, SourceType = "order_tip",
+                    Percentage = share.Percentage ?? 0, SourceType = snapshot.Mode == "equal" ? "legacy_equal" : "order_tip",
                     SourceLabel = snapshot.Mode == "equal" ? "訂單小費（均分）" : snapshot.Mode == "custom" ? "訂單小費（自訂比例）" : "訂單小費（指定）" });
         }
     }

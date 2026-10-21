@@ -24,7 +24,7 @@ var run = new SettlementRunRow
 {
     Id = "settlement", BusinessDate = new(2026, 10, 18), SessionNo = 1, Status = "finalized",
     RuleVersionId = rule.Id, RuleSnapshotJson = JsonSerializer.Serialize(rule), InputVersion = 3,
-    FinalizedAt = new(2026, 10, 19, 2, 0, 0), FinalizedBy = "manager", CalculationVersion = 2
+    FinalizedAt = new(2026, 10, 19, 2, 0, 0), FinalizedBy = "manager", CalculationVersion = 4
 };
 var source = new SettlementSourceData
 {
@@ -82,15 +82,15 @@ var changedPaymentPlan = (SettlementRecalculationPlan)prepare.Invoke(service, [r
 Check(changedPaymentPlan.Preview.SourceToken != plan.Preview.SourceToken, "A payment recorded after preview requires rechecking balances.");
 var adjustments = new SettlementRecalculationAdjustmentsRequest
 {
-    DayType = "normal", PublicTipAmount = 123,
+    DayType = "normal", PublicTipAmount = 0,
     StaffInputs = [new() { StaffId = "xiaomi", Role = "manager", PayrollSnapshotVersion = 1,
         ActualMinutes = 177, ActualMinutesChanged = true }]
 };
 var adjustedPlan = PrepareWithAdjustments(source, adjustments);
 Check(adjustedPlan.Calculation.StaffInputs.Single().ActualMinutes == 177,
     "Staged payroll input adjustments are applied to the next version calculation.");
-Check(adjustedPlan.Calculation.Run.PublicTipAmount == 123 && adjustedPlan.Preview.HasChanges,
-    "Run-level input adjustments are included in the preview without requiring a reason at preview time.");
+Check(adjustedPlan.Calculation.Run.PublicTipAmount == 0 && adjustedPlan.Preview.HasChanges,
+    "Public tips are derived from orders while payroll input adjustments remain previewable.");
 Check(source.StaffInputs.Single().ActualMinutes == 57 && source.Results.Single().PayableHours == 1,
     "Previewing staged adjustments leaves the currently finalized version unchanged.");
 var confirmation = new ConfirmSettlementRecalculationRequest
@@ -219,6 +219,7 @@ wrongType.DayType = "event";
 try { PrepareWithAdjustments(source with { SelectedRule = wrongType }, ruleAdjustment); throw new Exception("Wrong day type accepted."); }
 catch (TargetInvocationException ex) when (ex.InnerException is BusinessException) { checks++; }
 await RuleSelectionChecks.Run();
+PublicTipChecks.Run();
 Console.WriteLine($"Passed {checks} settlement recalculation memory checks; no database connections were used.");
 if (args.Contains("--payroll-integration")) await PayrollRoleIntegration.Run();
 

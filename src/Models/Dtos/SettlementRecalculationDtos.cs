@@ -21,6 +21,7 @@ public sealed class SettlementRecalculationAdjustmentsRequest
 {
     [StringLength(36)] public string? RuleVersionId { get; init; }
     [Required, RegularExpression("^(normal|event)$")] public string DayType { get; init; } = "normal";
+    [StringLength(500)] public string? PublicTipReconciliationReason { get; init; }
     [Range(0, int.MaxValue)] public int PublicTipAmount { get; init; }
     [Range(0, int.MaxValue)] public int? AdmissionFeeOverride { get; init; }
     [Range(0, int.MaxValue)] public int ActivityExpense { get; init; }

@@ -443,7 +443,7 @@ public sealed partial class OrderingService : IOrderingService
                 var distribution = OrderTipDistributionPolicy.Calculate(line.Amount, line.DistributionMode,
                     line.Allocations, await _finance.GetTipStaffOptionsAsync(session.Id, cancellationToken));
                 var tipItemId = NewId();
-                var label = distribution.Mode == "equal" ? "小費｜上班員工均分" : distribution.Mode == "custom" ? "小費｜自訂比例" : "小費｜指定店員";
+                var label = distribution.Mode == "public" ? "公共小費（按工時分配）" : distribution.Mode == "custom" ? "小費｜自訂比例" : "小費｜指定店員";
                 items.Add(new NewOrderItem(tipItemId, "tip", null, null, label, line.Amount, 1, null, null,
                     line.Amount, "tip_allocation", sort++));
                 tips.Add(new NewOrderTip(NewId(), tipItemId, null, label, line.Amount, 100, 0, line.Amount, 0)
@@ -463,10 +463,12 @@ public sealed partial class OrderingService : IOrderingService
             var storeAmount = line.Amount - staffAmount;
             var itemId = NewId();
             items.Add(new NewOrderItem(itemId, "tip", line.StaffId, null,
-                staffName is null ? "店家小費" : $"小費｜{staffName}", line.Amount, 1, null, null,
+                staffName is null ? "公共小費（按工時分配）" : storeAmount > 0 ? $"小費｜{staffName}＋公共小費" : $"小費｜{staffName}", line.Amount, 1, null, null,
                 line.Amount, "tip_allocation", sort++));
+            // The customer contract calls the remainder a staff pool, not company income.
+            var standardDistribution = OrderTipDistributionPolicy.FromStandard(line.Amount, line.StaffId, staffName, staffPercentage);
             tips.Add(new NewOrderTip(NewId(), itemId, line.StaffId, staffName, line.Amount,
-                staffPercentage, 100 - staffPercentage, staffAmount, storeAmount));
+                staffPercentage, 100 - staffPercentage, staffAmount, storeAmount) { Distribution = standardDistribution });
         }
 
         var subtotal = items.Sum(item => item.LineTotal);

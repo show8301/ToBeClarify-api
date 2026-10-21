@@ -473,6 +473,13 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
                 VALUES (UUID(),@SettlementId,'settlement_rule_selected',@Before,@After,'選用結算規則版本',@ActorId,@Now);
                 """, new { SettlementId = settlementId, Before = JsonSerializer.Serialize(new { run.RuleVersionId, run.RuleSnapshotJson }),
                 After = JsonSerializer.Serialize(new { inputs.RuleVersionId, inputs.RuleSnapshotJson }), ActorId = actorId, Now = now }, transaction, cancellationToken: cancellationToken));
+        if (!string.IsNullOrWhiteSpace(inputs.PublicTipReconciliationReason))
+            await connection.ExecuteAsync(new CommandDefinition("""
+                INSERT INTO SETTLEMENT_AUDIT_LOG (ID,SETTLEMENT_ID,ACTION_TYPE,BEFORE_JSON,REASON,ACTOR_ID,CREATED_AT)
+                VALUES (UUID(),@SettlementId,'public_tip_reconciled',@Before,@Reason,@ActorId,@Now);
+                """, new { SettlementId = settlementId, Before = JsonSerializer.Serialize(new { run.PublicTipAmount }),
+                    Reason = inputs.PublicTipReconciliationReason, ActorId = actorId, Now = now }, transaction,
+                    cancellationToken: cancellationToken));
         await transaction.CommitAsync(cancellationToken);
     }
 
@@ -561,7 +568,7 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
             """, new { SettlementId = settlementId }, transaction, cancellationToken: cancellationToken));
         await connection.ExecuteAsync(new CommandDefinition("""
             UPDATE `SETTLEMENT_RUNS`
-            SET INPUT_VERSION=INPUT_VERSION+1, CALCULATION_VERSION=2, `DAY_TYPE`=@DayType,
+            SET INPUT_VERSION=INPUT_VERSION+1, CALCULATION_VERSION=@CalculationVersion, `DAY_TYPE`=@DayType,
                 `PUBLIC_TIP_AMOUNT`=@PublicTipAmount, `ADMISSION_FEE_OVERRIDE`=@AdmissionFeeOverride,
                 `ACTIVITY_EXPENSE`=@ActivityExpense, `COMPANY_SHARE_HOURS`=@CompanyShareHours,
                 `ACTIVITY_HOURS_CONFIRMED`=@ActivityHoursConfirmed,
@@ -581,7 +588,7 @@ public sealed partial class SettlementRepository : DapperRepositoryBase, ISettle
                 `RETAINED_AMOUNT` = @RetainedAmount, `PENDING_FINANCE_COUNT` = @PendingFinanceCount,
                 `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId
             WHERE `ID` = @SettlementId;
-            """, new { SettlementId = settlementId, calculation.Run.DayType, calculation.Run.PublicTipAmount,
+            """, new { SettlementId = settlementId, calculation.Run.CalculationVersion, calculation.Run.DayType, calculation.Run.PublicTipAmount,
                 calculation.Run.AdmissionFeeOverride, calculation.Run.ActivityExpense,
                 calculation.Run.CompanyShareHours, calculation.Run.ActivityHoursConfirmed,
                 calculation.Run.RuleVersionId,

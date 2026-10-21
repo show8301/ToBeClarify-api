@@ -71,7 +71,8 @@ public sealed partial class SettlementService
         {
             ValidateRecalculationAdjustments(adjustments, refreshed);
             calculationRun.DayType = adjustments.DayType;
-            calculationRun.PublicTipAmount = adjustments.PublicTipAmount;
+            ValidatePublicTipInput(run, adjustments.PublicTipAmount, adjustments.PublicTipReconciliationReason);
+            calculationRun.PublicTipAmount = 0;
             calculationRun.AdmissionFeeOverride = adjustments.AdmissionFeeOverride;
             calculationRun.ActivityExpense = adjustments.ActivityExpense;
             calculationRun.CompanyShareHours = adjustments.CompanyShareHours;
@@ -80,7 +81,6 @@ public sealed partial class SettlementService
                 adjustments.RemovedStaffInputs, refreshed);
             changedAdjustmentInputs = !RecalculationInputsEqual(refreshed.StaffInputs, proposedInputs)
                 || run.DayType != calculationRun.DayType
-                || run.PublicTipAmount != calculationRun.PublicTipAmount
                 || run.AdmissionFeeOverride != calculationRun.AdmissionFeeOverride
                 || run.ActivityExpense != calculationRun.ActivityExpense
                 || run.CompanyShareHours != calculationRun.CompanyShareHours
@@ -146,7 +146,8 @@ public sealed partial class SettlementService
         var hasChanges = changes.Count > 0 || roleInputsChanged || run.NetCash != calculation.Run.NetCash
             || run.CompanyIncome != calculation.Run.CompanyIncome || run.GrossRevenue != calculation.Run.GrossRevenue
             || run.RetainedAmount != calculation.Run.RetainedAmount
-            || run.PendingFinanceCount != calculation.Run.PendingFinanceCount || changedAdjustmentInputs || rule.Id != run.RuleVersionId;
+            || run.PendingFinanceCount != calculation.Run.PendingFinanceCount || changedAdjustmentInputs || rule.Id != run.RuleVersionId
+            || run.CalculationVersion != calculation.Run.CalculationVersion;
         var preview = new SettlementRecalculationPreviewDto(DateOnly.FromDateTime(run.BusinessDate),
             run.SessionNo, token, run.CorrectionVersion, hasChanges, beforePayroll, afterPayroll,
             afterPayroll - beforePayroll, run.NetCash, calculation.Run.NetCash,
