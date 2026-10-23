@@ -15,6 +15,22 @@ public sealed class SettlementController : ControllerBase
 
     public SettlementController(ISettlementService service) => _service = service;
 
+    [HttpGet("salary-dispatch")]
+    [Authorize(Policy = "AdminManager")]
+    public async Task<ActionResult<ApiResponse<SettlementSalaryDispatchDto>>> SalaryDispatch(
+        [FromQuery] DateOnly businessDate, [FromQuery] int sessionNo = 1, CancellationToken cancellationToken = default)
+        => Ok(ApiResponse<SettlementSalaryDispatchDto>.Ok(
+            await _service.GetSalaryDispatchAsync(businessDate, sessionNo, cancellationToken)));
+
+    [HttpPut("salary-dispatch")]
+    [Authorize(Policy = "AdminManager")]
+    public async Task<IActionResult> SaveSalaryDispatch(SaveSettlementSalaryDispatchRequest request,
+        CancellationToken cancellationToken)
+    {
+        await _service.SaveSalaryDispatchAsync(request, User, cancellationToken);
+        return NoContent();
+    }
+
     [HttpGet]
     public async Task<ActionResult<ApiResponse<SettlementOverviewDto>>> Get(
         [FromQuery] DateOnly businessDate, [FromQuery] int sessionNo = 1, CancellationToken cancellationToken = default)

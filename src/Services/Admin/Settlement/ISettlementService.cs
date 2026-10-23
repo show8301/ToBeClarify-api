@@ -5,6 +5,10 @@ namespace ToBeClarify.Api.Services.Admin.Settlement;
 
 public interface ISettlementService
 {
+    Task<SettlementSalaryDispatchDto> GetSalaryDispatchAsync(DateOnly businessDate, int sessionNo,
+        CancellationToken cancellationToken);
+    Task SaveSalaryDispatchAsync(SaveSettlementSalaryDispatchRequest request, ClaimsPrincipal actor,
+        CancellationToken cancellationToken);
     Task<SettlementRecalculationPreviewDto> PreviewRecalculationAsync(PreviewSettlementRecalculationRequest request,
         ClaimsPrincipal actor, CancellationToken cancellationToken);
     Task<SettlementOverviewDto> ConfirmRecalculationAsync(ConfirmSettlementRecalculationRequest request,

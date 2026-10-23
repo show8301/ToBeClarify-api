@@ -30,6 +30,10 @@ public sealed record SettlementSourceData
 
 public interface ISettlementRepository
 {
+    Task<SettlementSalaryDispatchDto> GetSalaryDispatchAsync(DateOnly businessDate, int sessionNo,
+        CancellationToken cancellationToken);
+    Task SaveSalaryDispatchAsync(SaveSettlementSalaryDispatchRequest request, string actorId, DateTime now,
+        CancellationToken cancellationToken);
     Task<int> GetPendingOrderBackfillCountAsync(string settlementId, CancellationToken ct);
     Task<SettlementRecalculationPreviewDto> RecalculateFinalizedAsync(DateOnly businessDate, int sessionNo,
         ConfirmSettlementRecalculationRequest? confirmation,
