@@ -29,13 +29,15 @@ public sealed partial class SettlementRepository
                        D.UPDATED_BY AS UpdatedBy, COALESCE(S.DISPLAY_NAME,A.LOGIN_NAME) AS UpdatedByName
                 FROM (
                     SELECT STAFF_ID FROM SETTLEMENT_STAFF_INPUTS WHERE SETTLEMENT_ID=@Id
-                    UNION SELECT STAFF_ID FROM SETTLEMENT_RESULT_LINES WHERE SETTLEMENT_ID=@Id AND STAFF_ID IS NOT NULL
+                    UNION SELECT STAFF_ID FROM SETTLEMENT_RESULT_LINES
+                        WHERE SETTLEMENT_ID=@Id AND STAFF_ID IS NOT NULL AND ANOMALY_STATUS<>'stale'
                     UNION SELECT STAFF_ID FROM SETTLEMENT_SALARY_DISPATCH WHERE SETTLEMENT_ID=@Id
                 ) P
                 LEFT JOIN STAFF_MEMBERS M ON M.ID=P.STAFF_ID
                 LEFT JOIN (
                     SELECT STAFF_ID, SUM(AFTER_ROUNDING) AS Salary FROM SETTLEMENT_RESULT_LINES
-                    WHERE SETTLEMENT_ID=@Id AND STAFF_ID IS NOT NULL GROUP BY STAFF_ID
+                    WHERE SETTLEMENT_ID=@Id AND STAFF_ID IS NOT NULL AND ANOMALY_STATUS<>'stale'
+                    GROUP BY STAFF_ID
                 ) R ON R.STAFF_ID=P.STAFF_ID
                 LEFT JOIN SETTLEMENT_SALARY_DISPATCH D ON D.SETTLEMENT_ID=@Id AND D.STAFF_ID=P.STAFF_ID
                 LEFT JOIN ADMIN_USERS A ON A.ID=D.UPDATED_BY
@@ -86,7 +88,8 @@ public sealed partial class SettlementRepository
 
         var eligible = await connection.ExecuteScalarAsync<int>(new CommandDefinition("""
             SELECT EXISTS(SELECT 1 FROM SETTLEMENT_STAFF_INPUTS WHERE SETTLEMENT_ID=@Id AND STAFF_ID=@StaffId)
-                OR EXISTS(SELECT 1 FROM SETTLEMENT_RESULT_LINES WHERE SETTLEMENT_ID=@Id AND STAFF_ID=@StaffId)
+                OR EXISTS(SELECT 1 FROM SETTLEMENT_RESULT_LINES
+                    WHERE SETTLEMENT_ID=@Id AND STAFF_ID=@StaffId AND ANOMALY_STATUS<>'stale')
                 OR EXISTS(SELECT 1 FROM SETTLEMENT_SALARY_DISPATCH WHERE SETTLEMENT_ID=@Id AND STAFF_ID=@StaffId);
             """, new { run.Id, request.StaffId }, transaction, cancellationToken: cancellationToken));
         if (eligible == 0)
