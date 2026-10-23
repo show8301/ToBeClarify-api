@@ -5,6 +5,7 @@ namespace ToBeClarify.Api.Services.Ordering;
 
 public interface IOrderingService
 {
+    Task<NominationAvailabilityDto> GetNominationAvailabilityAsync(string token, CancellationToken ct);
     Task<IReadOnlyList<AdminOrderSessionDto>> GetServiceSessionsAsync(DateOnly day, CancellationToken ct);
     Task<IReadOnlyList<OrderDto>> GetServiceOrdersAsync(DateOnly day, CancellationToken ct);
     Task<IReadOnlyList<OrderFulfillmentDto>> GetServiceFulfillmentAsync(DateOnly day, ClaimsPrincipal actor, CancellationToken ct);

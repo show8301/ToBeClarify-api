@@ -347,7 +347,20 @@ Cookie 特性：
 
 公開列表、公開詳細資料、後台列表與後台詳細資料共用 `StaffDutySql.IsOnDuty`。判斷不依 `FlowVersion` 分流，不讀舊 `STAFF_SCHEDULES`，也不讓 `STAFF_DAILY_WORK_MODES.IS_WORKING` 覆蓋核准班表；沒有核准上班時段時不預設上班。`todayShift` 回傳核准班表的日期及起訖時間，無有效班表時為 `null`。
 
-`isNominatable` 仍由店員的開放指名設定與該日 `STOP_ACCEPTING_NEW_ORDERS` 決定，不代表目前空閒。新指名採同一套核准班表規則檢查預約開始時間（保留班前預約能力），停止接單則另行拒絕新指名。當班通知的 `working_today`／`roles` 收件人也使用相同時段判斷，跨午夜以涵蓋當下的核准班表為準。
+`isNominatable` 仍由店員的開放指名設定與該日 `STOP_ACCEPTING_NEW_ORDERS` 決定，不代表目前空閒。2026-10-23 起公開列表／詳細資料新增 `nominationStatus`：`available`、`before_shift`、`busy`、`partially_reserved`、`fully_booked`、`paused`、`off`、`ended`、`overdue`。以至少一節服務加店員緩衝時間計算正常關店前的空檔；選定較長服務仍須另行檢查。尚未完成的超時服務不當成空閒。當班通知的 `working_today`／`roles` 收件人仍使用核准班表時段，跨午夜以涵蓋當下的核准班表為準。
+
+#### 指名可預約時段（2026-10-23）
+
+- `GET /api/client/ordering/nomination-availability`：需既有 `X-Order-Token`，沿用 `ordering-access` rate limit。回應為標準 API envelope，`data` 含 `businessDate`、`checkedAt`（台灣 offset）、`projectedCloseAt`、`nominationPaused`、`staff`。
+- 每位店員含 `staffId`、`isAccepting`、`shiftStartsAt`、`shiftEndsAt`、`bufferMinutes`、`isServing`、`isOverdue`、`windows: [{ startsAt, endsAt }]`。window 是尚未扣除本次服務長度的連續空檔；開始時間加服務及緩衝時間必須完整位於同一 window。不得解讀成預約已被保留。只傳空檔，不包含其他顧客／訂單識別資料。
+- 讀取與寫入共用 `NominationSchedule`：核准班表、`STAFF_RESERVATIONS`、有效 `STAFF_BUSY_BLOCKS`、新／舊流程的進行中服務。開始端點包含、結束端點不包含；跨午夜班次沿用原營業日。
+- 純打卡不改變核准班表邊界；仍允許班前預約班內未來時段。新單完整的服務及緩衝時間都須落在核准班次內。停止新指名不取消既有預約，也不阻止有效既有預約開始履約。
+- 已超過占用結束時間但服務尚未完成時，無法確定釋出時間，保守阻擋至班次結束（或待跨班服務完成），直到完成或明確調整服務；不預測一個可供再次預約的結束時間。
+- 預計關店不是硬性取消協調流程。window 可包含核准班內、48 小時營業期上限內的關店後空檔；超過 `projectedCloseAt` 的新單仍需店家確認。「今日預約已滿」指正常關店前無足夠空檔，不代表關店後協調已被核准。
+- 新單寫入、接受指名、調整指名及開始服務時重新驗證。相關交易使用 `READ COMMITTED`，鎖定店員與最新班表／預約占用來源；進行中履約在店員鎖內讀取最新已提交狀態，不額外鎖住其他訂單／履約以免反向等待。不以先前顯示的 window 當作保留憑證。尚未接受的請求不預占時段；互斥請求不能同時成立。
+- 開始服務不得班前啟動、與其他成立預約重疊或在前一服務尚未完成時重複啟動。既有「立即開始」仍可把尚未成立的衝突請求交回協調，但不再覆蓋已成立時段。歷史補登仍沿用補登流程，不當成新預約。
+- 後台 `start-preview` 新增可選 `startBlockedReason`，`canStartNow` 同時檢查班次、既有預約及進行中服務。預覽不是交易保證；實際操作再核對一次。
+- 無 DB migration、無新環境設定；API 先發布，舊 Web 可忽略新增欄位。新版 Web 若遇到缺少端點／契約或讀取失敗，停用新增指名，不退回舊快照宣告可預約。
 
 ## 8. 後台 Admin API
 

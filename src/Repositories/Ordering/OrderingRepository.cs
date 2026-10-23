@@ -555,7 +555,7 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
     public async Task<string> CreateOrderAsync(NewOrderAggregate order, CancellationToken cancellationToken)
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, cancellationToken);
         await connection.ExecuteScalarAsync<string>(new CommandDefinition("SELECT ID FROM ORDERING_RUNTIME_LOCKS WHERE ID='operating_period' FOR UPDATE",transaction:transaction,cancellationToken:cancellationToken));
         var currentPeriod = await connection.QuerySingleOrDefaultAsync<BusinessPeriodRow>(new CommandDefinition("SELECT P.PERIOD_STATUS PeriodStatus,P.INTAKE_MODE IntakeMode,P.FLOW_VERSION FlowVersion FROM CUSTOMER_ORDER_SESSIONS S JOIN BUSINESS_PERIODS P ON P.ID=S.BUSINESS_PERIOD_ID WHERE S.ID=@SessionId",new{order.SessionId},transaction,cancellationToken:cancellationToken));
         if (order.Backfill is not null)
@@ -941,7 +941,7 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
         DateTime now, CancellationToken cancellationToken)
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, cancellationToken);
         await EnsureLegacyOrderMutationAsync(connection, transaction, orderId, cancellationToken);
         try
         {
@@ -988,6 +988,11 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
 
             foreach (var target in targets)
             {
+                var sessionId = await connection.ExecuteScalarAsync<string>(new CommandDefinition(
+                    "SELECT SESSION_ID FROM ORDERS WHERE ID=@OrderId;", new { OrderId = orderId }, transaction,
+                    cancellationToken: cancellationToken)) ?? throw new BusinessException("找不到訂單。", "ORDER_NOT_FOUND");
+                await ValidateNominationScheduleAsync(connection, transaction, target.StaffId, sessionId,
+                    target.RequestedStartsAt, target.RequestedBusyUntil, now, cancellationToken, target.Id, requireAccepting: false);
                 if (await HasConflictAsync(connection, transaction, target.StaffId, target.RequestedStartsAt,
                         target.RequestedBusyUntil, cancellationToken))
                 {
@@ -1018,6 +1023,11 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
 
             foreach (var item in nominees)
             {
+                var sessionId = await connection.ExecuteScalarAsync<string>(new CommandDefinition(
+                    "SELECT SESSION_ID FROM ORDERS WHERE ID=@OrderId;", new { OrderId = orderId }, transaction,
+                    cancellationToken: cancellationToken)) ?? throw new BusinessException("找不到訂單。", "ORDER_NOT_FOUND");
+                await ValidateNominationScheduleAsync(connection, transaction, item.StaffId, sessionId,
+                    item.RequestedStartsAt, item.RequestedBusyUntil, now, cancellationToken, item.Id, requireAccepting: false);
                 if (await HasConflictAsync(connection, transaction, item.StaffId, item.RequestedStartsAt,
                         item.RequestedBusyUntil, cancellationToken))
                 {
@@ -1690,7 +1700,7 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
         string actorId, string actorRole, DateTime now, CancellationToken cancellationToken)
     {
         await using var connection = await DbContext.CreateOpenConnectionAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, cancellationToken);
         await EnsureLegacyOrderMutationAsync(connection, transaction, orderId, cancellationToken);
         try
         {
@@ -1721,6 +1731,19 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
             };
             if (!allowed)
                 throw new BusinessException($"目前狀態「{order.OrderStatus}」不可執行此操作。", "ORDER_TRANSITION_INVALID");
+
+            if (action == "start")
+            {
+                var nominees = (await connection.QueryAsync<OrderNomineeRow>(new CommandDefinition("""
+                    SELECT ID AS Id, STAFF_ID AS StaffId, REQUESTED_STARTS_AT AS RequestedStartsAt,
+                        REQUESTED_BUSY_UNTIL AS RequestedBusyUntil FROM ORDER_NOMINEES WHERE ORDER_ID=@OrderId;
+                    """, new { OrderId = orderId }, transaction, cancellationToken: cancellationToken))).AsList();
+                await LockStaffRowsAsync(connection, transaction, nominees.Select(n => n.StaffId), cancellationToken);
+                foreach (var nominee in nominees)
+                    await ValidateNominationScheduleAsync(connection, transaction, nominee.StaffId, order.SessionId,
+                        now, nominee.RequestedBusyUntil > now ? nominee.RequestedBusyUntil : now.AddMinutes(1),
+                        now, cancellationToken, nominee.Id, requireAccepting: false, starting: true);
+            }
 
             var transitionReason = string.IsNullOrWhiteSpace(reason) ? defaultReason : reason.Trim();
             if (action is "cancel" or "reject" or "return_to_reschedule" && string.IsNullOrWhiteSpace(reason))

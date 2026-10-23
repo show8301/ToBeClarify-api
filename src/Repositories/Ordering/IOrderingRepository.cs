@@ -4,6 +4,8 @@ namespace ToBeClarify.Api.Repositories.Ordering;
 
 public interface IOrderingRepository
 {
+    Task<IReadOnlyList<ToBeClarify.Api.Models.Dtos.StaffNominationAvailabilityDto>> GetNominationAvailabilityAsync(
+        DateOnly day, DateTime now, DateTime horizon, CancellationToken ct);
     Task<string?> FindOrderBackfillAsync(string sessionId, string operationId, string payloadHash, CancellationToken ct);
     Task<IReadOnlyList<AdminOrderSessionRow>> GetServiceSessionsAsync(DateOnly day, CancellationToken ct);
     Task<OrderBundle> GetServiceOrdersAsync(DateOnly day, CancellationToken ct);

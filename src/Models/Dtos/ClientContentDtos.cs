@@ -63,6 +63,7 @@ public sealed record StaffListItemDto(
     IReadOnlyList<StaffServiceDto> SpecialServices)
 {
     public string? ProfileBio { get; init; }
+    public string? NominationStatus { get; init; }
 }
 
 public sealed record StaffServiceDto(
@@ -94,7 +95,10 @@ public sealed record StaffDetailDto(
     bool IsNominatable,
     IReadOnlyList<StaffGalleryItemDto> Gallery,
     IReadOnlyList<StaffServiceDto> CommonServices,
-    IReadOnlyList<StaffServiceDto> SpecialServices);
+    IReadOnlyList<StaffServiceDto> SpecialServices)
+{
+    public string? NominationStatus { get; init; }
+}
 
 public sealed record GalleryAlbumDto(
     string Id,

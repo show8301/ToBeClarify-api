@@ -17,7 +17,10 @@ public sealed record FulfillmentConflictDto(
 public sealed record FulfillmentStartPreviewDto(
     string OrderId, string UnitId, DateTimeOffset OriginalStartsAt, DateTimeOffset EffectiveStartsAt,
     DateTimeOffset EffectiveEndsAt, int PurchasedMinutes, int OriginalRestMinutes,
-    int RestMinutesReserved, IReadOnlyList<FulfillmentConflictDto> Conflicts, bool CanStartNow);
+    int RestMinutesReserved, IReadOnlyList<FulfillmentConflictDto> Conflicts, bool CanStartNow)
+{
+    public string? StartBlockedReason { get; init; }
+}
 
 public sealed record FulfillmentPeriodOptionDto(string Id, string BusinessDate, string Status);
 
