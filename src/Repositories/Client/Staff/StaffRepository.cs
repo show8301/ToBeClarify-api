@@ -1,4 +1,3 @@
-using Dapper;
 using ToBeClarify.Api.Infrastructure;
 using ToBeClarify.Api.Services.Ordering;
 using ToBeClarify.Api.Models.Entities;
@@ -27,7 +26,7 @@ public sealed class StaffRepository : DapperRepositoryBase, IStaffRepository
                    M.`AVATAR_MEDIA_ID` AS AvatarMediaId, M.`SIGNATURE_MEDIA_ID` AS SignatureMediaId,
                    M.`ROLE_TITLE` AS RoleTitle, M.`SHORT_BIO` AS ShortBio, M.`PROFILE_BIO` AS ProfileBio,
                    (M.`IS_NOMINATABLE` AND COALESCE(D.`STOP_ACCEPTING_NEW_ORDERS`, FALSE) = FALSE) AS IsNominatable,
-                   {StaffDutySql.IsOnDuty} AS IsWorkingToday, P.BUSINESS_DATE AS DutyBusinessDate,
+                   {StaffDutySql.IsOnDuty} AS IsWorkingToday,
                    CASE WHEN {StaffDutySql.IsOnDuty} = FALSE THEN 'off'
                         WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= @Now AND R.`ENDS_AT` > @Now)
                           OR EXISTS (SELECT 1 FROM `STAFF_BUSY_BLOCKS` B WHERE B.`STAFF_ID` = M.`ID` AND B.`BLOCK_STATUS` = 'active' AND B.`STARTS_AT` <= @Now AND B.`ENDS_AT` > @Now) THEN 'busy'
@@ -48,9 +47,7 @@ public sealed class StaffRepository : DapperRepositoryBase, IStaffRepository
             LIMIT @Limit;
             """;
         var now = _clock.LocalDateTime;
-        var rows = await QueryAsync<StaffRow>(sql, new { Limit = limit ?? int.MaxValue, BusinessDate = day.BusinessDate.ToDateTime(TimeOnly.MinValue), UseCurrentPlan = !businessDate.HasValue, DutyAt = now, Now = now }, cancellationToken);
-        await AttachNominationStatusesAsync(rows, day.BusinessDate, now, cancellationToken);
-        return rows;
+        return await QueryAsync<StaffRow>(sql, new { Limit = limit ?? int.MaxValue, BusinessDate = day.BusinessDate.ToDateTime(TimeOnly.MinValue), UseCurrentPlan = !businessDate.HasValue, DutyAt = now, Now = now }, cancellationToken);
     }
 
     public async Task<StaffRow?> GetStaffMemberAsync(string id, CancellationToken cancellationToken, DateOnly? businessDate = null)
@@ -63,7 +60,7 @@ public sealed class StaffRepository : DapperRepositoryBase, IStaffRepository
                    M.`AVATAR_MEDIA_ID` AS AvatarMediaId, M.`SIGNATURE_MEDIA_ID` AS SignatureMediaId,
                    M.`ROLE_TITLE` AS RoleTitle, M.`SHORT_BIO` AS ShortBio, M.`PROFILE_BIO` AS ProfileBio,
                    (M.`IS_NOMINATABLE` AND COALESCE(D.`STOP_ACCEPTING_NEW_ORDERS`, FALSE) = FALSE) AS IsNominatable,
-                   {StaffDutySql.IsOnDuty} AS IsWorkingToday, P.BUSINESS_DATE AS DutyBusinessDate,
+                   {StaffDutySql.IsOnDuty} AS IsWorkingToday,
                    CASE WHEN {StaffDutySql.IsOnDuty} = FALSE THEN 'off'
                         WHEN EXISTS (SELECT 1 FROM `STAFF_RESERVATIONS` R WHERE R.`STAFF_ID` = M.`ID` AND R.`RESERVATION_STATUS` = 'active' AND R.`STARTS_AT` <= @Now AND R.`ENDS_AT` > @Now)
                           OR EXISTS (SELECT 1 FROM `STAFF_BUSY_BLOCKS` B WHERE B.`STAFF_ID` = M.`ID` AND B.`BLOCK_STATUS` = 'active' AND B.`STARTS_AT` <= @Now AND B.`ENDS_AT` > @Now) THEN 'busy'
@@ -82,42 +79,7 @@ public sealed class StaffRepository : DapperRepositoryBase, IStaffRepository
             WHERE M.`ID` = @Id AND M.`IS_ACTIVE` = TRUE LIMIT 1;
             """;
         var now = _clock.LocalDateTime;
-        var row = await QuerySingleOrDefaultAsync<StaffRow>(sql, new { Id = id, BusinessDate = day.BusinessDate.ToDateTime(TimeOnly.MinValue), UseCurrentPlan = !businessDate.HasValue, DutyAt = now, Now = now }, cancellationToken);
-        if (row is not null) await AttachNominationStatusesAsync([row], day.BusinessDate, now, cancellationToken);
-        return row;
-    }
-
-    private async Task AttachNominationStatusesAsync(IReadOnlyList<StaffRow> rows, DateOnly day, DateTime now, CancellationToken ct)
-    {
-        if (rows.Count == 0) return;
-        await using var connection = await DbContext.CreateOpenConnectionAsync(ct);
-        var settings = await connection.QuerySingleOrDefaultAsync<NominationSettings>(new CommandDefinition(
-            "SELECT SEGMENT_MINUTES AS SegmentMinutes,NOMINATION_PAUSED_UNTIL AS PausedUntil FROM ORDERING_SETTINGS WHERE ID='default';", cancellationToken: ct));
-        foreach (var group in rows.GroupBy(r => r.DutyBusinessDate.HasValue ? DateOnly.FromDateTime(r.DutyBusinessDate.Value) : day))
-        {
-            var close = await connection.QuerySingleOrDefaultAsync<DateTime?>(new CommandDefinition(
-                "SELECT COALESCE(PROJECTED_CLOSE_AT,ENDS_AT) FROM BUSINESS_PERIODS WHERE BUSINESS_DATE=@Day ORDER BY CREATED_AT DESC LIMIT 1;",
-                new { Day = group.Key.ToDateTime(TimeOnly.MinValue) }, cancellationToken: ct));
-            var schedules = await NominationSchedule.ReadAsync(connection, null, group.Key, now, ct,
-                rows.Count == 1 ? rows[0].Id : null);
-            foreach (var row in group)
-            {
-                var schedule = schedules.SingleOrDefault(s => s.StaffId == row.Id);
-                row.NominationStatus = settings?.PausedUntil > now ? "paused"
-                    : schedule?.Status(now, close ?? schedule.ShiftEndsAt ?? now, Math.Max(1, settings?.SegmentMinutes ?? 20)) ?? "off";
-                if (row.IsWorkingToday && schedule?.IsServing == true)
-                {
-                    row.CurrentStatus = "busy";
-                    row.StatusText = "指名中";
-                }
-            }
-        }
-    }
-
-    private sealed class NominationSettings
-    {
-        public int SegmentMinutes { get; set; }
-        public DateTime? PausedUntil { get; set; }
+        return await QuerySingleOrDefaultAsync<StaffRow>(sql, new { Id = id, BusinessDate = day.BusinessDate.ToDateTime(TimeOnly.MinValue), UseCurrentPlan = !businessDate.HasValue, DutyAt = now, Now = now }, cancellationToken);
     }
 
     public async Task<IReadOnlyList<StaffServiceRow>> GetStaffServicesAsync(string staffId, CancellationToken cancellationToken)

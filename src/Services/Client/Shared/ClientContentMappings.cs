@@ -46,8 +46,7 @@ internal static class ClientContentMappings
             serviceRows.Where(service => service.ServiceType == "common").Select(MapStaffService).ToArray(),
             serviceRows.Where(service => service.ServiceType == "special").Select(MapStaffService).ToArray())
         {
-            ProfileBio = row.ProfileBio,
-            NominationStatus = row.NominationStatus
+            ProfileBio = row.ProfileBio
         };
     }
 

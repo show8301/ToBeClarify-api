@@ -43,8 +43,7 @@ public sealed class StaffService : IStaffService
             gallery.Select(item => new StaffGalleryItemDto(item.Id,
                 _mediaUrls.BuildUrl(item.MediaId, "full") ?? string.Empty)).ToArray(),
             services.Where(service => service.ServiceType == "common").Select(ClientContentMappings.MapStaffService).ToArray(),
-            services.Where(service => service.ServiceType == "special").Select(ClientContentMappings.MapStaffService).ToArray())
-        { NominationStatus = row.NominationStatus };
+            services.Where(service => service.ServiceType == "special").Select(ClientContentMappings.MapStaffService).ToArray());
     }
 
     public async Task<IReadOnlyList<StaffServiceDto>> GetStaffServicesAsync(string id, CancellationToken cancellationToken)

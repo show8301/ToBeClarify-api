@@ -55,8 +55,6 @@ public sealed class PricingRuleRow
 
 public sealed class StaffRow
 {
-    public DateTime? DutyBusinessDate { get; set; }
-    public string? NominationStatus { get; set; }
     public string Id { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
     public string? Nickname { get; set; }

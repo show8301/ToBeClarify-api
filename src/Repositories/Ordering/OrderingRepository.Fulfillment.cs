@@ -17,10 +17,21 @@ public sealed partial class OrderingRepository
     private static async Task ValidateNewNominationEligibilityAsync(MySqlConnection connection,
         MySqlTransaction tx, NewOrderAggregate order, CancellationToken ct)
     {
-        await LockStaffRowsAsync(connection, tx, order.Nominees.Select(n => n.StaffId), ct);
         foreach (var nominee in order.Nominees.OrderBy(n => n.StaffId, StringComparer.Ordinal))
-            await ValidateNominationScheduleAsync(connection, tx, nominee.StaffId, order.SessionId,
-                nominee.StartsAt, nominee.BusyUntil, order.SubmittedAt, ct);
+        {
+            // Lock the approved plan and daily mode while deciding whether this new sale is allowed.
+            var eligible = await connection.ExecuteScalarAsync<int?>(new CommandDefinition($"""
+                SELECT CASE WHEN M.IS_ACTIVE=TRUE AND M.IS_NOMINATABLE=TRUE
+                    AND {StaffDutySql.IsOnDuty}
+                    AND COALESCE(D.STOP_ACCEPTING_NEW_ORDERS,FALSE)=FALSE THEN 1 ELSE 0 END
+                FROM CUSTOMER_ORDER_SESSIONS S JOIN STAFF_MEMBERS M ON M.ID=@StaffId
+                LEFT JOIN STAFF_DUTY_PLANS P ON P.STAFF_MEMBER_ID=M.ID AND P.BUSINESS_DATE=S.BUSINESS_DATE
+                LEFT JOIN STAFF_DAILY_WORK_MODES D ON D.STAFF_MEMBER_ID=M.ID AND D.BUSINESS_DATE=S.BUSINESS_DATE
+                WHERE S.ID=@SessionId FOR UPDATE
+                """, new { nominee.StaffId, order.SessionId, DutyAt=nominee.StartsAt }, tx, cancellationToken:ct));
+            if (eligible != 1)
+                throw new ConflictException("店員班表或接單狀態已變更，請重新選擇。", "NOMINATION_UNAVAILABLE");
+        }
     }
 
     public async Task<OrderFulfillmentDto> GetFulfillmentAsync(string orderId, CancellationToken cancellationToken)
@@ -96,27 +107,10 @@ public sealed partial class OrderingRepository
             SELECT EXISTS(SELECT 1 FROM ORDER_FULFILLMENT_UNITS WHERE STAFF_ID=@StaffId AND ID<>@UnitId
                 AND KIND='nominee' AND STARTED_QUANTITY>COMPLETED_QUANTITY AND CANCELLED_QUANTITY=0);
             """, new { StaffId = unit.StaffId, UnitId = unitId }, cancellationToken: cancellationToken));
-        var day = await connection.ExecuteScalarAsync<DateTime>(new CommandDefinition("""
-            SELECT COALESCE(P.BUSINESS_DATE,S.BUSINESS_DATE) FROM ORDERS O
-            JOIN CUSTOMER_ORDER_SESSIONS S ON S.ID=O.SESSION_ID
-            LEFT JOIN BUSINESS_PERIODS P ON P.ID=@PeriodId WHERE O.ID=@OrderId;
-            """, new { PeriodId = unit.FulfillmentPeriodId, OrderId = orderId }, cancellationToken: cancellationToken));
-        var schedule = (await NominationSchedule.ReadAsync(connection, null, DateOnly.FromDateTime(day), now,
-            cancellationToken, unit.StaffId, unit.NomineeId)).SingleOrDefault();
-        string? blocked = null;
-        if (schedule is null) blocked = "無法確認店員班次，請重新讀取。";
-        else if (schedule.ShiftStartsAt > now) blocked = "尚未到店員上班時間，無法開始服務。";
-        else
-        {
-            try { schedule.Validate(now, effectiveEnd.AddMinutes(rest), requireAccepting: false); }
-            catch (ConflictException error) { blocked = error.Message; }
-        }
-        if (inService || schedule?.IsServing == true) blocked = "此店員仍有服務進行中，請先確認並處理目前服務。";
         return new FulfillmentStartPreviewDto(orderId, unitId, Offset(originalStart)!.Value, Offset(now)!.Value,
             Offset(effectiveEnd)!.Value, unit.PurchasedMinutes, rest, rest,
             conflicts.Select(c => new FulfillmentConflictDto(c.UnitId, c.OrderId, c.Name, c.StaffId, c.OverlapMinutes,
-                Offset(c.StartsAt), Offset(c.EndsAt), c.Status)).ToArray(), blocked is null)
-        { StartBlockedReason = blocked };
+                Offset(c.StartsAt), Offset(c.EndsAt), c.Status)).ToArray(), !inService);
     }
 
     private static DateTimeOffset? Offset(DateTime? value)
@@ -261,7 +255,7 @@ public sealed partial class OrderingRepository
               request.TargetBusinessPeriodId, request.RestMinutes, request.CompensationAmount,
               request.CompensationReason, request.ActualStartsAt, request.ActualEndsAt, request.ExpectedVersion }))));
         await using var connection = await DbContext.CreateOpenConnectionAsync(ct);
-        await using var tx = await connection.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
+        await using var tx = await connection.BeginTransactionAsync(ct);
         var sessionId = await connection.ExecuteScalarAsync<string?>(new CommandDefinition(
             "SELECT SESSION_ID FROM ORDERS WHERE ID=@OrderId;", new { OrderId = orderId }, tx, cancellationToken: ct))
             ?? throw new BusinessException("找不到訂單。", "ORDER_NOT_FOUND");
@@ -518,16 +512,18 @@ public sealed partial class OrderingRepository
         {
             if (nominee.RequestedStartsAt < now)
                 throw new BusinessException("預定開始时间已過，請使用此項目的改期入口重新安排。", "NOMINATION_START_IN_PAST");
+            if (await connection.ExecuteScalarAsync<bool>(new CommandDefinition("""
+                SELECT EXISTS(SELECT 1 FROM STAFF_BUSY_BLOCKS WHERE STAFF_ID=@StaffId AND BLOCK_STATUS='active'
+                    AND ORDER_NOMINEE_ID<>@NomineeId AND ENDS_AT>@StartsAt AND STARTS_AT<@EndsAt);
+                """, new { nominee.StaffId, NomineeId = nominee.Id, StartsAt = nominee.RequestedStartsAt,
+                    EndsAt = nominee.RequestedBusyUntil }, tx, cancellationToken: ct)))
+                throw new ConflictException("此店員的新時段與已成立服務衝突，請改選時段。", "STAFF_TIME_CONFLICT");
         }
-        if (action is "accept" or "reschedule" or "start" or "start_now"
-            || action == "carry_forward" && unit.FulfillmentPeriodId is not null)
-        {
-            var startsAt = action is "start" or "start_now" ? now : nominee.RequestedStartsAt;
-            await ValidateNominationScheduleAsync(connection, tx, nominee.StaffId, order.SessionId,
-                startsAt, nominee.RequestedBusyUntil > startsAt ? nominee.RequestedBusyUntil : startsAt.AddMinutes(unit.PurchasedMinutes + unit.RestMinutesReserved),
-                now, ct, nominee.Id, requireAccepting: false, fulfillmentPeriodId: unit.FulfillmentPeriodId ?? order.BusinessPeriodId,
-                starting: action is "start" or "start_now");
-        }
+        if ((action is "start" or "start_now") && await connection.ExecuteScalarAsync<bool>(new CommandDefinition("""
+            SELECT EXISTS(SELECT 1 FROM ORDER_FULFILLMENT_UNITS WHERE STAFF_ID=@StaffId AND KIND='nominee'
+                AND ID<>@Id AND STARTED_QUANTITY>COMPLETED_QUANTITY);
+            """, new { unit.StaffId, unit.Id }, tx, cancellationToken: ct)))
+            throw new ConflictException("此店員仍有服務進行中，請先處理目前服務。", "STAFF_ALREADY_IN_SERVICE");
         if (action is "cancel" or "reschedule" or "carry_forward" or "start_now")
         {
             await connection.ExecuteAsync(new CommandDefinition("""
