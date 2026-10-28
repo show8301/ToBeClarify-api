@@ -527,6 +527,7 @@ public sealed record AdminMenuItemDto(
     int SortOrder,
     bool IsAvailable)
 {
+    public string? GameItemName { get; init; }
     public ProductPolicy Policy { get; init; } = new();
 }
 
@@ -546,6 +547,8 @@ public sealed class SaveMenuCategoryRequest
 
 public sealed class SaveMenuItemRequest
 {
+    [StringLength(100)]
+    public string? GameItemName { get; init; }
     public ProductPolicy? Policy { get; init; }
     [Required, StringLength(40)]
     public string CategoryId { get; init; } = string.Empty;

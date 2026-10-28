@@ -673,7 +673,7 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
             SELECT `ID` AS Id, `CATEGORY_NAME` AS CategoryName, `CATEGORY_DESCRIPTION` AS CategoryDescription,
                    `SORT_ORDER` AS SortOrder, `IS_ENABLED` AS IsEnabled
             FROM `MENU_CATEGORIES` ORDER BY `SORT_ORDER`, `CATEGORY_NAME`;
-            SELECT `ID` AS Id, `CATEGORY_ID` AS CategoryId, `ITEM_NAME` AS ItemName, `ITEM_DESCRIPTION` AS ItemDescription,
+            SELECT `ID` AS Id, `CATEGORY_ID` AS CategoryId, `ITEM_NAME` AS ItemName, `GAME_ITEM_NAME` AS GameItemName, `ITEM_DESCRIPTION` AS ItemDescription,
                    `PRICE` AS Price, `MEDIA_ID` AS MediaId, `TAGS` AS Tags, `POLICY_JSON` AS PolicyJson,
                    `SORT_ORDER` AS SortOrder, `IS_AVAILABLE` AS IsAvailable
             FROM `MENU_ITEMS` ORDER BY `CATEGORY_ID`, `SORT_ORDER`, `ITEM_NAME`;
@@ -721,13 +721,14 @@ public sealed class AdminContentRepository : DapperRepositoryBase, IAdminContent
         if(category is null) throw new BusinessException("所屬分類已移除，請重新載入。","MENU_CATEGORY_INVALID");
         await connection.ExecuteAsync(new CommandDefinition("""
             INSERT INTO `MENU_ITEMS`
-                (`ID`, `CATEGORY_ID`, `ITEM_NAME`, `ITEM_DESCRIPTION`, `PRICE`, `MEDIA_ID`, `TAGS`, `SORT_ORDER`, `IS_AVAILABLE`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`, `POLICY_JSON`)
-            VALUES (@Id, @CategoryId, @ItemName, @ItemDescription, @Price, @MediaId, @Tags, @SortOrder, @IsAvailable, @Now, @ActorId, @Now, @ActorId, @PolicyJson)
+                (`ID`, `CATEGORY_ID`, `ITEM_NAME`, `GAME_ITEM_NAME`, `ITEM_DESCRIPTION`, `PRICE`, `MEDIA_ID`, `TAGS`, `SORT_ORDER`, `IS_AVAILABLE`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`, `POLICY_JSON`)
+            VALUES (@Id, @CategoryId, @ItemName, NULLIF(TRIM(@GameItemName), ''), @ItemDescription, @Price, @MediaId, @Tags, @SortOrder, @IsAvailable, @Now, @ActorId, @Now, @ActorId, @PolicyJson)
             ON DUPLICATE KEY UPDATE `CATEGORY_ID` = VALUES(`CATEGORY_ID`), `ITEM_NAME` = VALUES(`ITEM_NAME`),
+                `GAME_ITEM_NAME` = CASE WHEN @GameItemName IS NULL THEN `GAME_ITEM_NAME` ELSE NULLIF(TRIM(@GameItemName), '') END,
                 `ITEM_DESCRIPTION` = VALUES(`ITEM_DESCRIPTION`), `PRICE` = VALUES(`PRICE`), `MEDIA_ID` = VALUES(`MEDIA_ID`),
                 `TAGS` = VALUES(`TAGS`), `SORT_ORDER` = VALUES(`SORT_ORDER`),
                 `IS_AVAILABLE` = VALUES(`IS_AVAILABLE`), `UPDATED_AT` = @Now, `UPDATED_BY` = @ActorId, `POLICY_JSON` = COALESCE(@PolicyJson, `POLICY_JSON`);
-            """, new { Id = id, PolicyJson = request.Policy is null ? null : JsonSerializer.Serialize(request.Policy), request.CategoryId, request.ItemName, request.ItemDescription, request.Price,
+            """, new { Id = id, PolicyJson = request.Policy is null ? null : JsonSerializer.Serialize(request.Policy), request.CategoryId, request.ItemName, request.GameItemName, request.ItemDescription, request.Price,
                 request.MediaId, Tags = request.Tags?.GetRawText(), request.SortOrder,
                 request.IsAvailable, Now = now, ActorId = actorId }, transaction, cancellationToken:cancellationToken));
         await transaction.CommitAsync(cancellationToken);

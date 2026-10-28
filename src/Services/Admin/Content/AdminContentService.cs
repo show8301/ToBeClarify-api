@@ -720,7 +720,7 @@ public sealed class AdminContentService : IAdminContentService
 
     private AdminMenuItemDto Map(AdminMenuItemRow row)
         => new(row.Id, row.CategoryId, row.ItemName, row.ItemDescription, row.Price, row.MediaId,
-            _mediaUrls.BuildUrl(row.MediaId, "card"), ParseNullableJson(row.Tags), row.SortOrder, row.IsAvailable) { Policy = MenuPolicies.Read<ProductPolicy>(row.PolicyJson) };
+            _mediaUrls.BuildUrl(row.MediaId, "card"), ParseNullableJson(row.Tags), row.SortOrder, row.IsAvailable) { Policy = MenuPolicies.Read<ProductPolicy>(row.PolicyJson), GameItemName = row.GameItemName };
 
     private static AdminMenuSetItemDto Map(AdminMenuSetItemRow row)
         => new(row.Id, row.MenuItemId, row.ItemName, row.ItemRole, row.Quantity, row.SortOrder);

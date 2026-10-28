@@ -59,14 +59,39 @@ public sealed partial class OrderingRepository
     {
         var order = await connection.QuerySingleOrDefaultAsync<FulfillmentOrder>(new CommandDefinition("""
             SELECT ID AS Id, CAST(BUSINESS_PERIOD_ID AS CHAR(36)) AS BusinessPeriodId, FLOW_VERSION AS FlowVersion,
-                   ORDER_STATUS AS OrderStatus, SESSION_ID AS SessionId
+                   ORDER_STATUS AS OrderStatus, SESSION_ID AS SessionId, MENU_SNAPSHOT_JSON AS MenuSnapshotJson
             FROM ORDERS WHERE ID=@OrderId;
             """, new { OrderId = orderId }, transaction, cancellationToken: ct))
             ?? throw new BusinessException("找不到訂單。", "ORDER_NOT_FOUND");
         var units = await connection.QueryAsync<FulfillmentUnit>(new CommandDefinition(
             UnitSelect + " WHERE ORDER_ID=@OrderId ORDER BY CREATED_AT, ID;", new { OrderId = orderId }, transaction, cancellationToken: ct));
+        var orderItems = await connection.QueryAsync<DeliveryOrderItem>(new CommandDefinition(
+            "SELECT CAST(ID AS CHAR(36)) AS Id, ITEM_TYPE AS ItemType, REFERENCE_ID AS ReferenceId FROM ORDER_ITEMS WHERE ORDER_ID=@OrderId AND ITEM_TYPE IN ('menu_item','menu_set')",
+            new { OrderId = orderId }, transaction, cancellationToken: ct));
+        MenuOrderSnapshot? snapshot = null;
+        if (!string.IsNullOrWhiteSpace(order.MenuSnapshotJson))
+        {
+            try { snapshot = JsonSerializer.Deserialize<MenuOrderSnapshot>(order.MenuSnapshotJson, MenuPolicies.Json); }
+            catch (JsonException) { }
+        }
+        var ids = orderItems.Where(i => i.ItemType == "menu_item").Select(i => i.ReferenceId)
+            .Concat(snapshot?.Lines.SelectMany(l => l.Components).Select(c => c.MenuItemId) ?? [])
+            .Where(id => !string.IsNullOrEmpty(id)).Distinct().ToArray();
+        var names = ids.Length == 0 ? new Dictionary<string, string?>() :
+            (await connection.QueryAsync<DeliveryMenuItem>(new CommandDefinition(
+                "SELECT ID AS Id, GAME_ITEM_NAME AS GameItemName FROM MENU_ITEMS WHERE ID IN @Ids",
+                new { Ids = ids }, transaction, cancellationToken: ct))).ToDictionary(i => i.Id, i => i.GameItemName);
+        var items = orderItems.ToDictionary(i => i.Id);
         return new OrderFulfillmentDto(orderId, order.BusinessPeriodId, order.FlowVersion, order.OrderStatus,
-            units.Select(ToFulfillmentUnitDto).ToArray());
+            units.Select(unit => {
+                var dto = ToFulfillmentUnitDto(unit);
+                if (unit.Kind != "meal" || unit.OrderItemId is null || !items.TryGetValue(unit.OrderItemId, out var item)) return dto;
+                if (item.ItemType == "menu_item") return dto with { DeliveryItems = [new(unit.Name, names.GetValueOrDefault(item.ReferenceId), 1)] };
+                var line = snapshot?.Lines.FirstOrDefault(l => l.Kind == "set" && l.ReferenceId == item.ReferenceId);
+                if (line is null || line.Quantity < 1) return dto;
+                return dto with { DeliveryItems = line.Components.Where(c => c.Quantity > 0 && c.Quantity % line.Quantity == 0)
+                    .Select(c => new DeliveryItemDto(c.ItemName, names.GetValueOrDefault(c.MenuItemId), c.Quantity / line.Quantity)).ToArray() };
+            }).ToArray());
     }
 
     private static FulfillmentUnitDto ToFulfillmentUnitDto(FulfillmentUnit u)
@@ -713,8 +738,11 @@ public sealed partial class OrderingRepository
         public int RestMinutesReserved { get; set; }
         public string? FulfillmentPeriodId { get; set; }
     }
+    private sealed class DeliveryOrderItem { public string Id { get; set; } = ""; public string ItemType { get; set; } = ""; public string ReferenceId { get; set; } = ""; }
+    private sealed class DeliveryMenuItem { public string Id { get; set; } = ""; public string? GameItemName { get; set; } }
     private sealed class FulfillmentOrder
     {
+        public string? MenuSnapshotJson { get; set; }
         public string Id { get; set; } = "";
         public string SessionId { get; set; } = "";
         public string? BusinessPeriodId { get; set; }

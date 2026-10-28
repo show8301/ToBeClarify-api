@@ -8,7 +8,12 @@ public sealed record FulfillmentUnitDto(
     int PurchasedMinutes, DateTimeOffset? ScheduledStartsAt, DateTimeOffset? ScheduledEndsAt,
     DateTimeOffset? ActualStartsAt, DateTimeOffset? ActualEndsAt,
     DateTimeOffset? OriginalScheduledStartsAt, DateTimeOffset? OriginalScheduledEndsAt,
-    int RestMinutesReserved, string? FulfillmentPeriodId, IReadOnlyList<string> AllowedActions);
+    int RestMinutesReserved, string? FulfillmentPeriodId, IReadOnlyList<string> AllowedActions)
+{
+    public IReadOnlyList<DeliveryItemDto> DeliveryItems { get; init; } = [];
+}
+
+public sealed record DeliveryItemDto(string MenuItemName, string? GameItemName, int QuantityPerUnit);
 
 public sealed record FulfillmentConflictDto(
     string UnitId, string OrderId, string Name, string? StaffId, int OverlapMinutes,

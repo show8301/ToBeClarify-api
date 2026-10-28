@@ -191,6 +191,7 @@ public sealed class AdminMenuCategoryRow
 
 public sealed class AdminMenuItemRow
 {
+    public string? GameItemName { get; set; }
     public string? PolicyJson { get; set; }
     public string Id { get; set; } = string.Empty;
     public string CategoryId { get; set; } = string.Empty;
