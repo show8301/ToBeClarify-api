@@ -459,7 +459,7 @@ public sealed partial class OrderingService : IOrderingService
             else
                 staffName = await _repository.GetStaffNameAsync(line.StaffId, cancellationToken)
                     ?? throw new BusinessException("找不到小費指定店員。", "TIP_STAFF_NOT_FOUND");
-            var staffAmount = line.Amount * staffPercentage / 100;
+            var staffAmount = (int)((long)line.Amount * staffPercentage / 100);
             var storeAmount = line.Amount - staffAmount;
             var itemId = NewId();
             items.Add(new NewOrderItem(itemId, "tip", line.StaffId, null,
@@ -471,7 +471,10 @@ public sealed partial class OrderingService : IOrderingService
                 staffPercentage, 100 - staffPercentage, staffAmount, storeAmount) { Distribution = standardDistribution });
         }
 
-        var subtotal = items.Sum(item => item.LineTotal);
+        var subtotalLong = items.Sum(item => (long)item.LineTotal);
+        if (subtotalLong > int.MaxValue)
+            throw new BusinessException("訂單總金額超過上限，請分開下單。", "ORDER_TOTAL_TOO_LARGE");
+        var subtotal = (int)subtotalLong;
         var creditApplied = Math.Min(session.RemainingMealCredit, mealSubtotal);
         var hasNomination = nominees.Count > 0;
         var initialStatus = backfill is not null ? "completed" : requiresStoreConfirmation || hasNomination ? "submitted" : "confirmed";

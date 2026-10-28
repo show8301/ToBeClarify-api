@@ -7,7 +7,7 @@ public static class OrderTipDistributionPolicy
 {
     public static OrderTipDistributionSnapshot FromStandard(int amount, string? staffId, string? staffName, int percentage)
     {
-        var staffAmount = string.IsNullOrWhiteSpace(staffId) ? 0 : amount * percentage / 100;
+        var staffAmount = string.IsNullOrWhiteSpace(staffId) ? 0 : (int)((long)amount * percentage / 100);
         return staffAmount == 0 ? new("public", [], amount)
             : new("custom", [new(staffId!, staffName!, percentage, staffAmount)], amount - staffAmount);
     }
@@ -16,7 +16,7 @@ public static class OrderTipDistributionPolicy
         IReadOnlyList<SaveOrderingFinanceTipAllocationRequest> allocations,
         IReadOnlyList<OrderingFinanceTipStaffOptionDto> eligible)
     {
-        if (amount is < 1 or > 1000000 || allocations is null || allocations.Count > 200 || allocations.Any(x => x is null || string.IsNullOrWhiteSpace(x.StaffId)))
+        if (amount is < 1 or > 999999999 || allocations is null || allocations.Count > 200 || allocations.Any(x => x is null || string.IsNullOrWhiteSpace(x.StaffId)))
             throw new BusinessException("小費分配資料無效。", "TIP_DISTRIBUTION_INVALID");
         if (mode == "public")
         {

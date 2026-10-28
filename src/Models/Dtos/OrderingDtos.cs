@@ -332,7 +332,7 @@ public sealed class TipOrderLineRequest
     [Required, MaxLength(200)] public IReadOnlyList<SaveOrderingFinanceTipAllocationRequest> Allocations { get; init; } = [];
     public string? StaffId { get; init; }
 
-    [Range(1, 1000000)]
+    [Range(1, 999999999)]
     public int Amount { get; init; }
 
     [Range(0, 100)]
