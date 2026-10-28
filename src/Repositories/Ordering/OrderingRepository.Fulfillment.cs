@@ -91,26 +91,10 @@ public sealed partial class OrderingRepository
         var originalStart = unit.OriginalScheduledStartsAt ?? unit.ScheduledStartsAt ?? now;
         var rest = unit.RestMinutesReserved;
         var effectiveEnd = now.AddMinutes(unit.PurchasedMinutes);
-        var conflicts = (await connection.QueryAsync<FulfillmentConflictRow>(new CommandDefinition("""
-            SELECT CAST(F.ID AS CHAR(36)) AS UnitId, CAST(F.ORDER_ID AS CHAR(36)) AS OrderId,
-                   F.NAME_SNAPSHOT AS Name, CAST(F.STAFF_ID AS CHAR(36)) AS StaffId,
-                   GREATEST(0, TIMESTAMPDIFF(MINUTE, GREATEST(@StartsAt,F.SCHEDULED_STARTS_AT),
-                     LEAST(@EndsAt,F.SCHEDULED_ENDS_AT))) AS OverlapMinutes,
-                   F.SCHEDULED_STARTS_AT AS StartsAt, F.SCHEDULED_ENDS_AT AS EndsAt, F.UNIT_STATUS AS Status
-            FROM ORDER_FULFILLMENT_UNITS F
-            WHERE F.STAFF_ID=@StaffId AND F.ID<>@UnitId AND F.KIND='nominee'
-              AND F.CANCELLED_QUANTITY=0 AND F.COMPLETED_QUANTITY<F.QUANTITY
-              AND F.SCHEDULED_STARTS_AT<@EndsAt AND F.SCHEDULED_ENDS_AT>@StartsAt
-            ORDER BY F.SCHEDULED_STARTS_AT;
-            """, new { StaffId = unit.StaffId, UnitId = unitId, StartsAt = now, EndsAt = effectiveEnd.AddMinutes(rest) }, cancellationToken: cancellationToken))).ToArray();
-        var inService = await connection.ExecuteScalarAsync<bool>(new CommandDefinition("""
-            SELECT EXISTS(SELECT 1 FROM ORDER_FULFILLMENT_UNITS WHERE STAFF_ID=@StaffId AND ID<>@UnitId
-                AND KIND='nominee' AND STARTED_QUANTITY>COMPLETED_QUANTITY AND CANCELLED_QUANTITY=0);
-            """, new { StaffId = unit.StaffId, UnitId = unitId }, cancellationToken: cancellationToken));
+        var conflicts = await FindServiceConflictsAsync(connection, null, unit, now, effectiveEnd.AddMinutes(rest), now, true, cancellationToken);
         return new FulfillmentStartPreviewDto(orderId, unitId, Offset(originalStart)!.Value, Offset(now)!.Value,
-            Offset(effectiveEnd)!.Value, unit.PurchasedMinutes, rest, rest,
-            conflicts.Select(c => new FulfillmentConflictDto(c.UnitId, c.OrderId, c.Name, c.StaffId, c.OverlapMinutes,
-                Offset(c.StartsAt), Offset(c.EndsAt), c.Status)).ToArray(), !inService);
+            Offset(effectiveEnd)!.Value, unit.PurchasedMinutes, rest, rest, conflicts,
+            conflicts.Count == 0 && unit.StartedQuantity == 0 && unit.CancelledQuantity == 0 && unit.Status is not ("needs_coordination" or "carried_forward"));
     }
 
     private static DateTimeOffset? Offset(DateTime? value)
@@ -253,9 +237,9 @@ public sealed partial class OrderingRepository
         var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
             { unitId, request.Action, request.Quantity, request.Reason, request.ScheduledStartsAt,
               request.TargetBusinessPeriodId, request.RestMinutes, request.CompensationAmount,
-              request.CompensationReason, request.ActualStartsAt, request.ActualEndsAt, request.ExpectedVersion }))));
+              request.CompensationReason, request.ActualStartsAt, request.ActualEndsAt, request.ExpectedVersion }) + (request.StillInProgress ? "|still_in_progress" : ""))));
         await using var connection = await DbContext.CreateOpenConnectionAsync(ct);
-        await using var tx = await connection.BeginTransactionAsync(ct);
+        await using var tx = await connection.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
         var sessionId = await connection.ExecuteScalarAsync<string?>(new CommandDefinition(
             "SELECT SESSION_ID FROM ORDERS WHERE ID=@OrderId;", new { OrderId = orderId }, tx, cancellationToken: ct))
             ?? throw new BusinessException("找不到訂單。", "ORDER_NOT_FOUND");
@@ -275,8 +259,9 @@ public sealed partial class OrderingRepository
         var unit = await connection.QuerySingleOrDefaultAsync<FulfillmentUnit>(new CommandDefinition(
             UnitSelect + " WHERE ORDER_ID=@OrderId AND ID=@UnitId FOR UPDATE;", new { OrderId = orderId, UnitId = unitId }, tx, cancellationToken: ct))
             ?? throw new BusinessException("找不到履約項目。", "FULFILLMENT_UNIT_NOT_FOUND");
-        if (unit.StaffId is not null && actorRole is not (AdminRole.Manager or AdminRole.Developer) && unit.StaffId != staffId)
-            throw new ForbiddenException("只有被指名店員本人或經理可處理這項服務。", "FULFILLMENT_STAFF_SCOPE");
+        if (unit.StaffId is not null)
+            await RequireOrderRepresentativeAsync(connection, tx, orderId, actorRole, staffId, ct);
+        await LockStaffRowsAsync(connection, tx, string.IsNullOrEmpty(unit.StaffId) ? [] : [unit.StaffId], ct);
         if (previous is not null)
         {
             if (previous.PayloadHash != payloadHash) throw new ConflictException("此操作識別碼已用於不同內容。", "OPERATION_PAYLOAD_CONFLICT");
@@ -284,29 +269,47 @@ public sealed partial class OrderingRepository
             return JsonSerializer.Deserialize<OrderFulfillmentDto>(previous.ResultJson)!;
         }
         if (unit.Version != request.ExpectedVersion) throw new ConflictException("其他店員已更新此項目，請重新載入後操作。", "FULFILLMENT_VERSION_CONFLICT");
+        // Old nominee start uses the same clock/window policy as the new whole-order command.
+        if (unit.Kind == "nominee" && request.Action == "start") request.Action = "start_now";
+        var data = await ApplyFulfillmentTransitionAsync(connection, tx, order, unit, request,
+            actorId, actorRole, now, ct);
+        await connection.ExecuteAsync(new CommandDefinition("""
+            INSERT INTO ORDER_FULFILLMENT_OPERATIONS (ORDER_ID,OPERATION_ID,UNIT_ID,PAYLOAD_HASH,RESULT_JSON,ACTOR_ID,CREATED_AT)
+            VALUES (@OrderId,@OperationId,@UnitId,@PayloadHash,@ResultJson,@ActorId,@Now);
+            """, new { OrderId = orderId, request.OperationId, UnitId = unitId, PayloadHash = payloadHash,
+                ResultJson = JsonSerializer.Serialize(data), ActorId = actorId, Now = now }, tx, cancellationToken: ct));
+        await LinkOperationUnitsAsync(connection, tx, orderId, request.OperationId, [unit.Id], ct);
+        await tx.CommitAsync(ct);
+        return data;
+    }
+
+    private static async Task<OrderFulfillmentDto> ApplyFulfillmentTransitionAsync(
+        MySqlConnection connection, MySqlTransaction tx, FulfillmentOrder order, FulfillmentUnit unit,
+        FulfillmentTransitionRequest request, string actorId, string actorRole, DateTime now, CancellationToken ct)
+    {
         var storeConfirmationStatus = ResolveFulfillmentStoreConfirmation(
             unit.Kind, order.StoreConfirmationStatus, request.Action);
         if (unit.Status == "needs_coordination" &&
             (actorRole is not (AdminRole.Manager or AdminRole.Developer) || request.Action is not ("reschedule" or "carry_forward" or "cancel")))
             throw new ForbiddenException("此請求已交回經理，須由經理重新協調。", "NOMINEE_COORDINATION_REQUIRED");
-        if (request.Action == "decline" && unit.StaffId != staffId)
-            throw new ForbiddenException("只有收到請求的指名人員本人可以回應。", "NOMINEE_RESPONSE_SCOPE");
+        var orderId = order.Id;
+        var sessionId = order.SessionId;
         var before = JsonSerializer.Serialize(unit);
         var q = request.Quantity;
         var oldCancelled = unit.CancelledQuantity;
         switch (request.Action)
         {
-            case "decline" when unit.Kind == "nominee" && unit.Status == "waiting" && unit.AcceptedQuantity == 0 && unit.StartedQuantity == 0 && unit.CancelledQuantity == 0:
+            case "decline" when unit.Kind == "nominee" && unit.Status == "waiting" && unit.AcceptedQuantity == 0 && unit.StartedQuantity == 0 && unit.CancelledQuantity == 0 && q <= unit.Quantity:
                 // Declining a request is not a cancellation or a financial adjustment.
                 unit.Status = "needs_coordination";
                 break;
             case "accept" when q <= unit.Quantity - unit.CancelledQuantity - unit.AcceptedQuantity:
                 unit.AcceptedQuantity += q;
                 break;
-            case "start" when q <= unit.AcceptedQuantity - unit.StartedQuantity:
+            case "start" when unit.Kind != "nominee" && q <= unit.AcceptedQuantity - unit.StartedQuantity:
                 unit.StartedQuantity += q; unit.ActualStartsAt ??= now;
                 break;
-            case "start_now" when unit.Kind is "nominee" or "addon" && unit.StartedQuantity == 0 && unit.CancelledQuantity == 0:
+            case "start_now" when unit.Kind is "nominee" or "addon" && unit.StartedQuantity == 0 && unit.CancelledQuantity == 0 && q <= unit.Quantity:
                 unit.AcceptedQuantity = Math.Max(unit.AcceptedQuantity, q);
                 unit.StartedQuantity += q; unit.ActualStartsAt = now;
                 unit.OriginalScheduledStartsAt ??= unit.ScheduledStartsAt;
@@ -315,13 +318,17 @@ public sealed partial class OrderingRepository
                 unit.ScheduledStartsAt = now;
                 unit.ScheduledEndsAt = now.AddMinutes(unit.PurchasedMinutes);
                 break;
-            case "backfill" when unit.Kind is "nominee" or "addon" && unit.StartedQuantity == 0 && unit.CancelledQuantity == 0:
-                if (!request.ActualStartsAt.HasValue || request.ActualStartsAt.Value > DateTimeOffset.Now)
+            case "backfill" when unit.Kind is "nominee" or "addon" && unit.StartedQuantity == 0 && unit.CancelledQuantity == 0 && q <= unit.Quantity:
+                if (!request.ActualStartsAt.HasValue || request.ActualStartsAt.Value > Offset(now)!.Value)
                     throw new BusinessException("補登開始時間不可為未來。", "FULFILLMENT_BACKFILL_TIME_INVALID");
-                if (request.ActualEndsAt.HasValue && request.ActualEndsAt.Value < request.ActualStartsAt.Value)
+                if (request.ActualEndsAt.HasValue && (request.ActualEndsAt.Value < request.ActualStartsAt.Value || request.ActualEndsAt.Value > Offset(now)!.Value))
                     throw new BusinessException("補登結束時間不可早於開始時間。", "FULFILLMENT_BACKFILL_TIME_INVALID");
                 unit.AcceptedQuantity = Math.Max(unit.AcceptedQuantity, q);
                 unit.StartedQuantity += q; unit.ActualStartsAt = request.ActualStartsAt.Value.ToOffset(TimeSpan.FromHours(8)).DateTime;
+                unit.OriginalScheduledStartsAt ??= unit.ScheduledStartsAt;
+                unit.OriginalScheduledEndsAt ??= unit.ScheduledEndsAt;
+                unit.ScheduledStartsAt = unit.ActualStartsAt;
+                unit.ScheduledEndsAt = unit.ActualStartsAt.Value.AddMinutes(unit.PurchasedMinutes);
                 if (request.ActualEndsAt.HasValue)
                 {
                     if (request.ActualEndsAt.Value < request.ActualStartsAt.Value)
@@ -332,7 +339,7 @@ public sealed partial class OrderingRepository
                 break;
             case "backfill" when unit.Kind is "meal" or "room" && unit.CancelledQuantity < unit.Quantity &&
                 q <= unit.Quantity - unit.CancelledQuantity - unit.CompletedQuantity:
-                if (!request.ActualStartsAt.HasValue || request.ActualStartsAt.Value > DateTimeOffset.Now)
+                if (!request.ActualStartsAt.HasValue || request.ActualStartsAt.Value > Offset(now)!.Value)
                     throw new BusinessException("補登開始時間不可為未來。", "FULFILLMENT_BACKFILL_TIME_INVALID");
                 unit.AcceptedQuantity = Math.Max(unit.AcceptedQuantity, q);
                 unit.StartedQuantity += q;
@@ -388,6 +395,9 @@ public sealed partial class OrderingRepository
                 throw new BusinessException("跨營業期轉移不可選擇原營業期。", "FULFILLMENT_TARGET_PERIOD_SAME");
             unit.FulfillmentPeriodId = request.TargetBusinessPeriodId;
         }
+        if (unit.Kind == "nominee" && request.Action is "accept" or "start_now" or "backfill")
+            await ValidateServiceWindowAsync(connection, tx, unit, request.Action,
+                request.ActualEndsAt.HasValue, now, ct, request.StillInProgress);
         if (unit.Kind == "nominee") await ApplyNomineeFulfillmentAsync(connection, tx, order, unit, request.Action, actorId, now, ct);
         if (unit.Kind == "addon") await ApplyAddonFulfillmentAsync(connection, tx, unit, request.Action, actorId, now, ct);
         if (unit.Kind == "room")
@@ -451,12 +461,8 @@ public sealed partial class OrderingRepository
         await InsertAuditAsync(connection, tx, orderId, sessionId, $"fulfillment.{request.Action}", before,
             JsonSerializer.Serialize(new { unit, request.OperationId }), actorId, actorRole, now, ct);
         data = data with { OrderStatus = nextStatus };
-        await connection.ExecuteAsync(new CommandDefinition("""
-            INSERT INTO ORDER_FULFILLMENT_OPERATIONS (ORDER_ID,OPERATION_ID,UNIT_ID,PAYLOAD_HASH,RESULT_JSON,ACTOR_ID,CREATED_AT)
-            VALUES (@OrderId,@OperationId,@UnitId,@PayloadHash,@ResultJson,@ActorId,@Now);
-            """, new { OrderId = orderId, request.OperationId, UnitId = unitId, PayloadHash = payloadHash,
-                ResultJson = JsonSerializer.Serialize(data), ActorId = actorId, Now = now }, tx, cancellationToken: ct));
-        await tx.CommitAsync(ct);
+        order.OrderStatus = nextStatus;
+        order.StoreConfirmationStatus = storeConfirmationStatus;
         return data;
     }
 
@@ -535,48 +541,41 @@ public sealed partial class OrderingRepository
             await connection.ExecuteAsync(new CommandDefinition("""
                 UPDATE STAFF_BUSY_BLOCKS SET SERVICE_ENDS_AT=@Now,ENDS_AT=@BusyUntil,UPDATED_AT=@Now
                 WHERE ORDER_NOMINEE_ID=@NomineeId AND BLOCK_STATUS='active';
-                """, new { unit.NomineeId, Now = now, BusyUntil = now.AddMinutes(nominee.BufferMinutesSnapshot) }, tx, cancellationToken: ct));
+                """, new { unit.NomineeId, Now = now, BusyUntil = now.AddMinutes(unit.RestMinutesReserved) }, tx, cancellationToken: ct));
         }
         var confirmation = action switch { "decline" => "needs_coordination", "cancel" => "cancelled", "reschedule" or "carry_forward" => "waiting", "complete" => "completed", "backfill" when unit.CompletedQuantity > 0 => "completed", _ => "confirmed" };
         await connection.ExecuteAsync(new CommandDefinition("""
             UPDATE ORDER_NOMINEES SET CONFIRMATION_STATUS=@Confirmation,
-                CONFIRMED_AT=CASE WHEN @Action IN ('accept','start_now') THEN @Now WHEN @Action IN ('reschedule','carry_forward') THEN NULL ELSE CONFIRMED_AT END,
-                CONFIRMED_BY=CASE WHEN @Action IN ('accept','start_now') THEN @ActorId WHEN @Action IN ('reschedule','carry_forward') THEN NULL ELSE CONFIRMED_BY END,
+                CONFIRMED_AT=CASE WHEN @Action IN ('accept','start_now','backfill') THEN @Now WHEN @Action IN ('reschedule','carry_forward') THEN NULL ELSE CONFIRMED_AT END,
+                CONFIRMED_BY=CASE WHEN @Action IN ('accept','start_now','backfill') THEN @ActorId WHEN @Action IN ('reschedule','carry_forward') THEN NULL ELSE CONFIRMED_BY END,
                 REQUESTED_STARTS_AT=@RequestedStartsAt,REQUESTED_SERVICE_ENDS_AT=@RequestedServiceEndsAt,
                 REQUESTED_BUSY_UNTIL=@RequestedBusyUntil,UPDATED_AT=@Now WHERE ID=@Id;
             """, new { nominee.Id, Confirmation = confirmation, Action = action, Now = now, ActorId = actorId,
                 nominee.RequestedStartsAt, nominee.RequestedServiceEndsAt, nominee.RequestedBusyUntil }, tx, cancellationToken: ct));
-        if (action is "accept" or "start_now")
+        if (action is "accept" or "start_now" or "backfill")
         {
-            if (action == "start_now")
-                await HandleLateStartConflictsAsync(connection, tx, order, unit, now, ct);
             var updatedBusyBlock = await connection.ExecuteAsync(new CommandDefinition("""
                 UPDATE STAFF_BUSY_BLOCKS
                 SET ORDER_ID=@OrderId,STAFF_ID=@StaffId,STARTS_AT=@StartsAt,SERVICE_ENDS_AT=@ServiceEndsAt,
-                    ENDS_AT=@EndsAt,BLOCK_STATUS='active',UPDATED_AT=@Now
+                    ENDS_AT=@EndsAt,BLOCK_STATUS=@BlockStatus,UPDATED_AT=@Now
                 WHERE ORDER_NOMINEE_ID=@NomineeId;
                 """, new { OrderId = order.Id, NomineeId = nominee.Id, nominee.StaffId,
-                    StartsAt = nominee.RequestedStartsAt, ServiceEndsAt = nominee.RequestedServiceEndsAt,
-                    EndsAt = nominee.RequestedBusyUntil, Now = now }, tx, cancellationToken: ct));
+                    StartsAt = nominee.RequestedStartsAt, ServiceEndsAt = unit.ActualEndsAt ?? nominee.RequestedServiceEndsAt,
+                    EndsAt = unit.ActualEndsAt?.AddMinutes(unit.RestMinutesReserved) ?? nominee.RequestedBusyUntil,
+                    BlockStatus = unit.CompletedQuantity > 0 && unit.ActualEndsAt?.AddMinutes(unit.RestMinutesReserved) <= now ? "completed" : "active", Now = now }, tx, cancellationToken: ct));
             if (updatedBusyBlock == 0)
                 await connection.ExecuteAsync(new CommandDefinition("""
                     INSERT INTO STAFF_BUSY_BLOCKS (ID,ORDER_ID,ORDER_NOMINEE_ID,STAFF_ID,STARTS_AT,SERVICE_ENDS_AT,ENDS_AT,BLOCK_STATUS,CREATED_AT,UPDATED_AT)
-                    VALUES (@Id,@OrderId,@NomineeId,@StaffId,@StartsAt,@ServiceEndsAt,@EndsAt,'active',@Now,@Now);
+                    VALUES (@Id,@OrderId,@NomineeId,@StaffId,@StartsAt,@ServiceEndsAt,@EndsAt,@BlockStatus,@Now,@Now);
                     """, new { Id = NewId(), OrderId = order.Id, NomineeId = nominee.Id, nominee.StaffId,
-                        StartsAt = nominee.RequestedStartsAt, ServiceEndsAt = nominee.RequestedServiceEndsAt,
-                        EndsAt = nominee.RequestedBusyUntil, Now = now }, tx, cancellationToken: ct));
-            nominee.ConfirmationStatus = "confirmed";
-            await MenuNotifications.EnsureNominationSchedulesAsync(connection, tx, [nominee], now, ct, nextScheduleRevision: true);
-        }
-        else if (action == "backfill" && unit.CompletedQuantity == 0)
-        {
-            var actualStart = unit.ActualStartsAt ?? now;
-            var serviceEnd = actualStart.AddMinutes(unit.PurchasedMinutes);
-            await connection.ExecuteAsync(new CommandDefinition("""
-                INSERT INTO STAFF_BUSY_BLOCKS (ID,ORDER_ID,ORDER_NOMINEE_ID,STAFF_ID,STARTS_AT,SERVICE_ENDS_AT,ENDS_AT,BLOCK_STATUS,CREATED_AT,UPDATED_AT)
-                VALUES (@Id,@OrderId,@NomineeId,@StaffId,@StartsAt,@ServiceEndsAt,@EndsAt,'active',@Now,@Now);
-                """, new { Id = NewId(), OrderId = order.Id, NomineeId = nominee.Id, nominee.StaffId,
-                    StartsAt = actualStart, ServiceEndsAt = serviceEnd, EndsAt = serviceEnd.AddMinutes(unit.RestMinutesReserved), Now = now }, tx, cancellationToken: ct));
+                        StartsAt = nominee.RequestedStartsAt, ServiceEndsAt = unit.ActualEndsAt ?? nominee.RequestedServiceEndsAt,
+                        EndsAt = unit.ActualEndsAt?.AddMinutes(unit.RestMinutesReserved) ?? nominee.RequestedBusyUntil,
+                        BlockStatus = unit.CompletedQuantity > 0 && unit.ActualEndsAt?.AddMinutes(unit.RestMinutesReserved) <= now ? "completed" : "active", Now = now }, tx, cancellationToken: ct));
+            nominee.ConfirmationStatus = confirmation;
+            await MenuNotifications.InvalidateNominationSchedulesAsync(connection, tx, order.Id, now, ct,
+                nomineeId: nominee.Id, reason: $"fulfillment_{action}");
+            if (unit.CompletedQuantity == 0)
+                await MenuNotifications.EnsureNominationSchedulesAsync(connection, tx, [nominee], now, ct, nextScheduleRevision: true);
         }
         else
         {
@@ -607,40 +606,6 @@ public sealed partial class OrderingRepository
                 CONFIRMED_BY=CASE WHEN @Action='accept' THEN @ActorId ELSE CONFIRMED_BY END WHERE ID=@RelatedId;
             """, new { unit.RelatedId, Action = action, ActorId = actorId, Now = now,
                 Status = action switch { "accept" => "confirmed", "start" => "in_service", "start_now" => "in_service", "backfill" => unit.CompletedQuantity > 0 ? "completed" : "in_service", "complete" => "completed", _ => "cancelled" } }, tx, cancellationToken: ct));
-    }
-
-    private static async Task HandleLateStartConflictsAsync(MySqlConnection connection, MySqlTransaction tx,
-        FulfillmentOrder order, FulfillmentUnit current, DateTime now, CancellationToken ct)
-    {
-        var currentEnd = current.ScheduledEndsAt!.Value.AddMinutes(current.RestMinutesReserved);
-        var affected = (await connection.QueryAsync<FulfillmentConflictRow>(new CommandDefinition("""
-            SELECT CAST(ID AS CHAR(36)) AS UnitId, CAST(ORDER_ID AS CHAR(36)) AS OrderId,
-                   NAME_SNAPSHOT AS Name, CAST(STAFF_ID AS CHAR(36)) AS StaffId,
-                   GREATEST(0,TIMESTAMPDIFF(MINUTE,GREATEST(@StartsAt,SCHEDULED_STARTS_AT),
-                     LEAST(@EndsAt,SCHEDULED_ENDS_AT))) AS OverlapMinutes,
-                   SCHEDULED_STARTS_AT AS StartsAt,SCHEDULED_ENDS_AT AS EndsAt,UNIT_STATUS AS Status
-            FROM ORDER_FULFILLMENT_UNITS
-            WHERE STAFF_ID=@StaffId AND ID<>@UnitId AND KIND='nominee' AND CANCELLED_QUANTITY=0
-              AND COMPLETED_QUANTITY<QUANTITY AND SCHEDULED_STARTS_AT<@EndsAt AND SCHEDULED_ENDS_AT>@StartsAt
-              AND SCHEDULED_STARTS_AT>=@StartsAt;
-            """, new { StaffId = current.StaffId, UnitId = current.Id, StartsAt = now, EndsAt = currentEnd }, tx, cancellationToken: ct))).ToArray();
-        foreach (var item in affected)
-        {
-            await connection.ExecuteAsync(new CommandDefinition("""
-                INSERT INTO ORDER_FULFILLMENT_CONFLICTS
-                    (ID,CURRENT_UNIT_ID,AFFECTED_UNIT_ID,STAFF_ID,OVERLAP_MINUTES,STATUS,REASON,CREATED_AT)
-                VALUES (@Id,@CurrentUnitId,@AffectedUnitId,@StaffId,@OverlapMinutes,'needs_coordination',@Reason,@Now);
-                UPDATE STAFF_BUSY_BLOCKS SET BLOCK_STATUS='released',UPDATED_AT=@Now
-                WHERE ORDER_NOMINEE_ID=(SELECT NOMINEE_ID FROM ORDER_FULFILLMENT_UNITS WHERE ID=@AffectedUnitId)
-                  AND BLOCK_STATUS='active';
-                UPDATE ORDER_NOMINEES N JOIN ORDER_FULFILLMENT_UNITS F ON F.NOMINEE_ID=N.ID
-                SET N.CONFIRMATION_STATUS='waiting',N.UPDATED_AT=@Now WHERE F.ID=@AffectedUnitId;
-                UPDATE ORDERS SET ORDER_STATUS='needs_reschedule',QUEUE_ENTERED_AT=@Now,UPDATED_AT=@Now WHERE ID=@AffectedOrderId
-                  AND ORDER_STATUS NOT IN ('completed','cancelled');
-                """, new { Id = NewId(), CurrentUnitId = current.Id, AffectedUnitId = item.UnitId,
-                    item.StaffId, item.OverlapMinutes, Reason = $"{current.Name} 現在接待與此單重疊 {item.OverlapMinutes} 分鐘。",
-                    Now = now, AffectedOrderId = item.OrderId }, tx, cancellationToken: ct));
-        }
     }
 
     private static async Task ApplyCompensationAsync(MySqlConnection connection, MySqlTransaction tx,
@@ -691,7 +656,7 @@ public sealed partial class OrderingRepository
             VALUES (@Id,@OrderId,@UnitId,@EventType,@OperationId,@FromPeriodId,@ToPeriodId,
                     @OriginalStartsAt,@OriginalEndsAt,@EffectiveStartsAt,@EffectiveEndsAt,
                     @ActualStartsAt,@ActualEndsAt,@RestMinutes,@CompensationAmount,@Reason,@ActorId,@Now)
-            ON DUPLICATE KEY UPDATE REASON=VALUES(REASON);
+            ;
             """, new { Id = NewId(), OrderId = order.Id, UnitId = unit.Id, EventType = type,
                 request.OperationId, FromPeriodId = order.BusinessPeriodId, ToPeriodId = unit.FulfillmentPeriodId,
                 OriginalStartsAt = unit.OriginalScheduledStartsAt, OriginalEndsAt = unit.OriginalScheduledEndsAt,
@@ -759,6 +724,8 @@ public sealed partial class OrderingRepository
         public string SessionId { get; set; } = "";
         public string? BusinessPeriodId { get; set; }
         public int FlowVersion { get; set; }
+        public string Revision { get; set; } = "";
+        public DateTime? ActualStartsAt { get; set; }
         public int MealCreditApplied { get; set; }
         public string OrderStatus { get; set; } = "";
         public string StoreConfirmationStatus { get; set; } = "";

@@ -5,6 +5,9 @@ namespace ToBeClarify.Api.Services.Ordering;
 
 public interface IOrderingService
 {
+    Task<ToBeClarify.Api.Models.Dtos.OrderServiceEligibilityDto> GetOrderServiceEligibilityAsync(string orderId, System.Security.Claims.ClaimsPrincipal actor, CancellationToken ct);
+    Task<ToBeClarify.Api.Models.Dtos.OrderServiceCommandResultDto> ExecuteOrderServiceAsync(string orderId, ToBeClarify.Api.Models.Dtos.OrderServiceCommandRequest request, System.Security.Claims.ClaimsPrincipal actor, CancellationToken ct);
+
     Task<IReadOnlyList<AdminOrderSessionDto>> GetServiceSessionsAsync(DateOnly day, CancellationToken ct);
     Task<IReadOnlyList<OrderDto>> GetServiceOrdersAsync(DateOnly day, CancellationToken ct);
     Task<IReadOnlyList<OrderFulfillmentDto>> GetServiceFulfillmentAsync(DateOnly day, ClaimsPrincipal actor, CancellationToken ct);

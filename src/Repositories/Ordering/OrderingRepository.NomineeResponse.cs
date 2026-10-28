@@ -48,8 +48,8 @@ public sealed partial class OrderingRepository
             SELECT ID AS Id, STAFF_ID AS StaffId, CONFIRMATION_STATUS AS ConfirmationStatus
             FROM ORDER_NOMINEES WHERE ID=@NomineeId AND ORDER_ID=@OrderId FOR UPDATE;
             """, new { NomineeId = nomineeId, OrderId = orderId }, tx, cancellationToken: cancellationToken));
-        if (nominee is null || nominee.StaffId != staffId)
-            throw new ForbiddenException("只有收到請求的指名人員本人可以回應。", "NOMINEE_RESPONSE_SCOPE");
+        if (nominee is null) throw new BusinessException("找不到指名。", "ORDER_NOMINEE_NOT_FOUND");
+        await RequireOrderRepresentativeAsync(connection, tx, orderId, actorRole, staffId, cancellationToken);
         if (nominee.ConfirmationStatus == "needs_coordination")
         {
             await tx.CommitAsync(cancellationToken);

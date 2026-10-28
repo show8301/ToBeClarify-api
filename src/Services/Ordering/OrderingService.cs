@@ -797,7 +797,7 @@ public sealed partial class OrderingService : IOrderingService
         ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
         var parent = await GetAddonParentAsync(nomineeId, cancellationToken);
-        EnsureAddonActor(parent, actor);
+        await RequireServiceRepresentativeAsync(parent.ParentOrderId, actor, cancellationToken);
         EnsureAddonParentActive(parent);
         return (await _staffService.GetStaffServicesAsync(parent.StaffId, cancellationToken))
             .Where(item => item.IsNominatable && item.Price.HasValue).ToArray();
@@ -807,7 +807,7 @@ public sealed partial class OrderingService : IOrderingService
         ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
         var parent = await GetAddonParentAsync(nomineeId, cancellationToken);
-        EnsureAddonActor(parent, actor);
+        await RequireServiceRepresentativeAsync(parent.ParentOrderId, actor, cancellationToken);
         var normalized = new SubmitAddonRequest
         {
             ParentNomineeId = nomineeId,
@@ -822,10 +822,16 @@ public sealed partial class OrderingService : IOrderingService
     public async Task<OrderDto> ConfirmAddonAsync(string orderId, ClaimsPrincipal actor,
         CancellationToken cancellationToken)
     {
-        var staffId = actor.FindFirstValue(AdminAuthConstants.StaffMemberIdClaimType)
-            ?? throw new ForbiddenException("此帳號尚未連結店員，無法確認加購服務。", "STAFF_ACCOUNT_NOT_LINKED");
-        await _repository.ConfirmAddonAsync(orderId, staffId, ActorId(actor), _clock.LocalDateTime,
-            cancellationToken);
+        var staffId = actor.FindFirstValue(AdminAuthConstants.StaffMemberIdClaimType);
+        var data = await _repository.GetFulfillmentAsync(orderId, cancellationToken);
+        if (data.FlowVersion >= 2)
+        {
+            var unit = data.Units.Single(u => u.Kind == "addon");
+            await TransitionFulfillmentAsync(orderId, unit.Id, new FulfillmentTransitionRequest {
+                OperationId = Guid.NewGuid().ToString(), ExpectedVersion = unit.Version, Action = "accept"
+            }, actor, cancellationToken);
+        }
+        else await _repository.ConfirmAddonAsync(orderId, staffId, ActorId(actor), ActorRole(actor), _clock.LocalDateTime, cancellationToken);
         return (await MapOrdersAsync(await _repository.GetOrderAsync(orderId, cancellationToken), cancellationToken)).Single();
     }
 
@@ -845,6 +851,16 @@ public sealed partial class OrderingService : IOrderingService
         var action = Required(request.Action, "ORDER_TRANSITION_ACTION_REQUIRED");
         if (action is "cancel" or "reject" or "return_to_reschedule" && string.IsNullOrWhiteSpace(request.Reason))
             throw new BusinessException("取消、退回或要求重新排程時必須填寫原因。", "ORDER_TRANSITION_REASON_REQUIRED");
+        var bundle = await _repository.GetOrderAsync(orderId, cancellationToken);
+        if (action is "start" or "complete" && bundle.Nominees.Any(n => n.OrderId == orderId))
+        {
+            var eligibility = await GetOrderServiceEligibilityAsync(orderId, actor, cancellationToken);
+            await ExecuteOrderServiceAsync(orderId, new OrderServiceCommandRequest {
+                OperationId = Guid.NewGuid().ToString(), Snapshot = eligibility.Snapshot,
+                Action = action == "start" ? "start_now" : "complete", Reason = request.Reason
+            }, actor, cancellationToken);
+            return (await MapOrdersAsync(await _repository.GetOrderAsync(orderId, cancellationToken), cancellationToken)).Single();
+        }
         await _repository.TransitionOrderAsync(orderId, action,
             string.IsNullOrWhiteSpace(request.Reason) ? null : request.Reason.Trim(),
             ActorId(actor), ActorRole(actor), _clock.LocalDateTime, cancellationToken);
@@ -1008,14 +1024,6 @@ public sealed partial class OrderingService : IOrderingService
         if (parent.ParentOrderStatus is not ("confirmed" or "in_service" or "partially_confirmed") ||
             parent.ServiceEndsAt <= _clock.LocalDateTime)
             throw new BusinessException("只有已成立且尚未結束的指名時段可以追加服務。", "ADDON_PARENT_INACTIVE");
-    }
-
-    private static void EnsureAddonActor(AddonParentRow parent, ClaimsPrincipal actor)
-    {
-        var role = ActorRole(actor);
-        var staffId = actor.FindFirstValue(AdminAuthConstants.StaffMemberIdClaimType);
-        if (staffId != parent.StaffId && role is not ("manager" or "developer"))
-            throw new ForbiddenException("只有被指名店員本人、店經理或開發者可以代客追加服務。", "ADDON_SCOPE_FORBIDDEN");
     }
 
     private async Task<OrderDto> CreateAddonAsync(AddonParentRow parent, SubmitAddonRequest request,

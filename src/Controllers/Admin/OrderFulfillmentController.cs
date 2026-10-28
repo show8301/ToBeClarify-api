@@ -11,6 +11,15 @@ namespace ToBeClarify.Api.Controllers.Admin;
 [Route("api/admin/orders/{orderId}/fulfillment")]
 public sealed class OrderFulfillmentController(IOrderingService service) : ControllerBase
 {
+    [HttpGet("service-eligibility")]
+    public async Task<ActionResult<ApiResponse<OrderServiceEligibilityDto>>> ServiceEligibility(string orderId, CancellationToken ct)
+        => Ok(ApiResponse<OrderServiceEligibilityDto>.Ok(await service.GetOrderServiceEligibilityAsync(orderId, User, ct)));
+
+    [HttpPost("service-command")]
+    public async Task<ActionResult<ApiResponse<OrderServiceCommandResultDto>>> ServiceCommand(string orderId,
+        OrderServiceCommandRequest request, CancellationToken ct)
+        => Ok(ApiResponse<OrderServiceCommandResultDto>.Ok(await service.ExecuteOrderServiceAsync(orderId, request, User, ct)));
+
     [HttpGet]
     public async Task<ActionResult<ApiResponse<OrderFulfillmentDto>>> Get(string orderId, CancellationToken cancellationToken)
         => Ok(ApiResponse<OrderFulfillmentDto>.Ok(await service.GetFulfillmentAsync(orderId, User, cancellationToken)));
