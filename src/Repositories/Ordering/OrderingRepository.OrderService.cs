@@ -122,6 +122,11 @@ public sealed partial class OrderingRepository
             Block("ORDER_SERVICE_NOT_STARTED", "本單尚有未開始的指名，請先開始或補登，不能直接完成整單服務。");
         if (action == "complete" && pending.Any(u => u.ScheduledEndsAt > now))
             Block("EARLY_COMPLETION_REASON_REQUIRED", "尚未到預計結束，提早完成請使用進階操作並填寫原因。");
+        if (action == "complete" && pending.Length > 0 && await connection.ExecuteScalarAsync<bool>(new CommandDefinition("""
+            SELECT EXISTS(SELECT 1 FROM ORDER_SERVICE_ADDONS A JOIN ORDERS O ON O.ID=A.ORDER_ID
+            WHERE A.PARENT_NOMINEE_ID IN @NomineeIds AND O.ORDER_STATUS NOT IN ('cancelled','rejected','expired','completed'));
+            """, new { NomineeIds = pending.Select(u => u.NomineeId).ToArray() }, tx, cancellationToken: ct)))
+            Block("FULFILLMENT_ADDONS_PENDING", "請先完成或取消本單指名尚未處理的加購，再完成原服務。");
         if (action is "accept" or "start_now" or "backfill_scheduled")
         {
             foreach (var periodId in pending.Select(u => u.FulfillmentPeriodId ?? order.BusinessPeriodId).Where(id => id is not null).Distinct())
@@ -211,7 +216,7 @@ public sealed partial class OrderingRepository
         var order = await ReadServiceOrderAsync(connection, tx, orderId, true, ct);
         await RequireOrderRepresentativeAsync(connection, tx, orderId, role, staffId, ct);
         var previous = await connection.QuerySingleOrDefaultAsync<FulfillmentOperation>(new CommandDefinition("""
-            SELECT UNIT_ID AS UnitId,PAYLOAD_HASH AS PayloadHash,RESULT_JSON AS ResultJson FROM ORDER_FULFILLMENT_OPERATIONS
+            SELECT CAST(UNIT_ID AS CHAR(36)) AS UnitId,PAYLOAD_HASH AS PayloadHash,RESULT_JSON AS ResultJson FROM ORDER_FULFILLMENT_OPERATIONS
             WHERE ORDER_ID=@OrderId AND OPERATION_ID=@OperationId;
             """, new { OrderId = orderId, request.OperationId }, tx, cancellationToken: ct));
         if (previous is not null)
@@ -239,14 +244,6 @@ public sealed partial class OrderingRepository
             request.ActualTimes.Select(t => t.Id).Distinct().Count() != targets.Length ||
             targets.Any(u => !request.ActualTimes.Any(t => t.Id == u.Id))))
             throw new BusinessException("請填寫每位待補登指名的實際開始及進度。", "BACKFILL_TARGETS_REQUIRED");
-        if (request.Action == "complete")
-        {
-            var pendingAddons = await connection.ExecuteScalarAsync<bool>(new CommandDefinition("""
-                SELECT EXISTS(SELECT 1 FROM ORDER_SERVICE_ADDONS A JOIN ORDERS O ON O.ID=A.ORDER_ID
-                WHERE A.PARENT_NOMINEE_ID IN @NomineeIds AND O.ORDER_STATUS NOT IN ('cancelled','rejected','expired','completed'));
-                """, new { NomineeIds = targets.Select(u => u.NomineeId).ToArray() }, tx, cancellationToken: ct));
-            if (pendingAddons) throw new BusinessException("請先完成或取消本單指名尚未處理的加購，再完成原服務。", "FULFILLMENT_ADDONS_PENDING");
-        }
         // Preflight all target windows; all state transitions and remaining guards share this transaction.
         var commands = new List<(FulfillmentUnit Unit, FulfillmentTransitionRequest Request)>();
         foreach (var u in targets)
