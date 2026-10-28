@@ -245,10 +245,14 @@ public sealed record RankingDto(
     string? ScoreLabel,
     string? PeriodLabel);
 
+public sealed record PublicBusinessStatusDto(string State, DateTimeOffset? StartsAt,
+    DateTimeOffset? ProjectedCloseAt, DateTimeOffset CheckedAt);
+
 public sealed record HomeDto(
     IReadOnlyList<SiteSettingDto> SiteSettings,
     IReadOnlyList<NavigationItemDto> Navigation,
     IReadOnlyList<HomeEventCarouselDto> Carousels,
     IReadOnlyList<HomeSlideDto> Slides,
     IReadOnlyList<ShopRuleDto> ShopRules,
-    HomePageVisibilityDto PageVisibility);
+    HomePageVisibilityDto PageVisibility,
+    PublicBusinessStatusDto BusinessStatus);

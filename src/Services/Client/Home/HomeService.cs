@@ -5,6 +5,7 @@ using ToBeClarify.Api.Services.Client.Shared;
 using ToBeClarify.Api.Services.Client.Site;
 using ToBeClarify.Api.Services.Media;
 using System.Text.Json;
+using ToBeClarify.Api.Repositories.Ordering;
 
 namespace ToBeClarify.Api.Services.Client.Home;
 
@@ -13,15 +14,19 @@ public sealed class HomeService : IHomeService
     private readonly IHomeRepository _repository;
     private readonly ISiteService _siteService;
     private readonly MediaUrlService _mediaUrls;
+    private readonly IOrderingRepository _ordering;
+    private readonly IAppClock _clock;
 
     public HomeService(
         IHomeRepository repository,
         ISiteService siteService,
-        MediaUrlService mediaUrls)
+        MediaUrlService mediaUrls, IOrderingRepository ordering, IAppClock clock)
     {
         _repository = repository;
         _siteService = siteService;
         _mediaUrls = mediaUrls;
+        _ordering = ordering;
+        _clock = clock;
     }
 
     public async Task<IReadOnlyList<HomeEventCarouselDto>> GetCarouselsAsync(CancellationToken cancellationToken)
@@ -46,9 +51,16 @@ public sealed class HomeService : IHomeService
         var carouselsTask = GetCarouselsAsync(cancellationToken);
         var slidesTask = GetSlidesAsync(cancellationToken);
         var rulesTask = _siteService.GetShopRulesAsync(cancellationToken);
-        await Task.WhenAll(settingsTask, navigationTask, carouselsTask, slidesTask, rulesTask);
+        var periodTask = _ordering.GetActiveBusinessPeriodAsync(_clock.LocalDateTime, cancellationToken);
+        await Task.WhenAll(settingsTask, navigationTask, carouselsTask, slidesTask, rulesTask, periodTask);
+        var period = await periodTask;
+        var open = period?.PeriodStatus == "open";
+        static DateTimeOffset Offset(DateTime date) => new(DateTime.SpecifyKind(date, DateTimeKind.Unspecified), TimeSpan.FromHours(8));
+        var status = new PublicBusinessStatusDto(open ? "open" : "closed",
+            open ? Offset(period!.ActualOpenedAt ?? period.StartsAt) : null,
+            open ? Offset(period!.ProjectedCloseAt ?? period.EndsAt) : null, Offset(_clock.LocalDateTime));
         return new HomeDto(await settingsTask, await navigationTask, await carouselsTask, await slidesTask,
-            await rulesTask, ResolvePageVisibility(await settingsTask));
+            await rulesTask, ResolvePageVisibility(await settingsTask), status);
     }
 
     private static HomePageVisibilityDto ResolvePageVisibility(IReadOnlyList<SiteSettingDto> settings)
