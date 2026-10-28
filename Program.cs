@@ -358,7 +358,8 @@ var imageMigration = builder.Configuration["private-image-migration"];
 if (imageMigration is not null)
 {
     await using var scope = app.Services.CreateAsyncScope();
-    await scope.ServiceProvider.GetRequiredService<PrivateImageMigration>().Run(imageMigration, CancellationToken.None);
+    await scope.ServiceProvider.GetRequiredService<PrivateImageMigration>().Run(imageMigration, CancellationToken.None,
+        builder.Configuration["private-image-category"] ?? "all");
     return;
 }
 
