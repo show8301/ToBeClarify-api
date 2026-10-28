@@ -7,6 +7,33 @@ namespace ToBeClarify.Api.Services.Ordering;
 
 public sealed partial class OrderingService
 {
+    public Task<OrderServiceEligibilityDto> GetOrderServiceEligibilityAsync(string orderId, ClaimsPrincipal actor, CancellationToken ct)
+        => _repository.GetOrderServiceEligibilityAsync(orderId, ActorRole(actor),
+            actor.FindFirstValue(AdminAuthConstants.StaffMemberIdClaimType), _clock.LocalDateTime, ct);
+
+    public Task<OrderServiceCommandResultDto> ExecuteOrderServiceAsync(string orderId, OrderServiceCommandRequest request,
+        ClaimsPrincipal actor, CancellationToken ct)
+    {
+        if (!Guid.TryParse(request.OperationId, out _) || request.Snapshot.Length != 64 ||
+            request.Action is not ("accept" or "start_now" or "backfill_scheduled" or "backfill_custom" or "complete"))
+            throw new BusinessException("請確認操作識別碼、版本及動作。", "ORDER_SERVICE_REQUEST_INVALID");
+        request.Reason = string.IsNullOrWhiteSpace(request.Reason) ? null : request.Reason.Trim();
+        if (request.Reason?.Length > 500 || request.ActualTimes is null || request.ActualTimes.Count > 100 || request.ActualTimes.Any(t => t is null))
+            throw new BusinessException("操作內容或原因長度不正確。", "ORDER_SERVICE_REQUEST_INVALID");
+        if (request.Action == "backfill_custom" && request.Reason is null)
+            throw new BusinessException("更正實際時間請填寫原因。", "FULFILLMENT_BACKFILL_REASON_REQUIRED");
+        if (request.Action != "backfill_custom" && request.ActualTimes.Count != 0)
+            throw new BusinessException("此快捷動作不接受自訂時間。", "ORDER_SERVICE_REQUEST_INVALID");
+        return _repository.ExecuteOrderServiceAsync(orderId, request, ActorId(actor), ActorRole(actor),
+            actor.FindFirstValue(AdminAuthConstants.StaffMemberIdClaimType), _clock.LocalDateTime, ct);
+    }
+
+    private async Task RequireServiceRepresentativeAsync(string orderId, ClaimsPrincipal actor, CancellationToken ct)
+    {
+        if (!await _repository.CanRepresentOrderAsync(orderId, ActorRole(actor), actor.FindFirstValue(AdminAuthConstants.StaffMemberIdClaimType), ct))
+            throw new ForbiddenException("只有本單任一名有效指名人員或經理可以代辦。", "ORDER_SERVICE_SCOPE");
+    }
+
     public async Task<IReadOnlyList<OrderDto>> GetServiceOrdersAsync(DateOnly day, CancellationToken ct)
         => await MapOrdersAsync(await _repository.GetServiceOrdersAsync(day, ct), ct, includeFulfillment: false);
 
@@ -15,7 +42,7 @@ public sealed partial class OrderingService
             MapSession(row), row.OrderCount, row.WaitingOrderCount, row.ConfirmedOrderCount, row.TotalAmount, ToOffset(row.LastOrderedAt))).ToArray();
 
     public async Task<IReadOnlyList<OrderFulfillmentDto>> GetServiceFulfillmentAsync(DateOnly day, ClaimsPrincipal actor, CancellationToken ct)
-        => (await _repository.GetServiceFulfillmentAsync(day, ct)).Select(data => ScopeFulfillment(data, actor)).ToArray();
+        => await Task.WhenAll((await _repository.GetServiceFulfillmentAsync(day, ct)).Select(data => ScopeFulfillmentAsync(data, actor, ct)));
 
     public async Task<IReadOnlyList<AdminOrderSessionDto>> GetDesignatedSessionsAsync(DateOnly? businessDate,
         ClaimsPrincipal actor, CancellationToken cancellationToken)
@@ -37,8 +64,8 @@ public sealed partial class OrderingService
         var order = bundle.Orders.SingleOrDefault(o => o.Id == orderId)
             ?? throw new BusinessException("找不到訂單。", "ORDER_NOT_FOUND");
         var nominee = bundle.Nominees.SingleOrDefault(n => n.OrderId == orderId && n.Id == nomineeId);
-        if (string.IsNullOrWhiteSpace(staffId) || nominee is null || nominee.StaffId != staffId)
-            throw new ForbiddenException("只有收到請求的指名人員本人可以回應。", "NOMINEE_RESPONSE_SCOPE");
+        if (nominee is null) throw new BusinessException("找不到指名。", "ORDER_NOMINEE_NOT_FOUND");
+        await RequireServiceRepresentativeAsync(orderId, actor, cancellationToken);
         if (!Guid.TryParse(request.OperationId, out _) || request.Decision is not ("accept" or "decline"))
             throw new BusinessException("請確認回應操作。", "NOMINEE_RESPONSE_INVALID");
         if (order.StoreConfirmationStatus == "pending")
@@ -50,31 +77,41 @@ public sealed partial class OrderingService
         {
             var fulfillment = await _repository.GetFulfillmentAsync(orderId, cancellationToken);
             var unit = fulfillment.Units.Single(u => u.Kind == "nominee" && u.NomineeId == nomineeId);
-            await TransitionFulfillmentAsync(orderId, unit.Id, new FulfillmentTransitionRequest {
+            if (request.Decision == "accept")
+            {
+                var eligibility = await GetOrderServiceEligibilityAsync(orderId, actor, cancellationToken);
+                await ExecuteOrderServiceAsync(orderId, new OrderServiceCommandRequest {
+                    OperationId = request.OperationId, Snapshot = eligibility.Snapshot, Action = "accept",
+                    CompatibilityPayload = $"nominee-response:{nomineeId}:" + System.Text.Json.JsonSerializer.Serialize(request),
+                    ExpectedUnitId = unit.Id, ExpectedUnitVersion = request.ExpectedVersion,
+                    LegacyPayloadHash = ToBeClarify.Api.Repositories.Ordering.FulfillmentOperationFingerprint.Create(unit.Id,
+                        new FulfillmentTransitionRequest { OperationId = request.OperationId, ExpectedVersion = request.ExpectedVersion,
+                            Action = "accept", Reason = reason })
+                }, actor, cancellationToken);
+            }
+            else await TransitionFulfillmentAsync(orderId, unit.Id, new FulfillmentTransitionRequest {
                 OperationId = request.OperationId, ExpectedVersion = request.ExpectedVersion,
                 Action = request.Decision, Reason = reason
             }, actor, cancellationToken);
         }
         else if (request.Decision == "accept")
-            await _repository.ConfirmNomineeAsync(orderId, staffId, ActorId(actor), false, _clock.LocalDateTime, cancellationToken);
+            await _repository.ConfirmNomineeAsync(orderId, staffId, ActorId(actor), ActorRole(actor) is AdminRole.Manager or AdminRole.Developer, _clock.LocalDateTime, cancellationToken);
         else
-            await _repository.DeclineLegacyNomineeAsync(orderId, nomineeId, staffId, ActorId(actor), ActorRole(actor), reason!, _clock.LocalDateTime, cancellationToken);
+            await _repository.DeclineLegacyNomineeAsync(orderId, nomineeId, staffId ?? "", ActorId(actor), ActorRole(actor), reason!, _clock.LocalDateTime, cancellationToken);
         return (await MapOrdersAsync(await _repository.GetOrderAsync(orderId, cancellationToken), cancellationToken)).Single();
     }
 
     public async Task<OrderFulfillmentDto> GetFulfillmentAsync(string orderId, ClaimsPrincipal actor, CancellationToken cancellationToken)
-        => ScopeFulfillment(await _repository.GetFulfillmentAsync(orderId, cancellationToken), actor);
+        => await ScopeFulfillmentAsync(await _repository.GetFulfillmentAsync(orderId, cancellationToken), actor, cancellationToken);
 
     public async Task<FulfillmentStartPreviewDto> GetFulfillmentStartPreviewAsync(string orderId, string unitId,
         ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
         var preview = await _repository.GetFulfillmentStartPreviewAsync(orderId, unitId,
             _clock.LocalDateTime, cancellationToken);
-        var privileged = ActorRole(actor) is AdminRole.Manager or AdminRole.Developer;
-        var staffId = actor.FindFirstValue(AdminAuthConstants.StaffMemberIdClaimType);
-        if (!privileged && preview.Conflicts.Any(c => c.StaffId is not null && c.StaffId != staffId))
-            return preview with { Conflicts = Array.Empty<FulfillmentConflictDto>() };
-        return preview;
+        await RequireServiceRepresentativeAsync(orderId, actor, cancellationToken);
+        var eligibility = await GetOrderServiceEligibilityAsync(orderId, actor, cancellationToken);
+        return preview with { CanStartNow = preview.CanStartNow && eligibility.Actions.Single(a => a.Action == "start_now").Enabled };
     }
 
     public Task<IReadOnlyList<FulfillmentPeriodOptionDto>> GetFulfillmentPeriodOptionsAsync(string orderId,
@@ -102,29 +139,32 @@ public sealed partial class OrderingService
             throw new BusinessException("休息分鐘數不正確。", "FULFILLMENT_REST_INVALID");
         if (request.Action == "backfill" && request.Reason is null)
             throw new BusinessException("補登服務請填寫原因。", "FULFILLMENT_BACKFILL_REASON_REQUIRED");
-        return ScopeFulfillment(await _repository.TransitionFulfillmentAsync(orderId, unitId, request,
+        return await ScopeFulfillmentAsync(await _repository.TransitionFulfillmentAsync(orderId, unitId, request,
             ActorId(actor), ActorRole(actor), actor.FindFirstValue(AdminAuthConstants.StaffMemberIdClaimType),
-            _clock.LocalDateTime, cancellationToken), actor);
+            _clock.LocalDateTime, cancellationToken), actor, cancellationToken);
     }
 
-    private static OrderFulfillmentDto ScopeFulfillment(OrderFulfillmentDto data, ClaimsPrincipal actor)
+    private async Task<OrderFulfillmentDto> ScopeFulfillmentAsync(OrderFulfillmentDto data, ClaimsPrincipal actor, CancellationToken ct)
+        => ScopeFulfillment(data, actor, await _repository.CanRepresentOrderAsync(data.OrderId, ActorRole(actor),
+            actor.FindFirstValue(AdminAuthConstants.StaffMemberIdClaimType), ct));
+
+    private static OrderFulfillmentDto ScopeFulfillment(OrderFulfillmentDto data, ClaimsPrincipal actor, bool representative)
     {
         var privileged = ActorRole(actor) is AdminRole.Manager or AdminRole.Developer;
-        var staffId = actor.FindFirstValue(AdminAuthConstants.StaffMemberIdClaimType);
         return data with { Units = data.Units.Select(unit =>
         {
             var actions = new List<string>();
-            if (data.FlowVersion >= 2 && (unit.StaffId is null || privileged || unit.StaffId == staffId))
+            if (data.FlowVersion >= 2 && (unit.StaffId is null || privileged || representative))
             {
                 if (unit.Status == "needs_coordination")
                 {
                     if (privileged) actions.AddRange(["reschedule", "carry_forward", "cancel"]);
                     return unit with { AllowedActions = actions };
                 }
-                if (unit.Kind == "nominee" && unit.StaffId == staffId && unit.Status == "waiting" && unit.AcceptedQuantity == 0 && unit.StartedQuantity == 0)
+                if (unit.Kind == "nominee" && representative && unit.Status == "waiting" && unit.AcceptedQuantity == 0 && unit.StartedQuantity == 0)
                     actions.Add("decline");
                 if (unit.AcceptedQuantity + unit.CancelledQuantity < unit.Quantity) actions.Add("accept");
-                if (unit.StartedQuantity < unit.AcceptedQuantity) actions.Add("start");
+                if (unit.Kind != "nominee" && unit.StartedQuantity < unit.AcceptedQuantity) actions.Add("start");
                 if (unit.Kind == "nominee" && unit.StartedQuantity == 0 && unit.CancelledQuantity == 0)
                 {
                     actions.Add("start_now");

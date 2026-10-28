@@ -4,6 +4,10 @@ namespace ToBeClarify.Api.Repositories.Ordering;
 
 public interface IOrderingRepository
 {
+    Task<bool> CanRepresentOrderAsync(string orderId, string role, string? staffId, CancellationToken ct);
+    Task<ToBeClarify.Api.Models.Dtos.OrderServiceEligibilityDto> GetOrderServiceEligibilityAsync(string orderId, string role, string? staffId, DateTime now, CancellationToken ct);
+    Task<ToBeClarify.Api.Models.Dtos.OrderServiceCommandResultDto> ExecuteOrderServiceAsync(string orderId, ToBeClarify.Api.Models.Dtos.OrderServiceCommandRequest request, string actorId, string role, string? staffId, DateTime now, CancellationToken ct);
+
     Task<string?> FindOrderBackfillAsync(string sessionId, string operationId, string payloadHash, CancellationToken ct);
     Task<IReadOnlyList<AdminOrderSessionRow>> GetServiceSessionsAsync(DateOnly day, CancellationToken ct);
     Task<OrderBundle> GetServiceOrdersAsync(DateOnly day, CancellationToken ct);
@@ -55,7 +59,7 @@ public interface IOrderingRepository
     Task<string> CreateOrderAsync(NewOrderAggregate order, CancellationToken cancellationToken);
     Task<AddonParentRow?> GetAddonParentAsync(string nomineeId, CancellationToken cancellationToken);
     Task CreateAddonOrderAsync(NewAddonAggregate addon, CancellationToken cancellationToken);
-    Task ConfirmAddonAsync(string orderId, string staffId, string actorId, DateTime now,
+    Task ConfirmAddonAsync(string orderId, string? staffId, string actorId, string actorRole, DateTime now,
         CancellationToken cancellationToken);
     Task<OrderBundle> GetOrdersBySessionAsync(string sessionId, CancellationToken cancellationToken);
     Task<OrderBundle> GetOrderAsync(string orderId, CancellationToken cancellationToken);

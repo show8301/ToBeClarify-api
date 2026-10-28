@@ -22,6 +22,8 @@ publish/
 !db/
 !db/migrations/
 !db/migrations/**/*.sql
+!db/diagnostics/
+!db/diagnostics/**/*.sql
 
 # Schema-only fixture for isolated order transaction tests; contains no row data.
 !tests/OrderBackfill/schema.sql

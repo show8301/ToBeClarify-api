@@ -38,6 +38,7 @@ public sealed class FulfillmentTransitionRequest
     public string? CompensationReason { get; set; }
     public DateTimeOffset? ActualStartsAt { get; set; }
     public DateTimeOffset? ActualEndsAt { get; set; }
+    public bool StillInProgress { get; set; }
 }
 
 public sealed class NomineeResponseRequest
