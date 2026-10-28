@@ -20,6 +20,8 @@ public sealed class OrderServiceCommandRequest
     [System.Text.Json.Serialization.JsonIgnore]
     public string? CompatibilityPayload { get; set; }
     [System.Text.Json.Serialization.JsonIgnore]
+    public string? LegacyPayloadHash { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore]
     public string? ExpectedUnitId { get; set; }
     [System.Text.Json.Serialization.JsonIgnore]
     public int? ExpectedUnitVersion { get; set; }

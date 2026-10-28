@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using Dapper;
 using MySqlConnector;
@@ -234,10 +232,7 @@ public sealed partial class OrderingRepository
         DateTime now, CancellationToken cancellationToken)
     {
         var ct = cancellationToken;
-        var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
-            { unitId, request.Action, request.Quantity, request.Reason, request.ScheduledStartsAt,
-              request.TargetBusinessPeriodId, request.RestMinutes, request.CompensationAmount,
-              request.CompensationReason, request.ActualStartsAt, request.ActualEndsAt, request.ExpectedVersion }) + (request.StillInProgress ? "|still_in_progress" : ""))));
+        var payloadHash = FulfillmentOperationFingerprint.Create(unitId, request);
         await using var connection = await DbContext.CreateOpenConnectionAsync(ct);
         await using var tx = await connection.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
         var sessionId = await connection.ExecuteScalarAsync<string?>(new CommandDefinition(
@@ -732,6 +727,7 @@ public sealed partial class OrderingRepository
     }
     private sealed class FulfillmentOperation
     {
+        public string? UnitId { get; set; }
         public string PayloadHash { get; set; } = "";
         public string ResultJson { get; set; } = "";
     }

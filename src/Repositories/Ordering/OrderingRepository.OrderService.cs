@@ -211,11 +211,17 @@ public sealed partial class OrderingRepository
         var order = await ReadServiceOrderAsync(connection, tx, orderId, true, ct);
         await RequireOrderRepresentativeAsync(connection, tx, orderId, role, staffId, ct);
         var previous = await connection.QuerySingleOrDefaultAsync<FulfillmentOperation>(new CommandDefinition("""
-            SELECT PAYLOAD_HASH AS PayloadHash,RESULT_JSON AS ResultJson FROM ORDER_FULFILLMENT_OPERATIONS
+            SELECT UNIT_ID AS UnitId,PAYLOAD_HASH AS PayloadHash,RESULT_JSON AS ResultJson FROM ORDER_FULFILLMENT_OPERATIONS
             WHERE ORDER_ID=@OrderId AND OPERATION_ID=@OperationId;
             """, new { OrderId = orderId, request.OperationId }, tx, cancellationToken: ct));
         if (previous is not null)
         {
+            if (previous.UnitId == request.ExpectedUnitId && previous.UnitId is not null && previous.PayloadHash == request.LegacyPayloadHash)
+            {
+                var legacy = JsonSerializer.Deserialize<OrderFulfillmentDto>(previous.ResultJson)!;
+                await tx.CommitAsync(ct);
+                return new(orderId, request.OperationId, legacy.OrderStatus, [previous.UnitId]);
+            }
             if (previous.PayloadHash != payloadHash) throw new ConflictException("操作識別碼已用於不同內容。", "OPERATION_PAYLOAD_CONFLICT");
             await tx.CommitAsync(ct);
             return JsonSerializer.Deserialize<OrderServiceCommandResultDto>(previous.ResultJson)!;
@@ -233,7 +239,15 @@ public sealed partial class OrderingRepository
             request.ActualTimes.Select(t => t.Id).Distinct().Count() != targets.Length ||
             targets.Any(u => !request.ActualTimes.Any(t => t.Id == u.Id))))
             throw new BusinessException("請填寫每位待補登指名的實際開始及進度。", "BACKFILL_TARGETS_REQUIRED");
-        // All validation occurs before the first write; every transition below shares this transaction.
+        if (request.Action == "complete")
+        {
+            var pendingAddons = await connection.ExecuteScalarAsync<bool>(new CommandDefinition("""
+                SELECT EXISTS(SELECT 1 FROM ORDER_SERVICE_ADDONS A JOIN ORDERS O ON O.ID=A.ORDER_ID
+                WHERE A.PARENT_NOMINEE_ID IN @NomineeIds AND O.ORDER_STATUS NOT IN ('cancelled','rejected','expired','completed'));
+                """, new { NomineeIds = targets.Select(u => u.NomineeId).ToArray() }, tx, cancellationToken: ct));
+            if (pendingAddons) throw new BusinessException("請先完成或取消本單指名尚未處理的加購，再完成原服務。", "FULFILLMENT_ADDONS_PENDING");
+        }
+        // Preflight all target windows; all state transitions and remaining guards share this transaction.
         var commands = new List<(FulfillmentUnit Unit, FulfillmentTransitionRequest Request)>();
         foreach (var u in targets)
         {

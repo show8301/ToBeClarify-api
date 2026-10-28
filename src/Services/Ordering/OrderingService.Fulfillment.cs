@@ -83,7 +83,10 @@ public sealed partial class OrderingService
                 await ExecuteOrderServiceAsync(orderId, new OrderServiceCommandRequest {
                     OperationId = request.OperationId, Snapshot = eligibility.Snapshot, Action = "accept",
                     CompatibilityPayload = $"nominee-response:{nomineeId}:" + System.Text.Json.JsonSerializer.Serialize(request),
-                    ExpectedUnitId = unit.Id, ExpectedUnitVersion = request.ExpectedVersion
+                    ExpectedUnitId = unit.Id, ExpectedUnitVersion = request.ExpectedVersion,
+                    LegacyPayloadHash = ToBeClarify.Api.Repositories.Ordering.FulfillmentOperationFingerprint.Create(unit.Id,
+                        new FulfillmentTransitionRequest { OperationId = request.OperationId, ExpectedVersion = request.ExpectedVersion,
+                            Action = "accept", Reason = reason })
                 }, actor, cancellationToken);
             }
             else await TransitionFulfillmentAsync(orderId, unit.Id, new FulfillmentTransitionRequest {

@@ -797,7 +797,7 @@ public sealed partial class OrderingService : IOrderingService
         ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
         var parent = await GetAddonParentAsync(nomineeId, cancellationToken);
-        await RequireServiceRepresentativeAsync(parent.ParentOrderId, actor, cancellationToken);
+        EnsureAddonActor(parent, actor);
         EnsureAddonParentActive(parent);
         return (await _staffService.GetStaffServicesAsync(parent.StaffId, cancellationToken))
             .Where(item => item.IsNominatable && item.Price.HasValue).ToArray();
@@ -807,7 +807,7 @@ public sealed partial class OrderingService : IOrderingService
         ClaimsPrincipal actor, CancellationToken cancellationToken)
     {
         var parent = await GetAddonParentAsync(nomineeId, cancellationToken);
-        await RequireServiceRepresentativeAsync(parent.ParentOrderId, actor, cancellationToken);
+        EnsureAddonActor(parent, actor);
         var normalized = new SubmitAddonRequest
         {
             ParentNomineeId = nomineeId,
@@ -1024,6 +1024,14 @@ public sealed partial class OrderingService : IOrderingService
         if (parent.ParentOrderStatus is not ("confirmed" or "in_service" or "partially_confirmed") ||
             parent.ServiceEndsAt <= _clock.LocalDateTime)
             throw new BusinessException("只有已成立且尚未結束的指名時段可以追加服務。", "ADDON_PARENT_INACTIVE");
+    }
+
+    private static void EnsureAddonActor(AddonParentRow parent, ClaimsPrincipal actor)
+    {
+        var role = ActorRole(actor);
+        var staffId = actor.FindFirstValue(AdminAuthConstants.StaffMemberIdClaimType);
+        if (staffId != parent.StaffId && role is not ("manager" or "developer"))
+            throw new ForbiddenException("只有被指名店員本人、店經理或開發者可以代客追加服務。", "ADDON_SCOPE_FORBIDDEN");
     }
 
     private async Task<OrderDto> CreateAddonAsync(AddonParentRow parent, SubmitAddonRequest request,
