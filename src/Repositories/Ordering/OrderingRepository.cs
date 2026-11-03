@@ -352,6 +352,9 @@ public sealed partial class OrderingRepository : DapperRepositoryBase, IOrdering
             period,transaction,cancellationToken:cancellationToken));
         if(savedPlan is not null && (savedPlan.StartsAt!=period.StartsAt || savedPlan.EndsAt!=period.EndsAt))
             throw new ConflictException("營業計畫剛被修改，請重新讀取再開店。", "BUSINESS_PLAN_VERSION_CONFLICT");
+        // Keep the original request hash above for retries, including pre-cutover v1 operations.
+        // Only a genuinely new period is normalized; historical periods are never upgraded here.
+        period.FlowVersion = 2;
         await connection.ExecuteAsync(new CommandDefinition("""
             INSERT INTO BUSINESS_PERIODS(ID,BUSINESS_DATE,STARTS_AT,ENDS_AT,ACTUAL_OPENED_AT,PROJECTED_CLOSE_AT,
             TIMEZONE,PERIOD_STATUS,INTAKE_MODE,CREATED_AT,UPDATED_AT,UPDATED_BY,FLOW_VERSION,VERSION)

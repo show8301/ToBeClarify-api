@@ -457,7 +457,8 @@ public sealed class UpdateOrderingBusinessDayOverrideRequest
 
 public sealed class OpenBusinessPeriodRequest
 {
-    [Range(1,2)] public int FlowVersion { get; init; } = 1;
+    // Accepted for older clients; the server always creates new periods with flow v2.
+    [Range(1,2)] public int FlowVersion { get; init; } = 2;
     [StringLength(80)] public string? OperationId { get; init; }
     [Required]
     public DateOnly BusinessDate { get; init; }

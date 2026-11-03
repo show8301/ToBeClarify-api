@@ -65,6 +65,14 @@ PUT 範例金額僅說明契約，不代表已設定正式收費：
 
 必須有未結算、open 的 flow v2 營業期及有效數值政策。缺設定不當成零元；flow v1 回報 `FINANCE_LEGACY_READ_ONLY`，不自動升級正在營業的舊期。
 
+### 新開營業期統一使用 flow v2（2026-11-03 修正）
+
+- Web 開店畫面不再提供「本營業日使用分項接待及現場帳款」勾選項，新開店固定送出 `flowVersion: 2`。
+- `POST /api/admin/business-period/open` 的 `flowVersion` 預設為 2。為相容舊版網頁仍接受 1／2，但服務端建立新營業期時一律使用 2，不採用客戶端的舊版選擇。
+- 此規則只適用新建立的營業期。既有操作識別碼的重試、已存在營業期的防重及誤關重開仍沿用原規則，不會升級或另建既有營業期。
+- 歷史 flow v1 的訂單操作、帳務與結算相容邏輯保留；不批次轉版、不補造實收、不重算歷史結算。已開啟的舊版營業期仍須另行盤點與規劃遷移。
+- 新版發碼仍須符合營業期開啟、未結算、有效數值入場費、收款確認、權限與防重規則；本修正不繞過這些檢查，也不需要 DB migration。
+
 ### GET `/api/admin/order-sessions/creation-operations/{operationId:guid}`
 
 只查已提交的開碼交易快照。原操作人或 manager／developer 可看；其他店員與查無資料均為 HTTP 404／`ADMISSION_CREATION_OPERATION_NOT_FOUND`，不洩漏操作是否存在。
