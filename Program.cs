@@ -123,6 +123,8 @@ builder.Services.AddScoped<IHomeRepository, HomeRepository>();
 builder.Services.AddScoped<ISiteRepository, SiteRepository>();
 builder.Services.AddScoped<IMenuRepository, MenuRepository>();
 builder.Services.AddScoped<IStaffRepository, StaffRepository>();
+builder.Services.AddScoped<ToBeClarify.Api.Repositories.Client.Calendar.BusinessCalendarRepository>();
+builder.Services.AddScoped<ToBeClarify.Api.Services.Client.Calendar.BusinessCalendarService>();
 builder.Services.AddScoped<IGalleryRepository, GalleryRepository>();
 builder.Services.AddScoped<IGuestbookRepository, GuestbookRepository>();
 builder.Services.AddScoped<IReservationRepository, ReservationRepository>();
