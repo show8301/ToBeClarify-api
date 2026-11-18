@@ -71,9 +71,9 @@ public sealed partial class OrderingFinanceRepository
                 throw new ConflictException("小費分配已變更，請重新取得報價。", "TIP_DISTRIBUTION_CHANGED");
             await connection.ExecuteAsync(new CommandDefinition("""
                 INSERT INTO ORDER_TIP_DISTRIBUTIONS (ORDER_ITEM_ID,VERSION,SNAPSHOT_JSON,UPDATED_AT,UPDATED_BY)
-                VALUES (@ItemId,1,@Snapshot,@Now,@ActorId);
+                VALUES (@ItemId,1,@Snapshot,@Now,@UpdatedBy);
                 """, new { ItemId = tip.OrderItemId, Snapshot = JsonSerializer.Serialize(distribution),
-                Now = order.SubmittedAt, order.ActorId }, tx, cancellationToken: ct));
+                Now = order.SubmittedAt, UpdatedBy = order.ActorId ?? order.ActorType }, tx, cancellationToken: ct));
         }
     }
 
