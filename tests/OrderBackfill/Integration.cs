@@ -9,6 +9,7 @@ using ToBeClarify.Api.Models.Entities;
 using ToBeClarify.Api.Repositories.Admin.Settlement;
 using ToBeClarify.Api.Repositories.Ordering;
 using ToBeClarify.Api.Services.Menu;
+using ToBeClarify.Api.Services.Ordering;
 
 static class Integration
 {
@@ -181,6 +182,42 @@ static class Integration
         Assert(await db.ExecuteScalarAsync<int>("SELECT INPUT_VERSION FROM SETTLEMENT_RUNS") == 4, "old calculated input version cannot finalize");
         Assert(await db.ExecuteScalarAsync<long>("SELECT SUM(AMOUNT) FROM ORDERING_FINANCE_RECORDS WHERE KIND='cash_receipt' AND VOIDED_AT IS NULL") == 100000, "unlinked backfill never invents cash");
         await TipOrders.Integration(db, context, failed, periodId, runId);
+        await db.ExecuteAsync("""
+            CREATE TABLE MENU_CATEGORIES (ID VARCHAR(36) PRIMARY KEY, IS_ENABLED BOOLEAN);
+            CREATE TABLE MENU_ITEMS (ID VARCHAR(36) PRIMARY KEY, CATEGORY_ID VARCHAR(36), ITEM_NAME VARCHAR(160),
+                PRICE INT, IS_AVAILABLE BOOLEAN, POLICY_JSON TEXT);
+            CREATE TABLE MENU_SETS (ID VARCHAR(36) PRIMARY KEY, SET_NAME VARCHAR(160), SET_PRICE INT, IS_AVAILABLE BOOLEAN, POLICY_JSON TEXT);
+            CREATE TABLE MENU_SET_ITEMS (ID VARCHAR(36) PRIMARY KEY, SET_ID VARCHAR(36), MENU_ITEM_ID VARCHAR(36),
+                ITEM_ROLE VARCHAR(32), QUANTITY INT, SORT_ORDER INT);
+            CREATE TABLE PRICING_RULES (ID VARCHAR(36) PRIMARY KEY, TITLE VARCHAR(160), DESCRIPTION TEXT,
+                PRICE_TEXT VARCHAR(160), POLICY_JSON TEXT, IS_ENABLED BOOLEAN, SORT_ORDER INT, CREATED_AT DATETIME);
+            CREATE TABLE ORDERING_SETTINGS (ID VARCHAR(36) PRIMARY KEY, MINIMUM_MEAL_CREDIT INT, BASE_NOMINATION_FEE INT, SEGMENT_MINUTES INT);
+            INSERT INTO ORDERING_SETTINGS VALUES ('default',10000,300000,20);
+            UPDATE BUSINESS_PERIODS SET PERIOD_STATUS='open',INTAKE_MODE='coordination' WHERE ID=@PeriodId;
+            UPDATE CUSTOMER_ORDER_SESSIONS SET SESSION_STATUS='active' WHERE ID=@SessionId;
+            """, new { PeriodId = periodId, SessionId = sessionId });
+        const int publicTipAmount = 2_000_000;
+        var customerTipItemId = Guid.NewGuid().ToString("D");
+        var customerTipOrder = await Quote(db, failed with {
+            Id = Guid.NewGuid().ToString("D"), OrderNumber = "fixture-customer-public-tip",
+            ActorType = "customer", ActorId = null, ActorRole = null, Backfill = null,
+            Status = "submitted", IntakeModeSnapshot = "coordination", StoreConfirmationStatus = "pending",
+            Subtotal = publicTipAmount, TotalAmount = publicTipAmount,
+            Items = [new(customerTipItemId, "tip", null, null, "public tip", publicTipAmount, 1, null, null, publicTipAmount, "tip_allocation", 0)],
+            Tips = [new(Guid.NewGuid().ToString("D"), customerTipItemId, null, null, publicTipAmount, 0, 100, 0, publicTipAmount)
+                { Distribution = OrderTipDistributionPolicy.FromStandard(publicTipAmount, null, null, 0) }]
+        }, now);
+        var customerTipIds = await Task.WhenAll(repository.CreateOrderAsync(customerTipOrder, default),
+            repository.CreateOrderAsync(customerTipOrder, default));
+        Assert(customerTipIds.All(id => id == customerTipOrder.Id), "a retried customer tip quote creates one order");
+        Assert(await db.ExecuteScalarAsync<string>("SELECT UPDATED_BY FROM ORDER_TIP_DISTRIBUTIONS WHERE ORDER_ITEM_ID=@Id",
+            new { Id = customerTipItemId }) == "customer", "customer tip saves a non-null audit actor");
+        var customerTip = (await new OrderingFinanceRepository(context).GetOrderTipDistributionsAsync(sessionId, default))
+            .Single(tip => tip.ItemId == customerTipItemId);
+        Assert(customerTip.Distribution is { Mode: "public", PublicAmount: publicTipAmount },
+            "customer tip preserves the full public distribution");
+        Assert((await repository.GetOrderAsync(customerTipOrder.Id, default)).Orders.Single().StoreConfirmationStatus == "pending",
+            "coordination order still requires store confirmation");
         Console.WriteLine("Local MariaDB transaction checks passed (concurrency, cash totals, rollback, completed service, settlement retention).");
     }
     static void Assert(bool value, string label) { if (!value) throw new Exception(label); }
