@@ -119,9 +119,9 @@ public sealed partial class CustomerDeliveryRepository
         if (await c.ExecuteScalarAsync<int>(new CommandDefinition("SELECT COUNT(*) FROM ART_DELIVERY_ASSETS WHERE DELIVERY_ID=@Id AND IS_REMOVED=FALSE;", new { Id = id }, tx, cancellationToken: ct)) >= 20)
             throw new BusinessException("每筆委託最多 20 個作品檔案或連結。", "DELIVERY_ASSET_LIMIT");
         var assetId = Guid.NewGuid().ToString();
-        var stored = bytes is null ? null : await disk.WritePrivate("delivery", assetId, bytes, ct);
+        var stored = bytes is null ? null : await disk.WritePrivate("delivery", assetId, bytes, ct, id);
         await c.ExecuteAsync(new CommandDefinition("""
-            INSERT INTO ART_DELIVERY_ASSETS (ID,DELIVERY_ID,KIND,LABEL,URL,CONTENT_TYPE,BYTE_SIZE,FILE_BYTES,STORAGE_PATH,SHA256,CREATED_AT,CREATED_BY)
+            INSERT INTO ART_DELIVERY_ASSETS (ID,DELIVERY_ID,KIND,LABEL,URL,CONTENT_TYPE,BYTE_SIZE,FILE_BYTES,STORAGE_KEY,SHA256,CREATED_AT,CREATED_BY)
             VALUES (@Id,@DeliveryId,@Kind,@Label,@Url,@ContentType,@Size,NULL,@StoragePath,@Sha256,NOW(6),@ActorId);
             UPDATE ART_DELIVERIES SET STATUS='in_progress',VERSION=VERSION+1,UPDATED_AT=NOW(6),UPDATED_BY=@ActorId WHERE ID=@DeliveryId;
             """, new { Id = assetId, DeliveryId = id, Kind = bytes is null ? "link" : "image", Label = label, Url = url, ContentType = bytes is null ? null : "image/png", Size = bytes?.Length ?? 0, StoragePath = stored?.StoragePath, Sha256 = stored?.Sha256, ActorId = actorId }, tx, cancellationToken: ct));
@@ -148,8 +148,8 @@ public sealed partial class CustomerDeliveryRepository
     {
         await using var c = await db.CreateOpenConnectionAsync(ct);
         var image = await c.QuerySingleOrDefaultAsync<PrivateImageRow>(new CommandDefinition("""
-            SELECT A.STORAGE_PATH AS StoragePath,A.BYTE_SIZE AS ByteSize,A.SHA256 AS Sha256,
-                   CASE WHEN A.STORAGE_PATH IS NULL THEN A.FILE_BYTES ELSE NULL END AS LegacyBytes
+            SELECT COALESCE(A.STORAGE_KEY,A.STORAGE_PATH) AS StoragePath,A.BYTE_SIZE AS ByteSize,A.SHA256 AS Sha256,
+                   CASE WHEN COALESCE(A.STORAGE_KEY,A.STORAGE_PATH) IS NULL THEN A.FILE_BYTES ELSE NULL END AS LegacyBytes
             FROM ART_DELIVERY_ASSETS A JOIN ART_DELIVERIES D ON D.ID=A.DELIVERY_ID
             LEFT JOIN CUSTOMER_VISITS V ON V.SESSION_ID=D.SESSION_ID
             WHERE A.ID=@AssetId AND D.ID=@Id AND A.IS_REMOVED=FALSE AND A.KIND='image'

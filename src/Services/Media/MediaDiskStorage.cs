@@ -30,12 +30,16 @@ public sealed class MediaDiskStorage(IOptions<MediaOptions> options, IWebHostEnv
     public Task WritePublic(string relativePath, Stream source, CancellationToken ct)
         => WriteAtomic(Resolve(PublicRoot, relativePath), source, ct);
 
-    public async Task<StoredImage> WritePrivate(string category, string id, byte[] bytes, CancellationToken ct)
+    public async Task<StoredImage> WritePrivate(string category, string id, byte[] bytes, CancellationToken ct, string? deliveryId = null)
     {
         if (category is not ("guestbook" or "delivery") || !Guid.TryParse(id, out var guid) || bytes.Length == 0)
             throw new InvalidOperationException("Invalid private image identity.");
         var hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
-        var path = $"{category}/{guid:D}/{hash}.{(category == "guestbook" ? "webp" : "png")}";
+        if (category == "delivery" && !Guid.TryParse(deliveryId, out _))
+            throw new InvalidOperationException("Invalid delivery identity.");
+        var path = category == "delivery"
+            ? $"art-deliveries/{Guid.Parse(deliveryId!):D}/{guid:D}.png"
+            : $"guestbook/{guid:D}/{hash}.webp";
         var fullPath = Resolve(PrivateRoot, path);
         if (!File.Exists(fullPath))
         {

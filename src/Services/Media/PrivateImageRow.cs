@@ -7,6 +7,10 @@ public sealed class PrivateImageRow
     public long? ByteSize { get; set; }
     public string? Sha256 { get; set; }
     public byte[]? LegacyBytes { get; set; }
+    public string? StorageKey { get; set; }
+    public string? DeliveryId { get; set; }
+    public long? LegacyLength { get; set; }
+    public string? LegacySha256 { get; set; }
 
     public Task<byte[]> Read(MediaDiskStorage disk, CancellationToken ct)
     {
