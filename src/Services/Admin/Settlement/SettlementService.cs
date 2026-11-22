@@ -390,10 +390,8 @@ public sealed partial class SettlementService : ISettlementService
             var roomItem = room.OrderItemId is not null && itemMap.TryGetValue(room.OrderId ?? string.Empty, out var orderItems)
                 ? orderItems.FirstOrDefault(i => i.ItemId == room.OrderItemId) : null;
             var rawAmount = roomItem?.LineTotal ?? (int)room.TotalAmount;
-            var amount = room.OrderId is null ? (allocation.UsesLedger ? 0 : room.TotalAmount)
+            var amount = room.OrderId is null ? room.TotalAmount
                 : itemAllocation.Recognize(room.OrderId, rawAmount, room.OrderItemId);
-            if (room.OrderId is null && allocation.UsesLedger && room.TotalAmount > 0)
-                anomalies.Add(new("ROOM_CASH_ALLOCATION_REQUIRED", "包廂沒有可核對收款的訂單來源，請先確認款項歸屬。", room.Id));
             if (!string.IsNullOrWhiteSpace(room.OwnerStaffId))
             {
                 dedicatedGross += amount;
