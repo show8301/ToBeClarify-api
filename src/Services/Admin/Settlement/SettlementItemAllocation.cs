@@ -55,7 +55,7 @@ internal sealed class SettlementItemAllocation
         if (!_orders.TryGetValue(orderId, out var order)) return amount;
         var afterCredit = Math.Max(0, amount - (itemId is null ? 0 : _credits.GetValueOrDefault(itemId)));
         var originalRevenue = Math.Max(0, order.TotalAmount - order.TipAmount);
-        var adjustedRevenue = Math.Max(0, (order.AdjustedAmount ?? order.TotalAmount) - order.TipAmount);
+        var adjustedRevenue = Math.Max(0, _cash.Payable(order) - order.TipAmount);
         // Multiply before dividing so exact monetary results do not acquire an
         // epsilon from an intermediate recurring ratio before wage ceiling.
         return originalRevenue <= 0 ? 0 : _cash.Recognize(orderId, afterCredit * adjustedRevenue) / originalRevenue;
@@ -69,6 +69,6 @@ internal sealed class SettlementItemAllocation
         source.MealCreditAmount = _credits.GetValueOrDefault(item.ItemId);
         source.AfterCreditAmount = Math.Max(0, item.LineTotal - source.MealCreditAmount.Value);
         source.OrderRevenueAmount = Math.Max(0, order.TotalAmount - order.TipAmount);
-        source.AdjustedRevenueAmount = Math.Max(0, (order.AdjustedAmount ?? order.TotalAmount) - order.TipAmount);
+        source.AdjustedRevenueAmount = Math.Max(0, _cash.Payable(order) - order.TipAmount);
     }
 }
