@@ -63,13 +63,17 @@ internal sealed class SettlementRevenueAllocation
         }
         foreach (var order in source.Orders)
         {
-            var payable = Math.Max(0, order.AdjustedAmount ?? order.TotalAmount);
             var chargeDelta = chargeByOrder.GetValueOrDefault(order.OrderId);
-            if (chargeDelta != 0 && order.AdjustedAmount != Math.Max(0, order.TotalAmount + chargeDelta))
+            var cash = cashByOrder.GetValueOrDefault(order.OrderId);
+            var ledgerPayable = Math.Max(0, order.TotalAmount + chargeDelta);
+            var matchesLedger = order.AdjustedAmount.HasValue
+                ? order.AdjustedAmount.Value == ledgerPayable
+                : cash == ledgerPayable;
+            var payable = Math.Max(0, order.AdjustedAmount ?? ledgerPayable);
+            if (chargeDelta != 0 && !matchesLedger)
                 anomalies.Add(new("ORDER_CHARGE_RECONCILIATION_REQUIRED",
                     $"訂單 {order.OrderNumber} 另有加收或折讓 {chargeDelta:N0} G，請確認對應的結算金額調整。",
                     order.OrderId, Orders: [new(order.OrderId, order.OrderNumber)]));
-            var cash = cashByOrder.GetValueOrDefault(order.OrderId);
             if (cash < 0 || cash > payable)
                 anomalies.Add(new("ORDER_CASH_RECONCILIATION_REQUIRED",
                     $"訂單 {order.OrderNumber} 可分配淨收款 {cash:N0} G 與應收 {payable:N0} G 不符，請核對退款或保留款。",
@@ -86,6 +90,9 @@ internal sealed class SettlementRevenueAllocation
             AdmissionRevenue += Math.Clamp(cash, 0, payable);
         }
     }
+
+    public decimal Payable(SettlementOrderRevenueRow? order) =>
+        order is null ? 0 : UsesLedger ? _balances[order.OrderId].Payable : Math.Max(0, order.AdjustedAmount ?? order.TotalAmount);
 
     public decimal Recognize(string orderId, decimal amount)
     {

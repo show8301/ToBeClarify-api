@@ -530,7 +530,7 @@ public sealed partial class SettlementService : ISettlementService
             foreach (var detail in sources)
             {
                 if (!orderMap.TryGetValue(detail.OrderId, out var order)) continue;
-                detail.OrderPayableAmount = Math.Max(0, order.AdjustedAmount ?? order.TotalAmount);
+                detail.OrderPayableAmount = allocation.Payable(order);
                 detail.OrderCollectedAmount = allocation.Recognize(order.OrderId, detail.OrderPayableAmount.Value);
                 if (detail.Kind == "designated_revenue") itemAllocation.Describe(detail);
             }

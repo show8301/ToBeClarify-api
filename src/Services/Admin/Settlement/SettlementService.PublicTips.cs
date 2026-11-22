@@ -26,7 +26,7 @@ public sealed partial class SettlementService
                 var order = orders.GetValueOrDefault(group.Key);
                 var original = group.Sum(x => (decimal)x.TipAmount);
                 var recognized = allocation.UsesLedger ? allocation.Recognize(group.Key, original) : 0;
-                var payable = Math.Max(0, order?.AdjustedAmount ?? order?.TotalAmount ?? 0);
+                var payable = allocation.Payable(order);
                 var collected = allocation.UsesLedger ? allocation.Recognize(group.Key, payable) : 0;
                 return new SettlementPublicTipSourceDto(group.Key, order?.OrderNumber ?? group.Key,
                     original, payable, collected, recognized,
@@ -38,7 +38,7 @@ public sealed partial class SettlementService
             {
                 var order = orders.GetValueOrDefault(group.Key);
                 var original = group.Sum(x => (decimal)x.StoreAmount);
-                var payable = Math.Max(0, order?.AdjustedAmount ?? order?.TotalAmount ?? 0);
+                var payable = allocation.Payable(order);
                 return new SettlementPublicTipSourceDto(group.Key, order?.OrderNumber ?? group.Key, original,
                     payable, allocation.UsesLedger ? allocation.Recognize(group.Key, payable) : 0,
                     allocation.UsesLedger ? allocation.Recognize(group.Key, original) : 0,

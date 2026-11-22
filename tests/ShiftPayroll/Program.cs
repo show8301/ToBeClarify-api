@@ -168,10 +168,15 @@ Equal(Calculate(wrongItemSource, new()).Single(x => x.Role == "designated").Reve
 Check(Anomalies(wrongItemSource).Any(x => x.Code == "FINANCE_ITEM_ALLOCATION_INVALID"),
     "An inconsistent item and order association requires reconciliation.");
 var chargeReduction = Cash("reported", 50000, "charge_reduce");
-var unresolvedCharge = isolatedOrder with { CashAllocations = [Cash("reported", 250000), chargeReduction] };
+var balancedCharge = isolatedOrder with { CashAllocations = [Cash("reported", 250000), chargeReduction] };
+Check(!Anomalies(balancedCharge).Any(x => x.Code == "ORDER_CHARGE_RECONCILIATION_REQUIRED"),
+    "Matching receipts reconcile a confirmed discount.");
+Equal(Calculate(balancedCharge, new()).Single(x => x.Role == "designated").RevenueShare, 175000,
+    "Commission uses the discounted revenue.");
+var unresolvedCharge = balancedCharge with { CashAllocations = [Cash("reported", 240000), chargeReduction] };
 Check(Anomalies(unresolvedCharge).Any(x => x.Code == "ORDER_CHARGE_RECONCILIATION_REQUIRED"),
     "A separate charge reduction requires an explicit matching settlement adjustment.");
-var reconciledCharge = unresolvedCharge with
+var reconciledCharge = balancedCharge with
 {
     Orders = [new() { OrderId = "reported", OrderNumber = "20261018-223028-9149",
         Subtotal = 300000, TotalAmount = 300000, AdjustedAmount = 250000 }]
