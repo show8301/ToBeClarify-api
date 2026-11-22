@@ -15,3 +15,6 @@ public sealed record CorrectOrderTipDistributionRequest
     [Required] public string Mode { get; init; } = "";
     [Required, MaxLength(200)] public IReadOnlyList<SaveOrderingFinanceTipAllocationRequest> Allocations { get; init; } = [];
 }
+
+public sealed record VoidOrderTipRequest(string OperationId, long ExpectedAccountVersion,
+    int ExpectedDistributionVersion, string Reason);

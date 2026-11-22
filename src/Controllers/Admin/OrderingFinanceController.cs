@@ -39,6 +39,11 @@ public sealed class OrderingFinanceController(OrderingFinanceService service) : 
         CorrectOrderTipDistributionRequest request, CancellationToken ct)
         => Ok(ApiResponse<OrderingFinanceOperationDto>.Ok(await service.CorrectOrderTipAsync(sessionId, itemId, request, User, ct)));
 
+    [HttpPost("order-tips/{itemId}/void")]
+    public async Task<ActionResult<ApiResponse<OrderingFinanceOperationDto>>> VoidOrderTip(string sessionId, string itemId,
+        VoidOrderTipRequest request, CancellationToken ct)
+        => Ok(ApiResponse<OrderingFinanceOperationDto>.Ok(await service.VoidOrderTipAsync(sessionId, itemId, request, User, ct)));
+
     [HttpGet("admission")]
     public async Task<ActionResult<ApiResponse<OrderingAdmissionDto?>>> Admission(string sessionId, CancellationToken ct)
         => Ok(ApiResponse<OrderingAdmissionDto?>.Ok(await service.GetAdmissionAsync(sessionId, ct)));

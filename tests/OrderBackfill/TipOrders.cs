@@ -123,6 +123,18 @@ static class TipOrders
         Check(reconciled.Receivable == corrected.Receivable && reconciled.CashReceived == corrected.CashReceived, "void legacy allocation preserves money");
         Check(reconciled.Records.Single(x => x.Id == legacy).IsVoided, "legacy record retained as voided");
         await PublicTipPersistence.Run(db, context, runId, order.Id);
+        var deletion = request with { OperationId = Guid.NewGuid().ToString("D"), ExpectedAccountVersion = reconciled.Version,
+            ExpectedDistributionVersion = 2, Reason = "customer withdrew the tip" };
+        await Task.WhenAll(
+            finance.CorrectOrderTipAsync(order.SessionId, itemId, deletion, "delete-tip", "clerk", default, voidTip: true),
+            finance.CorrectOrderTipAsync(order.SessionId, itemId, deletion, "delete-tip", "clerk", default, voidTip: true));
+        var removed = await finance.GetAccountAsync(order.SessionId, default);
+        Check(removed.Receivable == reconciled.Receivable - 101 && removed.CashReceived == reconciled.CashReceived
+            && removed.Version == reconciled.Version + 1, "deletion reduces receivable once and retains cash");
+        Check(!(await finance.GetOrderTipDistributionsAsync(order.SessionId, default)).Any(t => t.ItemId == itemId),
+            "deleted tip disappears from active distributions");
+        Check(await db.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM ORDER_AUDIT_LOG WHERE ACTION_TYPE='order.tip.voided' AND ORDER_ID=@Id",
+            new { Id = order.Id }) == 1, "one deletion audit on retry");
         Console.WriteLine("Tip order database integration checks passed.");
     }
 

@@ -78,7 +78,7 @@ public sealed partial class OrderingFinanceRepository
     }
 
     public async Task<OrderingFinanceOperationDto> CorrectOrderTipAsync(string sessionId, string itemId,
-        CorrectOrderTipDistributionRequest request, string hash, string actorId, CancellationToken ct)
+        CorrectOrderTipDistributionRequest request, string hash, string actorId, CancellationToken ct, bool voidTip = false)
     {
         await using var connection = await dbContext.CreateOpenConnectionAsync(ct);
         await using var tx = await connection.BeginTransactionAsync(ct);
@@ -107,26 +107,55 @@ public sealed partial class OrderingFinanceRepository
             WHERE ORDER_ID=@OrderId AND KIND='tip_supplement' AND VOIDED_AT IS NULL;
             """, new { row.OrderId }, tx, cancellationToken: ct)))
             throw new ConflictException("此訂單仍有舊版補登小費，請先核對並作廢重複分配。", "TIP_LEGACY_RECONCILIATION_REQUIRED");
-        var distribution = await ResolveTipDistributionAsync(connection, tx, session.SourcePeriodId,
-            row.Amount, request.Mode, request.Allocations, ct);
         var now = DateTimeOffset.UtcNow.ToOffset(TimeSpan.FromHours(8)).DateTime;
         var result = new OrderingFinanceOperationDto(request.OperationId, itemId, version + 1);
+        string after;
+        if (voidTip)
+        {
+            var parameters = new { row.OrderId, ItemId = itemId, row.Amount, Now = now, ActorId = actorId };
+            var updated = await connection.ExecuteAsync(new CommandDefinition("""
+                UPDATE ORDERS SET SUBTOTAL=SUBTOTAL-@Amount,TOTAL_AMOUNT=TOTAL_AMOUNT-@Amount,UPDATED_AT=@Now,UPDATED_BY=@ActorId
+                WHERE ID=@OrderId AND TOTAL_AMOUNT>=@Amount AND SUBTOTAL>=@Amount;
+                """, parameters, tx, cancellationToken: ct));
+            if (updated != 1)
+                throw new ConflictException("訂單金額已變更，請重新核對小費。", "TIP_AMOUNT_CONFLICT");
+            await connection.ExecuteAsync(new CommandDefinition("""
+                DELETE FROM ORDER_TIP_DISTRIBUTIONS WHERE ORDER_ITEM_ID=@ItemId;
+                DELETE FROM ORDER_TIPS WHERE ORDER_ITEM_ID=@ItemId AND ORDER_ID=@OrderId;
+                UPDATE ORDER_ITEMS SET NAME_SNAPSHOT='已刪除小費',REFERENCE_ID=NULL,UNIT_PRICE=0,LINE_TOTAL=0,
+                    UPDATED_AT=@Now,UPDATED_BY=@ActorId WHERE ID=@ItemId AND ORDER_ID=@OrderId;
+                UPDATE ORDER_FULFILLMENT_UNITS SET NAME_SNAPSHOT='已刪除小費',UNIT_STATUS='cancelled',
+                    ACCEPTED_QUANTITY=0,STARTED_QUANTITY=0,COMPLETED_QUANTITY=0,CANCELLED_QUANTITY=QUANTITY,
+                    CANCELLED_AMOUNT=ORIGINAL_AMOUNT,VERSION=VERSION+1,UPDATED_AT=@Now
+                    WHERE ORDER_ITEM_ID=@ItemId AND ORDER_ID=@OrderId AND KIND='tip';
+                """, parameters, tx, cancellationToken: ct));
+            after = JsonSerializer.Serialize(new { removedAmount = row.Amount, request.Reason });
+        }
+        else
+        {
+            var distribution = await ResolveTipDistributionAsync(connection, tx, session.SourcePeriodId,
+                row.Amount, request.Mode, request.Allocations, ct);
+            await connection.ExecuteAsync(new CommandDefinition("""
+                INSERT INTO ORDER_TIP_DISTRIBUTIONS (ORDER_ITEM_ID,VERSION,SNAPSHOT_JSON,UPDATED_AT,UPDATED_BY)
+                VALUES (@ItemId,@Version,@Snapshot,@Now,@ActorId)
+                ON DUPLICATE KEY UPDATE VERSION=VALUES(VERSION),SNAPSHOT_JSON=VALUES(SNAPSHOT_JSON),UPDATED_AT=VALUES(UPDATED_AT),UPDATED_BY=VALUES(UPDATED_BY);
+                UPDATE ORDER_ITEMS SET NAME_SNAPSHOT=@Label,REFERENCE_ID=NULL,UPDATED_AT=@Now,UPDATED_BY=@ActorId WHERE ID=@ItemId;
+                UPDATE ORDER_TIPS SET STAFF_ID=NULL,STAFF_NAME_SNAPSHOT=@Label,STAFF_PERCENTAGE=100,
+                    STORE_PERCENTAGE=0,STAFF_AMOUNT=TIP_AMOUNT,STORE_AMOUNT=0,UPDATED_AT=@Now WHERE ORDER_ITEM_ID=@ItemId;
+                """, new { ItemId = itemId, Version = row.Version + 1, Snapshot = JsonSerializer.Serialize(distribution),
+                Label = distribution.Mode == "public" ? "公共小費（按工時分配）" : distribution.Mode == "custom" ? "小費｜自訂比例" : "小費｜指定店員",
+                Now = now, ActorId = actorId }, tx, cancellationToken: ct));
+            after = JsonSerializer.Serialize(new { distribution, request.Reason });
+        }
         await connection.ExecuteAsync(new CommandDefinition("""
-            INSERT INTO ORDER_TIP_DISTRIBUTIONS (ORDER_ITEM_ID,VERSION,SNAPSHOT_JSON,UPDATED_AT,UPDATED_BY)
-            VALUES (@ItemId,@Version,@Snapshot,@Now,@ActorId)
-            ON DUPLICATE KEY UPDATE VERSION=VALUES(VERSION),SNAPSHOT_JSON=VALUES(SNAPSHOT_JSON),UPDATED_AT=VALUES(UPDATED_AT),UPDATED_BY=VALUES(UPDATED_BY);
-            UPDATE ORDER_ITEMS SET NAME_SNAPSHOT=@Label,REFERENCE_ID=NULL,UPDATED_AT=@Now,UPDATED_BY=@ActorId WHERE ID=@ItemId;
-            UPDATE ORDER_TIPS SET STAFF_ID=NULL,STAFF_NAME_SNAPSHOT=@Label,STAFF_PERCENTAGE=100,
-                STORE_PERCENTAGE=0,STAFF_AMOUNT=TIP_AMOUNT,STORE_AMOUNT=0,UPDATED_AT=@Now WHERE ORDER_ITEM_ID=@ItemId;
             UPDATE ORDERING_FINANCE_ACCOUNTS SET VERSION=VERSION+1,UPDATED_AT=@Now WHERE SESSION_ID=@SessionId;
             INSERT INTO ORDER_AUDIT_LOG (ID,ORDER_ID,SESSION_ID,ACTION_TYPE,BEFORE_JSON,AFTER_JSON,ACTOR_ID,ACTOR_ROLE,CREATED_AT)
-            VALUES (UUID(),@OrderId,@SessionId,'order.tip_distribution.corrected',@Before,@After,@ActorId,'staff',@Now);
+            VALUES (UUID(),@OrderId,@SessionId,@Action,@Before,@After,@ActorId,'staff',@Now);
             INSERT INTO ORDERING_FINANCE_OPERATIONS (OPERATION_ID,SESSION_ID,PAYLOAD_HASH,RESULT_JSON,CREATED_AT,CREATED_BY)
             VALUES (@OperationId,@SessionId,@Hash,@Result,@Now,@ActorId);
-            """, new { ItemId = itemId, Version = row.Version + 1, Snapshot = JsonSerializer.Serialize(distribution),
-            Label = distribution.Mode == "public" ? "公共小費（按工時分配）" : distribution.Mode == "custom" ? "小費｜自訂比例" : "小費｜指定店員",
-            Now = now, ActorId = actorId, SessionId = sessionId, row.OrderId, Before = JsonSerializer.Serialize(row),
-            After = JsonSerializer.Serialize(new { distribution, request.Reason }), request.OperationId, Hash = hash,
+            """, new { Now = now, ActorId = actorId, SessionId = sessionId, row.OrderId,
+            Action = voidTip ? "order.tip.voided" : "order.tip_distribution.corrected",
+            Before = JsonSerializer.Serialize(row), After = after, request.OperationId, Hash = hash,
             Result = JsonSerializer.Serialize(result) }, tx, cancellationToken: ct));
         await InvalidateTipDraftAsync(connection, tx, sessionId, ct);
         await tx.CommitAsync(ct);
